@@ -26,6 +26,8 @@ share/python-wheels/
 *.egg
 .DS_Store
 *.DS_Store
+*.csv
+data/*.csv
 MANIFEST
 
 # PyInstaller
