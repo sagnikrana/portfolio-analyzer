@@ -3,4 +3,3 @@ python-dotenv
 torch
 transformers
 ruff
--e .
