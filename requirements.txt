@@ -6,4 +6,4 @@ ruff
 pandas
 yfinance
 gradio
-matplotlib
+plotly

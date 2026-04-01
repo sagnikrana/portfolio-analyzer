@@ -13,9 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 import gradio as gr
-import matplotlib.dates as mdates
-import matplotlib.pyplot as plt
 import pandas as pd
+import plotly.graph_objects as go
 import yfinance as yf
 
 
@@ -1139,52 +1138,135 @@ def format_display_tables(market_metrics: dict[str, Any]) -> dict[str, pd.DataFr
     }
 
 
-def plot_equity_curves(timeseries_records: list[dict[str, Any]]) -> plt.Figure:
+def plot_equity_curves(timeseries_records: list[dict[str, Any]]) -> go.Figure:
     series = pd.DataFrame(timeseries_records)
-    fig, ax = plt.subplots(figsize=(10, 4.8))
+    fig = go.Figure()
     if not series.empty:
         series["date"] = pd.to_datetime(series["date"])
-        ax.plot(series["date"], series["portfolio_invested_value"], label="Invested Portfolio", linewidth=2.2)
-        ax.plot(series["date"], series["benchmark_value"], label="Trade-Matched S&P 500", linewidth=2.2)
-    ax.set_title("Portfolio vs S&P 500 Over Your Investing Horizon")
-    ax.set_ylabel("Value ($)")
-    ax.grid(alpha=0.2)
-    ax.legend()
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax.xaxis.get_major_locator()))
-    fig.tight_layout()
+        fig.add_trace(
+            go.Scatter(
+                x=series["date"],
+                y=series["portfolio_invested_value"],
+                mode="lines",
+                name="Invested Portfolio",
+                line={"width": 3, "color": "#3B82F6"},
+                hovertemplate="%{x|%Y-%m-%d}<br>Portfolio: $%{y:,.2f}<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=series["date"],
+                y=series["benchmark_value"],
+                mode="lines",
+                name="Trade-Matched S&P 500",
+                line={"width": 3, "color": "#F59E0B"},
+                hovertemplate="%{x|%Y-%m-%d}<br>S&P 500: $%{y:,.2f}<extra></extra>",
+            )
+        )
+    fig.update_layout(
+        title="Portfolio vs S&P 500 Over Your Investing Horizon",
+        height=430,
+        margin={"l": 24, "r": 24, "t": 56, "b": 24},
+        xaxis_title="Date",
+        yaxis_title="Value ($)",
+        hovermode="x unified",
+        template="plotly_dark",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+    )
     return fig
 
 
-def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> plt.Figure:
+def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
     series = pd.DataFrame(timeseries_records)
-    fig, ax = plt.subplots(figsize=(10, 4.2))
+    fig = go.Figure()
     if not series.empty:
         series["date"] = pd.to_datetime(series["date"])
-        ax.plot(series["date"], series["portfolio_drawdown"] * 100, label="Portfolio Drawdown", linewidth=2.0)
-        ax.plot(series["date"], series["benchmark_drawdown"] * 100, label="S&P 500 Drawdown", linewidth=2.0)
-    ax.set_title("Drawdown Through the Same Time Horizon")
-    ax.set_ylabel("Drawdown (%)")
-    ax.grid(alpha=0.2)
-    ax.legend()
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax.xaxis.get_major_locator()))
-    fig.tight_layout()
+        fig.add_trace(
+            go.Scatter(
+                x=series["date"],
+                y=series["portfolio_drawdown"] * 100,
+                mode="lines",
+                name="Portfolio Drawdown",
+                line={"width": 2.5, "color": "#EF4444"},
+                fill="tozeroy",
+                fillcolor="rgba(239,68,68,0.18)",
+                hovertemplate="%{x|%Y-%m-%d}<br>Portfolio DD: %{y:.2f}%<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=series["date"],
+                y=series["benchmark_drawdown"] * 100,
+                mode="lines",
+                name="S&P 500 Drawdown",
+                line={"width": 2.5, "color": "#A855F7"},
+                fill="tozeroy",
+                fillcolor="rgba(168,85,247,0.14)",
+                hovertemplate="%{x|%Y-%m-%d}<br>S&P DD: %{y:.2f}%<extra></extra>",
+            )
+        )
+    fig.update_layout(
+        title="Drawdown Through the Same Time Horizon",
+        height=400,
+        margin={"l": 24, "r": 24, "t": 56, "b": 24},
+        xaxis_title="Date",
+        yaxis_title="Drawdown (%)",
+        hovermode="x unified",
+        template="plotly_dark",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+    )
     return fig
 
 
-def plot_projection(projection_df: pd.DataFrame) -> plt.Figure:
-    fig, ax = plt.subplots(figsize=(10, 4.2))
+def plot_projection(projection_df: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
     if not projection_df.empty:
-        ax.plot(projection_df["year"], projection_df["conservative"], label="Conservative", linewidth=2.0)
-        ax.plot(projection_df["year"], projection_df["base"], label="Base", linewidth=2.0)
-        ax.plot(projection_df["year"], projection_df["optimistic"], label="Optimistic", linewidth=2.0)
-    ax.set_title("18-Year Projection Without New Contributions")
-    ax.set_xlabel("Years From Today")
-    ax.set_ylabel("Projected Value ($)")
-    ax.grid(alpha=0.2)
-    ax.legend()
-    fig.tight_layout()
+        fig.add_trace(
+            go.Scatter(
+                x=projection_df["year"],
+                y=projection_df["conservative"],
+                mode="lines",
+                name="Conservative",
+                line={"width": 3, "color": "#10B981"},
+                hovertemplate="Year %{x}<br>Conservative: $%{y:,.2f}<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=projection_df["year"],
+                y=projection_df["base"],
+                mode="lines",
+                name="Base",
+                line={"width": 3, "color": "#3B82F6"},
+                hovertemplate="Year %{x}<br>Base: $%{y:,.2f}<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=projection_df["year"],
+                y=projection_df["optimistic"],
+                mode="lines",
+                name="Optimistic",
+                line={"width": 3, "color": "#F97316"},
+                hovertemplate="Year %{x}<br>Optimistic: $%{y:,.2f}<extra></extra>",
+            )
+        )
+    fig.update_layout(
+        title="18-Year Projection Without New Contributions",
+        height=400,
+        margin={"l": 24, "r": 24, "t": 56, "b": 24},
+        xaxis_title="Years From Today",
+        yaxis_title="Projected Value ($)",
+        hovermode="x unified",
+        template="plotly_dark",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+    )
     return fig
 
 
