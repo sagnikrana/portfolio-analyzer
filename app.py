@@ -4,6 +4,7 @@ import json
 import math
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from collections import Counter, defaultdict, deque
@@ -1076,10 +1077,9 @@ def money_text(value: float | None) -> str:
 def metric_card(label: str, value: str, subtitle: str = "") -> str:
     subtitle_md = f"<div style='color:#5f6c7b;font-size:12px'>{subtitle}</div>" if subtitle else ""
     return (
-        "<div style='padding:14px 16px;border:1px solid #dde4ee;border-radius:14px;"
-        "background:#f8fbff;height:100%'>"
-        f"<div style='font-size:12px;color:#4f5d6b;text-transform:uppercase;letter-spacing:.08em'>{label}</div>"
-        f"<div style='font-size:28px;font-weight:700;margin-top:6px'>{value}</div>"
+        "<div class='metric-card'>"
+        f"<div class='metric-card-label'>{label}</div>"
+        f"<div class='metric-card-value'>{value}</div>"
         f"{subtitle_md}</div>"
     )
 
@@ -1293,6 +1293,7 @@ def resolve_ollama_analysis(
 
 
 def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: bool) -> tuple[Any, ...]:
+    started_at = time.perf_counter()
     if file_obj is None:
         raise gr.Error("Upload a Robinhood CSV export first.")
 
@@ -1328,14 +1329,17 @@ def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: 
     eq_fig = plot_equity_curves(market_metrics["timeseries"])
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
     proj_fig = plot_projection(tables["projection"])
+    elapsed_seconds = time.perf_counter() - started_at
 
-    summary_cards = (
+    summary_cards_inner = (
         metric_card("Analysis Window", f'{headline["analysis_years"]:.2f}y', f'{headline["analysis_start"]} to {headline["analysis_end"]}')
         + metric_card("Invested Value", money_text(headline["current_portfolio_value"]), "Current invested sleeve")
         + metric_card("Unrealized P&L", money_text(headline["total_unrealized_pnl"]), "Open positions only")
         + metric_card("Observed Risk", f'{risk["score"]}/100', f'{risk["band"]} | {risk["alignment"]}')
         + metric_card("Vs S&P 500", pct_text(headline["excess_money_weighted_return_vs_benchmark"]), "Excess money-weighted return")
+        + metric_card("Prep Time", f"{elapsed_seconds:.2f}s", "Upload to dashboard-ready")
     )
+    summary_cards = f"<div class='metric-strip'>{summary_cards_inner}</div>"
 
     risk_md = f"""
 ### Observed Risk Framework
@@ -1375,8 +1379,12 @@ def build_app() -> gr.Blocks:
         theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
         css="""
         .app-shell {max-width: 1400px; margin: 0 auto;}
-        .metric-strip {display:grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px;}
-        @media (max-width: 1100px) {.metric-strip {grid-template-columns: repeat(2, minmax(0, 1fr));}}
+        .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; width: 100%; align-items: stretch;}
+        .metric-card {padding: 16px 18px; border: 1px solid #dde4ee; border-radius: 16px; background: #f8fbff; min-height: 120px; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden;}
+        .metric-card-label {font-size: 12px; color: #4f5d6b; text-transform: uppercase; letter-spacing: .08em; line-height: 1.25;}
+        .metric-card-value {font-size: 28px; font-weight: 700; margin-top: 8px; line-height: 1.15; word-break: break-word;}
+        @media (max-width: 1200px) {.metric-strip {grid-template-columns: repeat(2, minmax(220px, 1fr));}}
+        @media (max-width: 820px) {.metric-strip {grid-template-columns: 1fr;}}
         """,
     ) as demo:
         gr.Markdown(
@@ -1410,7 +1418,7 @@ def build_app() -> gr.Blocks:
                 )
 
             with gr.Column(scale=3):
-                cards = gr.HTML(label="Summary Cards", elem_classes=["metric-strip"])
+                cards = gr.HTML(label="Summary Cards")
                 with gr.Tabs():
                     with gr.Tab("Overview"):
                         overview_md = gr.Markdown()
