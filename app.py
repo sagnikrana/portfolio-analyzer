@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
 import gradio as gr
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -60,7 +59,10 @@ def parse_quantity(value: Any) -> float:
 
 def load_transactions(csv_path: Path) -> pd.DataFrame:
     df = pd.read_csv(csv_path, encoding="utf-8-sig")
-    df["Activity Date"] = pd.to_datetime(df["Activity Date"], errors="coerce")
+    try:
+        df["Activity Date"] = pd.to_datetime(df["Activity Date"], format="%m/%d/%y", errors="coerce")
+    except Exception:
+        df["Activity Date"] = pd.to_datetime(df["Activity Date"], errors="coerce")
     df = df.dropna(subset=["Activity Date"]).copy()
     df["Amount_num"] = df.get("Amount", 0).apply(parse_money)
     df["Price_num"] = df.get("Price", 0).apply(parse_money)
@@ -81,9 +83,7 @@ def holding_period_bucket(days: float) -> str:
 def weighted_average_date(dates: list[datetime], weights: list[float]) -> str | None:
     if not dates or not weights or sum(weights) <= 0:
         return None
-    weighted_ordinal = sum(
-        date.toordinal() * weight for date, weight in zip(dates, weights, strict=False)
-    ) / sum(weights)
+    weighted_ordinal = sum(date.toordinal() * weight for date, weight in zip(dates, weights)) / sum(weights)
     return datetime.fromordinal(int(round(weighted_ordinal))).date().isoformat()
 
 
