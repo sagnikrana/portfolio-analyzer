@@ -1074,11 +1074,14 @@ def money_text(value: float | None) -> str:
 
 
 def metric_card(label: str, value: str, subtitle: str = "") -> str:
-    subtitle_md = f"<div style='color:#5f6c7b;font-size:12px'>{subtitle}</div>" if subtitle else ""
+    subtitle_md = f"<div style='color:#cbd5e1;font-size:12px'>{subtitle}</div>" if subtitle else ""
     return (
-        "<div class='metric-card'>"
-        f"<div class='metric-card-label'>{label}</div>"
-        f"<div class='metric-card-value'>{value}</div>"
+        "<div class='metric-card' style='padding:16px 18px;border:1px solid rgba(148,163,184,.22);"
+        "border-radius:16px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.96));"
+        "min-height:120px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;"
+        "box-shadow:0 8px 24px rgba(2,6,23,.22)'>"
+        f"<div class='metric-card-label' style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em;line-height:1.25'>{label}</div>"
+        f"<div class='metric-card-value' style='font-size:28px;font-weight:700;margin-top:8px;line-height:1.15;word-break:break-word;color:#f8fafc'>{value}</div>"
         f"{subtitle_md}</div>"
     )
 
@@ -1143,10 +1146,13 @@ def plot_equity_curves(timeseries_records: list[dict[str, Any]]) -> go.Figure:
     fig = go.Figure()
     if not series.empty:
         series["date"] = pd.to_datetime(series["date"])
+        x_values = series["date"].dt.strftime("%Y-%m-%d").tolist()
+        portfolio_values = pd.to_numeric(series["portfolio_invested_value"], errors="coerce").fillna(0.0).tolist()
+        benchmark_values = pd.to_numeric(series["benchmark_value"], errors="coerce").fillna(0.0).tolist()
         fig.add_trace(
             go.Scatter(
-                x=series["date"],
-                y=series["portfolio_invested_value"],
+                x=x_values,
+                y=portfolio_values,
                 mode="lines",
                 name="Invested Portfolio",
                 line={"width": 3, "color": "#3B82F6"},
@@ -1155,8 +1161,8 @@ def plot_equity_curves(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         )
         fig.add_trace(
             go.Scatter(
-                x=series["date"],
-                y=series["benchmark_value"],
+                x=x_values,
+                y=benchmark_values,
                 mode="lines",
                 name="Trade-Matched S&P 500",
                 line={"width": 3, "color": "#F59E0B"},
@@ -1175,6 +1181,8 @@ def plot_equity_curves(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,24,39,0.55)",
     )
+    fig.update_yaxes(tickprefix="$", separatethousands=True, gridcolor="rgba(148,163,184,0.18)")
+    fig.update_xaxes(gridcolor="rgba(148,163,184,0.18)")
     return fig
 
 
@@ -1183,10 +1191,13 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
     fig = go.Figure()
     if not series.empty:
         series["date"] = pd.to_datetime(series["date"])
+        x_values = series["date"].dt.strftime("%Y-%m-%d").tolist()
+        portfolio_drawdown = (pd.to_numeric(series["portfolio_drawdown"], errors="coerce").fillna(0.0) * 100).tolist()
+        benchmark_drawdown = (pd.to_numeric(series["benchmark_drawdown"], errors="coerce").fillna(0.0) * 100).tolist()
         fig.add_trace(
             go.Scatter(
-                x=series["date"],
-                y=series["portfolio_drawdown"] * 100,
+                x=x_values,
+                y=portfolio_drawdown,
                 mode="lines",
                 name="Portfolio Drawdown",
                 line={"width": 2.5, "color": "#EF4444"},
@@ -1197,8 +1208,8 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         )
         fig.add_trace(
             go.Scatter(
-                x=series["date"],
-                y=series["benchmark_drawdown"] * 100,
+                x=x_values,
+                y=benchmark_drawdown,
                 mode="lines",
                 name="S&P 500 Drawdown",
                 line={"width": 2.5, "color": "#A855F7"},
@@ -1219,16 +1230,22 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,24,39,0.55)",
     )
+    fig.update_yaxes(ticksuffix="%", gridcolor="rgba(148,163,184,0.18)")
+    fig.update_xaxes(gridcolor="rgba(148,163,184,0.18)")
     return fig
 
 
 def plot_projection(projection_df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
     if not projection_df.empty:
+        years = pd.to_numeric(projection_df["year"], errors="coerce").fillna(0).astype(int).tolist()
+        conservative = pd.to_numeric(projection_df["conservative"], errors="coerce").fillna(0.0).tolist()
+        base = pd.to_numeric(projection_df["base"], errors="coerce").fillna(0.0).tolist()
+        optimistic = pd.to_numeric(projection_df["optimistic"], errors="coerce").fillna(0.0).tolist()
         fig.add_trace(
             go.Scatter(
-                x=projection_df["year"],
-                y=projection_df["conservative"],
+                x=years,
+                y=conservative,
                 mode="lines",
                 name="Conservative",
                 line={"width": 3, "color": "#10B981"},
@@ -1237,8 +1254,8 @@ def plot_projection(projection_df: pd.DataFrame) -> go.Figure:
         )
         fig.add_trace(
             go.Scatter(
-                x=projection_df["year"],
-                y=projection_df["base"],
+                x=years,
+                y=base,
                 mode="lines",
                 name="Base",
                 line={"width": 3, "color": "#3B82F6"},
@@ -1247,8 +1264,8 @@ def plot_projection(projection_df: pd.DataFrame) -> go.Figure:
         )
         fig.add_trace(
             go.Scatter(
-                x=projection_df["year"],
-                y=projection_df["optimistic"],
+                x=years,
+                y=optimistic,
                 mode="lines",
                 name="Optimistic",
                 line={"width": 3, "color": "#F97316"},
@@ -1267,6 +1284,8 @@ def plot_projection(projection_df: pd.DataFrame) -> go.Figure:
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,24,39,0.55)",
     )
+    fig.update_yaxes(tickprefix="$", separatethousands=True, gridcolor="rgba(148,163,184,0.18)")
+    fig.update_xaxes(dtick=1, gridcolor="rgba(148,163,184,0.18)")
     return fig
 
 
@@ -1462,9 +1481,6 @@ def build_app() -> gr.Blocks:
         css="""
         .app-shell {max-width: 1400px; margin: 0 auto;}
         .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; width: 100%; align-items: stretch;}
-        .metric-card {padding: 16px 18px; border: 1px solid #dde4ee; border-radius: 16px; background: #f8fbff; min-height: 120px; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden;}
-        .metric-card-label {font-size: 12px; color: #4f5d6b; text-transform: uppercase; letter-spacing: .08em; line-height: 1.25;}
-        .metric-card-value {font-size: 28px; font-weight: 700; margin-top: 8px; line-height: 1.15; word-break: break-word;}
         @media (max-width: 1200px) {.metric-strip {grid-template-columns: repeat(2, minmax(220px, 1fr));}}
         @media (max-width: 820px) {.metric-strip {grid-template-columns: 1fr;}}
         """,
