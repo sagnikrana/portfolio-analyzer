@@ -275,18 +275,30 @@ def extract_close_frame(downloaded: pd.DataFrame, tickers: list[str]) -> pd.Data
     return close.sort_index()
 
 
+def normalize_ticker_for_yahoo(symbol: str) -> str:
+    return str(symbol).strip().replace(".", "-")
+
+
 def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_date: str) -> dict[str, Any]:
     tickers = sorted(set(symbol for symbol in traded_symbols if symbol))
+    yahoo_map = {symbol: normalize_ticker_for_yahoo(symbol) for symbol in tickers}
+    yahoo_tickers = [yahoo_map[symbol] for symbol in tickers]
     history_start = (pd.Timestamp(start_date) - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
 
-    ticker_history_raw = yf.download(
-        tickers=tickers,
-        start=history_start,
-        auto_adjust=False,
-        progress=False,
-        threads=True,
-    )
-    ticker_close = extract_close_frame(ticker_history_raw, tickers)
+    if yahoo_tickers:
+        ticker_history_raw = yf.download(
+            tickers=yahoo_tickers,
+            start=history_start,
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+        )
+        ticker_close = extract_close_frame(ticker_history_raw, yahoo_tickers)
+        ticker_close = ticker_close.rename(
+            columns={yahoo_symbol: original for original, yahoo_symbol in yahoo_map.items()}
+        )
+    else:
+        ticker_close = pd.DataFrame()
 
     benchmark_raw = yf.download(
         tickers=benchmark_symbol,
@@ -660,10 +672,13 @@ def build_market_enriched_metrics(
     market_index = benchmark_close.index
     tracked_tickers = sorted(ticker_close.columns.tolist()) if not ticker_close.empty else []
     price_matrix = ticker_close.reindex(market_index).ffill().reindex(columns=tracked_tickers)
+    price_matrix = price_matrix.apply(pd.to_numeric, errors="coerce").astype(float)
     share_matrix = build_daily_share_matrix(df, market_index, tracked_tickers)
-    cash_balance_series = build_cash_balance_series(df, market_index)
-    portfolio_equity_series = (share_matrix * price_matrix).sum(axis=1)
-    account_value_series = portfolio_equity_series + cash_balance_series
+    share_matrix = share_matrix.apply(pd.to_numeric, errors="coerce").fillna(0.0).astype(float)
+    cash_balance_series = pd.to_numeric(build_cash_balance_series(df, market_index), errors="coerce").fillna(0.0)
+    benchmark_value_series = pd.to_numeric(benchmark_value_series, errors="coerce").fillna(0.0)
+    portfolio_equity_series = (share_matrix * price_matrix).sum(axis=1).astype(float)
+    account_value_series = (portfolio_equity_series + cash_balance_series).astype(float)
 
     active_mask = portfolio_equity_series.ne(0) | benchmark_value_series.ne(0)
     if active_mask.any():
@@ -672,8 +687,12 @@ def build_market_enriched_metrics(
         account_value_series = account_value_series.loc[first_active:]
         benchmark_value_series = benchmark_value_series.loc[first_active:]
 
-    portfolio_returns = portfolio_equity_series.pct_change().replace([math.inf, -math.inf], pd.NA).fillna(0.0)
-    benchmark_returns = benchmark_value_series.pct_change().replace([math.inf, -math.inf], pd.NA).fillna(0.0)
+    portfolio_returns = (
+        portfolio_equity_series.pct_change().replace([math.inf, -math.inf], float("nan")).fillna(0.0).astype(float)
+    )
+    benchmark_returns = (
+        benchmark_value_series.pct_change().replace([math.inf, -math.inf], float("nan")).fillna(0.0).astype(float)
+    )
     aligned_returns = pd.concat(
         [portfolio_returns.rename("portfolio"), benchmark_returns.rename("benchmark")], axis=1
     ).dropna()
@@ -962,7 +981,7 @@ def build_messages(analysis_payload: dict[str, Any], risk_profile: int) -> list[
     user_prompt = (
         f"User input:\n- Risk profile: {risk_profile}/100\n\n"
         "Analysis payload:\n"
-        f"{json.dumps(analysis_payload, indent=2)}\n\n"
+        f"{json.dumps(make_json_safe(analysis_payload), indent=2)}\n\n"
         "Analyze this investor and provide:\n"
         "- the actual observed portfolio risk score, confidence level, and what drove it\n"
         "- whether the observed risk is aligned with the stated risk profile\n"
@@ -975,6 +994,31 @@ def build_messages(analysis_payload: dict[str, Any], risk_profile: int) -> list[
         "- clear caveats about what can and cannot be concluded from this data"
     )
     return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+
+
+def make_json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): make_json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [make_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [make_json_safe(v) for v in value]
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if value is pd.NA:
+        return None
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    return value
 
 
 def call_ollama(
