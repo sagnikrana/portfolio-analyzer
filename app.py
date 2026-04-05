@@ -23,6 +23,9 @@ OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 BENCHMARK_SYMBOL = "^GSPC"
 PROJECTION_YEARS = 18
 SHORT_HOLD_TARGET_DAYS = round(365.25 * 1.5)
+ROLLING_DRAWDOWN_WINDOW_DAYS = round(365.25 / 2)
+ROLLING_DRAWDOWN_MEMORY_WEIGHT = 0.25
+ROLLING_DRAWDOWN_HALF_LIFE_DAYS = round(365.25)
 
 
 @dataclass
@@ -102,6 +105,86 @@ def weighted_median(values: list[float], weights: list[float]) -> float | None:
         if running_weight >= midpoint:
             return value
     return pairs[-1][0]
+
+
+def max_drawdown_for_series(series: pd.Series) -> float | None:
+    clean_series = pd.to_numeric(series, errors="coerce").dropna().astype(float)
+    if clean_series.empty or len(clean_series) < 2:
+        return None
+    drawdown = (clean_series / clean_series.cummax()) - 1
+    return abs(float(drawdown.min()))
+
+
+def recency_weighted_rolling_drawdown(
+    series: pd.Series,
+    *,
+    window_days: int = ROLLING_DRAWDOWN_WINDOW_DAYS,
+    memory_weight: float = ROLLING_DRAWDOWN_MEMORY_WEIGHT,
+    half_life_days: int = ROLLING_DRAWDOWN_HALF_LIFE_DAYS,
+) -> dict[str, float | int | None]:
+    clean_series = pd.to_numeric(series, errors="coerce").dropna().astype(float)
+    if clean_series.empty or len(clean_series) < 2:
+        return {
+            "full_history_max_drawdown": None,
+            "weighted_rolling_drawdown": None,
+            "blended_drawdown": None,
+            "window_days": window_days,
+            "memory_weight": memory_weight,
+            "recency_weight_half_life_days": half_life_days,
+        }
+
+    if not isinstance(clean_series.index, pd.DatetimeIndex):
+        clean_series.index = pd.to_datetime(clean_series.index)
+    clean_series = clean_series.sort_index()
+    latest_date = clean_series.index[-1]
+    window_delta = pd.Timedelta(days=window_days)
+
+    rolling_drawdowns: list[float] = []
+    recency_weights: list[float] = []
+    for end_date in clean_series.index:
+        # Use overlapping calendar windows so the metric reacts to evolving downside behavior
+        # instead of being locked to arbitrary Jan-Jun / Jul-Dec buckets.
+        window_slice = clean_series.loc[end_date - window_delta : end_date]
+        if len(window_slice) < 2:
+            continue
+        window_drawdown = max_drawdown_for_series(window_slice)
+        if window_drawdown is None:
+            continue
+        # Exponential decay keeps the weighting explainable: a window roughly one year older
+        # carries about half the influence of the newest window.
+        age_days = max((latest_date - end_date).days, 0)
+        recency_weight = math.exp(-math.log(2) * age_days / max(half_life_days, 1))
+        rolling_drawdowns.append(window_drawdown)
+        recency_weights.append(recency_weight)
+
+    full_history_drawdown = max_drawdown_for_series(clean_series)
+    weighted_rolling_drawdown = None
+    if rolling_drawdowns and sum(recency_weights) > 0:
+        weighted_rolling_drawdown = float(
+            sum(drawdown * weight for drawdown, weight in zip(rolling_drawdowns, recency_weights))
+            / sum(recency_weights)
+        )
+
+    if weighted_rolling_drawdown is None:
+        blended_drawdown = full_history_drawdown
+    elif full_history_drawdown is None:
+        blended_drawdown = weighted_rolling_drawdown
+    else:
+        blended_drawdown = (
+            (1 - memory_weight) * weighted_rolling_drawdown
+            + memory_weight * full_history_drawdown
+        )
+
+    return {
+        "full_history_max_drawdown": round(full_history_drawdown, 4) if full_history_drawdown is not None else None,
+        "weighted_rolling_drawdown": round(weighted_rolling_drawdown, 4)
+        if weighted_rolling_drawdown is not None
+        else None,
+        "blended_drawdown": round(blended_drawdown, 4) if blended_drawdown is not None else None,
+        "window_days": window_days,
+        "memory_weight": memory_weight,
+        "recency_weight_half_life_days": half_life_days,
+    }
 
 
 def build_lot_analytics(df: pd.DataFrame) -> dict[str, Any]:
@@ -568,7 +651,7 @@ def compute_observed_risk_score(
     annualized_turnover: float | None,
     capital_weighted_holding_days: float | None,
     equity_exposure: float | None,
-    max_drawdown: float | None,
+    blended_drawdown: float | None,
     downside_capture_ratio: float | None,
     annualized_volatility: float | None,
     beta_to_benchmark: float | None,
@@ -588,7 +671,9 @@ def compute_observed_risk_score(
     }
     market_components = {
         "portfolio_volatility": clip01((annualized_volatility or 0.0) / 0.32),
-        "drawdown": clip01(abs(max_drawdown or 0.0) / 0.40),
+        # Drawdown risk now emphasizes recent 6-month stress windows while still keeping
+        # a smaller memory of the worst full-history decline in the final blend.
+        "drawdown": clip01(abs(blended_drawdown or 0.0) / 0.40),
         "downside_capture": clip01((downside_capture_ratio or 0.0) / 1.15),
         "beta": clip01((beta_to_benchmark or 0.0) / 1.25),
         "equity_exposure": clip01((equity_exposure or 0.0) / 1.0),
@@ -770,6 +855,9 @@ def build_market_enriched_metrics(
     ).dropna()
     portfolio_drawdown = (portfolio_equity_series / portfolio_equity_series.cummax()) - 1
     benchmark_drawdown = (benchmark_value_series / benchmark_value_series.cummax()) - 1
+    # Blend overlapping 6-month drawdowns with recency weights so old crises matter less
+    # than the portfolio's more recent downside behavior.
+    drawdown_profile = recency_weighted_rolling_drawdown(portfolio_equity_series)
     annualized_volatility = float(portfolio_returns.std() * math.sqrt(252)) if len(portfolio_returns) > 2 else None
     benchmark_annualized_volatility = (
         float(benchmark_returns.std() * math.sqrt(252)) if len(benchmark_returns) > 2 else None
@@ -844,7 +932,7 @@ def build_market_enriched_metrics(
         annualized_turnover=annualized_turnover,
         capital_weighted_holding_days=capital_weighted_holding_days,
         equity_exposure=equity_exposure,
-        max_drawdown=float(portfolio_drawdown.min()) if not portfolio_drawdown.empty else None,
+        blended_drawdown=drawdown_profile["blended_drawdown"],
         downside_capture_ratio=downside_capture_ratio,
         annualized_volatility=annualized_volatility,
         beta_to_benchmark=beta_to_benchmark,
@@ -984,6 +1072,11 @@ def build_market_enriched_metrics(
         "concentration_adjusted_return_proxy": round(concentration_adjusted_return_proxy, 4)
         if concentration_adjusted_return_proxy is not None
         else None,
+        "drawdown_window_days": drawdown_profile["window_days"],
+        "drawdown_recency_weight_half_life_days": drawdown_profile["recency_weight_half_life_days"],
+        "drawdown_memory_weight": round(float(drawdown_profile["memory_weight"]), 4),
+        "weighted_rolling_portfolio_drawdown": drawdown_profile["weighted_rolling_drawdown"],
+        "blended_portfolio_drawdown_for_risk": drawdown_profile["blended_drawdown"],
         "max_portfolio_drawdown": round(float(portfolio_drawdown.min()), 4) if not portfolio_drawdown.empty else None,
         "max_benchmark_drawdown": round(float(benchmark_drawdown.min()), 4) if not benchmark_drawdown.empty else None,
         "portfolio_drawdown_on_worst_benchmark_day": round(portfolio_drawdown_on_worst_benchmark_day, 4)

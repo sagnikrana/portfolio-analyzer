@@ -206,27 +206,39 @@ These metrics measure how risky the portfolio’s market behavior is.
 
 **What it measures**
 
-- The maximum peak-to-trough decline in the invested portfolio series.
+- A recency-weighted drawdown severity score built from rolling 6-month drawdown windows,
+  blended with a smaller full-history memory term.
 
 **Plain-English question**
 
-- How bad was the worst loss period?
+- How painful has the portfolio's downside behavior been recently, without forgetting the
+  worst loss periods from earlier history?
 
 **Why it matters**
 
-- Drawdown reflects the actual depth of losses the investor would have experienced.
+- Drawdown reflects the actual depth of losses the investor would have experienced, and this
+  version makes recent drawdowns matter more than distant ones.
 
 **How the current model uses it**
 
-- It is normalized against roughly `40%`.
+- The app computes drawdown across overlapping rolling 6-month windows, then gives more weight
+  to recent windows using exponential recency weights.
+- A smaller long-history memory term is then blended back in so an older severe drawdown still
+  matters a bit.
+- The blended drawdown number is normalized against roughly `40%`.
+- Current settings in the app:
+  - Rolling window: `183 days`
+  - Recency half-life: `365 days`
+  - Full-history memory weight: `25%`
 
 **Low value means**
 
-- The portfolio has historically held up better.
+- The portfolio has had relatively mild recent drawdowns and limited historical downside stress.
 
 **High value means**
 
-- The portfolio has suffered deeper losses.
+- The portfolio has suffered deeper or more persistent recent drawdowns, and/or it still carries
+  meaningful memory of a severe historical decline.
 
 **How it influences overall risk**
 
