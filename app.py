@@ -22,6 +22,7 @@ DEFAULT_MODEL_NAME = "gemma:2b"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 BENCHMARK_SYMBOL = "^GSPC"
 PROJECTION_YEARS = 18
+SHORT_HOLD_TARGET_DAYS = round(365.25 * 1.5)
 
 
 @dataclass
@@ -85,6 +86,22 @@ def weighted_average_date(dates: list[datetime], weights: list[float]) -> str | 
         return None
     weighted_ordinal = sum(date.toordinal() * weight for date, weight in zip(dates, weights)) / sum(weights)
     return datetime.fromordinal(int(round(weighted_ordinal))).date().isoformat()
+
+
+def weighted_median(values: list[float], weights: list[float]) -> float | None:
+    if not values or not weights or len(values) != len(weights):
+        return None
+    pairs = sorted((float(value), float(weight)) for value, weight in zip(values, weights) if weight > 0)
+    if not pairs:
+        return None
+    total_weight = sum(weight for _, weight in pairs)
+    midpoint = total_weight / 2
+    running_weight = 0.0
+    for value, weight in pairs:
+        running_weight += weight
+        if running_weight >= midpoint:
+            return value
+    return pairs[-1][0]
 
 
 def build_lot_analytics(df: pd.DataFrame) -> dict[str, Any]:
@@ -158,6 +175,7 @@ def build_lot_analytics(df: pd.DataFrame) -> dict[str, Any]:
                     lots[symbol].popleft()
 
     current_positions = []
+    open_lots: list[dict[str, Any]] = []
     for symbol, queue in lots.items():
         total_qty = sum(lot.quantity for lot in queue)
         if total_qty <= 1e-9:
@@ -175,10 +193,21 @@ def build_lot_analytics(df: pd.DataFrame) -> dict[str, Any]:
                 "weighted_avg_buy_date": weighted_average_date(buy_dates, weights),
             }
         )
+        for lot in queue:
+            open_lots.append(
+                {
+                    "ticker": symbol,
+                    "quantity": round(lot.quantity, 6),
+                    "buy_date": lot.buy_date.date().isoformat(),
+                    "unit_cost": round(lot.unit_cost, 6),
+                    "cost_basis": round(lot.quantity * lot.unit_cost, 2),
+                }
+            )
 
     current_positions.sort(key=lambda item: item["cost_basis_total"], reverse=True)
     return {
         "current_positions": current_positions,
+        "open_lots": open_lots,
         "closed_lots": closed_lots,
         "realized_pnl_by_ticker": {
             ticker: round(float(pnl), 2)
@@ -193,9 +222,26 @@ def summarize_portfolio(df: pd.DataFrame, lot_data: dict[str, Any]) -> dict[str,
     ach_df = df[df["Trans Code"] == "ACH"]
     dividend_df = df[df["Trans Code"] == "CDIV"]
     interest_df = df[df["Trans Code"] == "INT"]
+    as_of_date = pd.Timestamp.today().normalize()
 
     holding_periods = [lot["hold_days"] for lot in lot_data["closed_lots"]]
     holding_counter = Counter(holding_period_bucket(days) for days in holding_periods)
+    holding_duration_values: list[float] = []
+    holding_duration_weights: list[float] = []
+    for lot in lot_data["closed_lots"]:
+        cost_basis = float(lot.get("cost_basis") or 0.0)
+        hold_days = float(lot.get("hold_days") or 0.0)
+        if cost_basis > 0:
+            holding_duration_values.append(hold_days)
+            holding_duration_weights.append(cost_basis)
+    for lot in lot_data.get("open_lots", []):
+        cost_basis = float(lot.get("cost_basis") or 0.0)
+        if cost_basis <= 0:
+            continue
+        buy_date = pd.Timestamp(lot["buy_date"]).normalize()
+        holding_duration_values.append(float((as_of_date - buy_date).days))
+        holding_duration_weights.append(cost_basis)
+
     years = max(((df["Activity Date"].max() - df["Activity Date"].min()).days / 365.25), 0.01)
 
     buys_by_ticker = buy_df.groupby("Instrument")["Amount_num"].sum().abs().sort_values(ascending=False)
@@ -232,6 +278,14 @@ def summarize_portfolio(df: pd.DataFrame, lot_data: dict[str, Any]) -> dict[str,
                 3,
             ),
             "holding_period_buckets": dict(holding_counter),
+            # Weight holding duration by deployed capital so small speculative trades do not
+            # dominate the behavior signal for much larger long-term positions.
+            "capital_weighted_median_holding_period_days": round(
+                float(weighted_median(holding_duration_values, holding_duration_weights)),
+                1,
+            )
+            if holding_duration_values
+            else None,
             "median_holding_period_days": round(float(pd.Series(holding_periods).median()), 1)
             if holding_periods
             else None,
@@ -512,7 +566,7 @@ def compute_observed_risk_score(
     effective_holdings: float | None,
     meaningful_holdings_count: int,
     annualized_turnover: float | None,
-    median_holding_days: float | None,
+    capital_weighted_holding_days: float | None,
     equity_exposure: float | None,
     max_drawdown: float | None,
     downside_capture_ratio: float | None,
@@ -541,7 +595,12 @@ def compute_observed_risk_score(
     }
     behavior_components = {
         "turnover": clip01((annualized_turnover or 0.0) / 0.50),
-        "short_holding_period": clip01((540 - (median_holding_days or 540)) / 540),
+        # Use an 18-month target so this behavior score reflects how long the investor's
+        # actual dollars are held, not just how many tiny trades were flipped quickly.
+        "short_holding_period": clip01(
+            (SHORT_HOLD_TARGET_DAYS - (capital_weighted_holding_days or SHORT_HOLD_TARGET_DAYS))
+            / SHORT_HOLD_TARGET_DAYS
+        ),
     }
     dimension_scores = {
         "concentration_risk": sum(concentration_components.values()) / len(concentration_components),
@@ -581,6 +640,7 @@ def compute_observed_risk_score(
         "confidence_band": confidence_band(confidence_score),
         "effective_holdings_value": round(effective_holdings_value, 2) if effective_holdings is not None else None,
         "meaningful_holdings_count": meaningful_holdings_value,
+        "short_holding_period_target_days": SHORT_HOLD_TARGET_DAYS,
         "dimension_scores": {k: round(v * 100, 1) for k, v in dimension_scores.items()},
         "component_scores": {
             **{f"concentration::{k}": round(v * 100, 1) for k, v in concentration_components.items()},
@@ -746,7 +806,9 @@ def build_market_enriched_metrics(
     portfolio_cagr = annualized_return(total_account_value_estimate, net_deposits, years)
     invested_only_cagr = annualized_return(current_portfolio_value, invested_net_cash_estimate, years)
     benchmark_cagr = annualized_return(benchmark_current_value, benchmark_invested_net_cash, years)
-    median_holding_days = portfolio_summary["behavioral_metrics"].get("median_holding_period_days")
+    capital_weighted_holding_days = portfolio_summary["behavioral_metrics"].get(
+        "capital_weighted_median_holding_period_days"
+    )
     annualized_turnover = portfolio_summary["behavioral_metrics"].get("annualized_turnover_proxy")
     equity_exposure = current_portfolio_value / total_account_value_estimate if total_account_value_estimate > 0 else 0.0
 
@@ -780,7 +842,7 @@ def build_market_enriched_metrics(
         effective_holdings=effective_holdings,
         meaningful_holdings_count=meaningful_holdings_count,
         annualized_turnover=annualized_turnover,
-        median_holding_days=median_holding_days,
+        capital_weighted_holding_days=capital_weighted_holding_days,
         equity_exposure=equity_exposure,
         max_drawdown=float(portfolio_drawdown.min()) if not portfolio_drawdown.empty else None,
         downside_capture_ratio=downside_capture_ratio,
@@ -1410,7 +1472,7 @@ def build_overview_markdown(portfolio_summary: dict[str, Any], market_metrics: d
 - Observed risk score: `{risk["score"]}/100` (`{risk["band"]}`)
 - Alignment to stated risk: `{risk["alignment"]}` with alignment score `{risk["alignment_score"]}`
 - Confidence in observed risk read: `{risk["confidence_band"]}` (`{risk["confidence_score"]}`)
-- Median closed-lot holding period: `{behavior["median_holding_period_days"]}` days
+- Capital-weighted median holding period: `{behavior["capital_weighted_median_holding_period_days"]}` days
 - Annualized turnover proxy: `{behavior["annualized_turnover_proxy"]}`
 
 ### Current Snapshot

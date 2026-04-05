@@ -372,28 +372,40 @@ These metrics measure how aggressive the investor’s behavior looks based on ac
 
 **What it measures**
 
-- How short the median holding period is for closed lots.
+- How short the capital-weighted median holding period is across both open and closed lots.
 
 **Plain-English question**
 
-- Does the investor hold positions for a long time, or rotate quickly?
+- How long are the investor’s dollars typically held before being sold or before today if still open?
 
 **Why it matters**
 
-- Short holding periods often suggest impatience, reactive decision-making, or tactical trading.
+- A plain trade-count median can be distorted by tiny speculative positions.
+- Weighting by cost basis makes larger capital commitments matter more than tiny flips.
 
 **How the current model uses it**
 
-- It uses `540` days as a calmer long-term reference point.
-- Shorter holding periods increase risk.
+- It uses an `18-month` target, which is about `548 days`.
+- It computes a cost-basis-weighted median holding duration across:
+  - closed lots: `sell_date - buy_date`
+  - open lots: `today - buy_date`
+- Shorter capital-weighted holding periods increase risk.
+
+The current normalization is:
+
+```text
+short_holding_period_risk =
+1 - min(capital_weighted_median_holding_days / 548, 1)
+```
 
 **Low value means**
 
-- Longer holding periods and more patient behavior.
+- The investor’s dollars are generally held for long enough to resemble patient, longer-term investing.
 
 **High value means**
 
-- Shorter holding periods and more aggressive trading behavior.
+- The investor’s dollars are typically rotated out more quickly.
+- This suggests more active or tactical behavior.
 
 **How it influences overall risk**
 
