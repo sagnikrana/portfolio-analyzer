@@ -270,23 +270,43 @@ drawdown_ratio = blended_portfolio_drawdown / blended_benchmark_drawdown
 
 - It raises `market_risk`.
 
-### `market::downside_capture`
+### `market::relative_downside_capture_to_benchmark`
 
 **What it measures**
 
-- How the portfolio behaves on negative benchmark days relative to the benchmark.
+- How the portfolio behaves relative to the S&P 500 during rolling 6-month windows when
+  the benchmark is falling.
 
 **Plain-English question**
 
-- When the S&P 500 falls, does this portfolio fall less, about the same, or more?
+- In recent bad-market periods, does this portfolio fall less than the S&P 500, about the
+  same, or more?
 
 **Why it matters**
 
-- It measures how painful bad market days are for this portfolio relative to the market.
+- It focuses on bad-market behavior and makes recent downside sensitivity matter more than
+  distant market history.
 
 **How the current model uses it**
 
-- It is normalized against roughly `1.15`.
+- The app computes downside capture across overlapping rolling 6-month windows using the
+  flow-adjusted portfolio and benchmark return series.
+- Recent windows get more weight through exponential recency weighting.
+- It then computes a weighted benchmark-relative ratio:
+
+```text
+relative_downside_capture = weighted portfolio loss on benchmark down days
+                            /
+                            weighted benchmark loss on benchmark down days
+```
+
+- A ratio of `1.0` means the portfolio behaved about like the S&P 500 during bad periods.
+- Ratios at or below `1.0` contribute no risk on this component.
+- Risk ramps up when the portfolio loses more than the benchmark and reaches the cap at
+  roughly `1.15x`.
+- Current settings in the app:
+  - Rolling window: `183 days`
+  - Recency half-life: `365 days`
 
 **Interpretation**
 
@@ -296,11 +316,11 @@ drawdown_ratio = blended_portfolio_drawdown / blended_benchmark_drawdown
 
 **Low value means**
 
-- More defensive downside behavior.
+- More defensive downside behavior relative to the S&P 500.
 
 **High value means**
 
-- More aggressive downside behavior.
+- More aggressive downside behavior relative to the S&P 500.
 
 **How it influences overall risk**
 
@@ -467,7 +487,7 @@ Average of:
 
 - `market::relative_volatility_to_benchmark`
 - `market::relative_drawdown_to_benchmark`
-- `market::downside_capture`
+- `market::relative_downside_capture_to_benchmark`
 - `market::beta`
 - `market::equity_exposure`
 

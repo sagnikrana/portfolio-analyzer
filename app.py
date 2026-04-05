@@ -27,6 +27,7 @@ ROLLING_DRAWDOWN_WINDOW_DAYS = round(365.25 / 2)
 ROLLING_DRAWDOWN_MEMORY_WEIGHT = 0.25
 ROLLING_DRAWDOWN_HALF_LIFE_DAYS = round(365.25)
 BENCHMARK_RELATIVE_RISK_MAX_RATIO = 2.0
+RELATIVE_DOWNSIDE_CAPTURE_MAX_RATIO = 1.15
 
 
 @dataclass
@@ -197,6 +198,66 @@ def recency_weighted_rolling_drawdown(
         "blended_drawdown": round(blended_drawdown, 4) if blended_drawdown is not None else None,
         "window_days": window_days,
         "memory_weight": memory_weight,
+        "recency_weight_half_life_days": half_life_days,
+    }
+
+
+def recency_weighted_rolling_downside_capture(
+    returns_frame: pd.DataFrame,
+    *,
+    window_days: int = ROLLING_DRAWDOWN_WINDOW_DAYS,
+    half_life_days: int = ROLLING_DRAWDOWN_HALF_LIFE_DAYS,
+) -> dict[str, float | int | None]:
+    if returns_frame.empty:
+        return {
+            "weighted_downside_capture": None,
+            "window_days": window_days,
+            "recency_weight_half_life_days": half_life_days,
+        }
+
+    clean_returns = returns_frame.copy()
+    clean_returns.index = pd.to_datetime(clean_returns.index)
+    clean_returns = clean_returns.sort_index().dropna()
+    if len(clean_returns) < 2 or "portfolio" not in clean_returns.columns or "benchmark" not in clean_returns.columns:
+        return {
+            "weighted_downside_capture": None,
+            "window_days": window_days,
+            "recency_weight_half_life_days": half_life_days,
+        }
+
+    latest_date = clean_returns.index[-1]
+    window_delta = pd.Timedelta(days=window_days)
+    rolling_ratios: list[float] = []
+    recency_weights: list[float] = []
+
+    for end_date in clean_returns.index:
+        window_slice = clean_returns.loc[end_date - window_delta : end_date]
+        if len(window_slice) < 2:
+            continue
+        downside_slice = window_slice[window_slice["benchmark"] < 0]
+        if downside_slice.empty:
+            continue
+        benchmark_down_mean = float(downside_slice["benchmark"].mean())
+        if benchmark_down_mean == 0:
+            continue
+        ratio = float(downside_slice["portfolio"].mean() / benchmark_down_mean)
+        age_days = max((latest_date - end_date).days, 0)
+        recency_weight = math.exp(-math.log(2) * age_days / max(half_life_days, 1))
+        rolling_ratios.append(ratio)
+        recency_weights.append(recency_weight)
+
+    weighted_downside_capture = None
+    if rolling_ratios and sum(recency_weights) > 0:
+        weighted_downside_capture = float(
+            sum(ratio * weight for ratio, weight in zip(rolling_ratios, recency_weights))
+            / sum(recency_weights)
+        )
+
+    return {
+        "weighted_downside_capture": round(weighted_downside_capture, 4)
+        if weighted_downside_capture is not None
+        else None,
+        "window_days": window_days,
         "recency_weight_half_life_days": half_life_days,
     }
 
@@ -714,7 +775,7 @@ def compute_observed_risk_score(
     capital_weighted_holding_days: float | None,
     equity_exposure: float | None,
     relative_drawdown_to_benchmark: float | None,
-    downside_capture_ratio: float | None,
+    relative_downside_capture_to_benchmark: float | None,
     relative_volatility_to_benchmark: float | None,
     beta_to_benchmark: float | None,
     years_of_history: float,
@@ -736,7 +797,10 @@ def compute_observed_risk_score(
         # penalized for being riskier than the S&P 500 over the same horizon.
         "relative_volatility_to_benchmark": score_relative_to_benchmark(relative_volatility_to_benchmark),
         "relative_drawdown_to_benchmark": score_relative_to_benchmark(relative_drawdown_to_benchmark),
-        "downside_capture": clip01((downside_capture_ratio or 0.0) / 1.15),
+        "relative_downside_capture_to_benchmark": score_relative_to_benchmark(
+            relative_downside_capture_to_benchmark,
+            max_ratio=RELATIVE_DOWNSIDE_CAPTURE_MAX_RATIO,
+        ),
         "beta": clip01((beta_to_benchmark or 0.0) / 1.25),
         "equity_exposure": clip01((equity_exposure or 0.0) / 1.0),
     }
@@ -977,6 +1041,8 @@ def build_market_enriched_metrics(
         and benchmark_drawdown_profile["blended_drawdown"] > 0
         else None
     )
+    downside_capture_profile = recency_weighted_rolling_downside_capture(aligned_returns)
+    relative_downside_capture_to_benchmark = downside_capture_profile["weighted_downside_capture"]
     beta_to_benchmark = None
     tracking_error = None
     info_ratio_proxy = None
@@ -998,12 +1064,6 @@ def build_market_enriched_metrics(
         if worst_benchmark_date is not None and worst_benchmark_date in portfolio_drawdown.index
         else None
     )
-    downside_mask = benchmark_returns < 0
-    downside_capture_ratio = None
-    if downside_mask.any() and benchmark_returns[downside_mask].mean() != 0:
-        downside_capture_ratio = float(
-            portfolio_returns[downside_mask].mean() / benchmark_returns[downside_mask].mean()
-        )
 
     years = float(portfolio_summary["date_range"]["years"])
     portfolio_cagr = annualized_return(total_account_value_estimate, net_deposits, years)
@@ -1048,7 +1108,7 @@ def build_market_enriched_metrics(
         capital_weighted_holding_days=capital_weighted_holding_days,
         equity_exposure=equity_exposure,
         relative_drawdown_to_benchmark=relative_drawdown_to_benchmark,
-        downside_capture_ratio=downside_capture_ratio,
+        relative_downside_capture_to_benchmark=relative_downside_capture_to_benchmark,
         relative_volatility_to_benchmark=relative_volatility_to_benchmark,
         beta_to_benchmark=beta_to_benchmark,
         years_of_history=years,
@@ -1202,12 +1262,18 @@ def build_market_enriched_metrics(
         "relative_drawdown_to_benchmark": round(relative_drawdown_to_benchmark, 4)
         if relative_drawdown_to_benchmark is not None
         else None,
+        "relative_downside_capture_to_benchmark": round(relative_downside_capture_to_benchmark, 4)
+        if relative_downside_capture_to_benchmark is not None
+        else None,
+        "relative_downside_capture_window_days": downside_capture_profile["window_days"],
+        "relative_downside_capture_recency_weight_half_life_days": downside_capture_profile[
+            "recency_weight_half_life_days"
+        ],
         "max_portfolio_drawdown": round(float(portfolio_drawdown.min()), 4) if not portfolio_drawdown.empty else None,
         "max_benchmark_drawdown": round(float(benchmark_drawdown.min()), 4) if not benchmark_drawdown.empty else None,
         "portfolio_drawdown_on_worst_benchmark_day": round(portfolio_drawdown_on_worst_benchmark_day, 4)
         if portfolio_drawdown_on_worst_benchmark_day is not None
         else None,
-        "downside_capture_ratio": round(downside_capture_ratio, 4) if downside_capture_ratio is not None else None,
     }
     series = pd.DataFrame(
         {
