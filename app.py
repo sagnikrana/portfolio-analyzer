@@ -654,9 +654,12 @@ def build_daily_share_matrix(df: pd.DataFrame, market_index: pd.Index, tickers: 
 
     event_df = pd.DataFrame(events)
     share_changes = event_df.pivot_table(index="date", columns="ticker", values="delta", aggfunc="sum")
-    share_changes = share_changes.reindex(market_index, fill_value=0.0)
-    share_matrix = share_changes.cumsum()
-    return share_matrix.reindex(columns=tickers, fill_value=0.0)
+    # Fill non-trade days with zero share delta before the cumulative sum. Otherwise pandas
+    # leaves NaNs for untouched tickers on existing rows, which can make holdings appear to
+    # disappear between trade dates and corrupt every downstream time-series KPI.
+    share_changes = share_changes.reindex(market_index).fillna(0.0)
+    share_matrix = share_changes.cumsum().ffill().fillna(0.0)
+    return share_matrix.reindex(columns=tickers, fill_value=0.0).fillna(0.0)
 
 
 def build_cash_balance_series(df: pd.DataFrame, market_index: pd.Index) -> pd.Series:
