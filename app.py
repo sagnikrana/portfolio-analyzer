@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 import yfinance as yf
 
 
-DEFAULT_MODEL_NAME = "llama3.1:latest"
+DEFAULT_MODEL_NAME = "gemma:2b"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 BENCHMARK_SYMBOL = "^GSPC"
 PROJECTION_YEARS = 18
@@ -1074,14 +1074,14 @@ def money_text(value: float | None) -> str:
 
 
 def metric_card(label: str, value: str, subtitle: str = "") -> str:
-    subtitle_md = f"<div style='color:#cbd5e1;font-size:12px'>{subtitle}</div>" if subtitle else ""
+    subtitle_md = f"<div style='color:#64748b;font-size:12px'>{subtitle}</div>" if subtitle else ""
     return (
         "<div class='metric-card' style='padding:16px 18px;border:1px solid rgba(148,163,184,.22);"
-        "border-radius:16px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.96));"
+        "border-radius:16px;background:linear-gradient(180deg, #ffffff, #f8fafc);"
         "min-height:120px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;"
-        "box-shadow:0 8px 24px rgba(2,6,23,.22)'>"
-        f"<div class='metric-card-label' style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em;line-height:1.25'>{label}</div>"
-        f"<div class='metric-card-value' style='font-size:28px;font-weight:700;margin-top:8px;line-height:1.15;word-break:break-word;color:#f8fafc'>{value}</div>"
+        "box-shadow:0 8px 24px rgba(15,23,42,.08)'>"
+        f"<div class='metric-card-label' style='font-size:12px;color:#2563eb;text-transform:uppercase;letter-spacing:.08em;line-height:1.25'>{label}</div>"
+        f"<div class='metric-card-value' style='font-size:28px;font-weight:700;margin-top:8px;line-height:1.15;word-break:break-word;color:#0f172a'>{value}</div>"
         f"{subtitle_md}</div>"
     )
 
@@ -1176,13 +1176,26 @@ def plot_equity_curves(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         xaxis_title="Date",
         yaxis_title="Value ($)",
         hovermode="x unified",
-        template="plotly_dark",
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        template="plotly_white",
+        font={"color": "#0f172a"},
+        title_font={"color": "#0f172a", "size": 24},
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "center",
+            "x": 0.5,
+            "font": {"color": "#0f172a", "size": 16},
+            "bgcolor": "rgba(255,255,255,0.85)",
+            "bordercolor": "rgba(148,163,184,0.28)",
+            "borderwidth": 1,
+        },
+        hoverlabel={"bgcolor": "#ffffff", "font": {"color": "#0f172a"}},
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#f8fafc",
     )
-    fig.update_yaxes(tickprefix="$", separatethousands=True, gridcolor="rgba(148,163,184,0.18)")
-    fig.update_xaxes(gridcolor="rgba(148,163,184,0.18)")
+    fig.update_yaxes(tickprefix="$", separatethousands=True, gridcolor="rgba(148,163,184,0.22)", zerolinecolor="rgba(148,163,184,0.28)")
+    fig.update_xaxes(gridcolor="rgba(148,163,184,0.22)")
     return fig
 
 
@@ -1225,13 +1238,26 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         xaxis_title="Date",
         yaxis_title="Drawdown (%)",
         hovermode="x unified",
-        template="plotly_dark",
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        template="plotly_white",
+        font={"color": "#0f172a"},
+        title_font={"color": "#0f172a", "size": 24},
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "center",
+            "x": 0.5,
+            "font": {"color": "#0f172a", "size": 16},
+            "bgcolor": "rgba(255,255,255,0.85)",
+            "bordercolor": "rgba(148,163,184,0.28)",
+            "borderwidth": 1,
+        },
+        hoverlabel={"bgcolor": "#ffffff", "font": {"color": "#0f172a"}},
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#f8fafc",
     )
-    fig.update_yaxes(ticksuffix="%", gridcolor="rgba(148,163,184,0.18)")
-    fig.update_xaxes(gridcolor="rgba(148,163,184,0.18)")
+    fig.update_yaxes(ticksuffix="%", gridcolor="rgba(148,163,184,0.22)", zerolinecolor="rgba(148,163,184,0.28)")
+    fig.update_xaxes(gridcolor="rgba(148,163,184,0.22)")
     return fig
 
 
@@ -1279,13 +1305,26 @@ def plot_projection(projection_df: pd.DataFrame) -> go.Figure:
         xaxis_title="Years From Today",
         yaxis_title="Projected Value ($)",
         hovermode="x unified",
-        template="plotly_dark",
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1},
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        template="plotly_white",
+        font={"color": "#0f172a"},
+        title_font={"color": "#0f172a", "size": 24},
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.02,
+            "xanchor": "center",
+            "x": 0.5,
+            "font": {"color": "#0f172a", "size": 16},
+            "bgcolor": "rgba(255,255,255,0.85)",
+            "bordercolor": "rgba(148,163,184,0.28)",
+            "borderwidth": 1,
+        },
+        hoverlabel={"bgcolor": "#ffffff", "font": {"color": "#0f172a"}},
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#f8fafc",
     )
-    fig.update_yaxes(tickprefix="$", separatethousands=True, gridcolor="rgba(148,163,184,0.18)")
-    fig.update_xaxes(dtick=1, gridcolor="rgba(148,163,184,0.18)")
+    fig.update_yaxes(tickprefix="$", separatethousands=True, gridcolor="rgba(148,163,184,0.22)", zerolinecolor="rgba(148,163,184,0.28)")
+    fig.update_xaxes(dtick=1, gridcolor="rgba(148,163,184,0.22)")
     return fig
 
 
@@ -1475,11 +1514,103 @@ def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: 
 
 
 def build_app() -> gr.Blocks:
+    light_theme = gr.themes.Default(primary_hue="blue", secondary_hue="slate").set(
+        body_background_fill="#f8fafc",
+        body_background_fill_dark="#f8fafc",
+        block_background_fill="#ffffff",
+        block_background_fill_dark="#ffffff",
+        block_border_color="#dbe4f0",
+        block_border_color_dark="#dbe4f0",
+        input_background_fill="#ffffff",
+        input_background_fill_dark="#ffffff",
+        background_fill_primary="#ffffff",
+        background_fill_primary_dark="#ffffff",
+        background_fill_secondary="#f8fafc",
+        background_fill_secondary_dark="#f8fafc",
+        color_accent_soft="#eaf2ff",
+        color_accent_soft_dark="#eaf2ff",
+        body_text_color="#0f172a",
+        body_text_color_dark="#0f172a",
+    )
     with gr.Blocks(
         title="Portfolio Analyzer Dashboard",
-        theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
+        theme=light_theme,
         css="""
+        body, .gradio-container {
+            background: linear-gradient(180deg, #f8fafc 0%, #eef4ff 100%) !important;
+            color: #0f172a !important;
+        }
+        .gradio-container, .gradio-container * {
+            color-scheme: light !important;
+        }
         .app-shell {max-width: 1400px; margin: 0 auto;}
+        .gr-block, .block, .panel, .form, .wrap, .gap, .gr-box, .gr-panel, .gr-form {
+            background: #ffffff !important;
+            color: #0f172a !important;
+            border-color: #dbe4f0 !important;
+        }
+        .gradio-container .prose, .gradio-container .prose * {
+            color: #0f172a !important;
+        }
+        .gradio-container h1, .gradio-container h2, .gradio-container h3,
+        .gradio-container h4, .gradio-container h5, .gradio-container h6,
+        .gradio-container p, .gradio-container span, .gradio-container strong,
+        .gradio-container small, .gradio-container li, .gradio-container ul,
+        .gradio-container ol, .gradio-container div {
+            color: #0f172a;
+        }
+        .gradio-container .tabs, .gradio-container .tabitem, .gradio-container .tab-nav, .gradio-container .tab-nav button {
+            background: #ffffff !important;
+            color: #0f172a !important;
+            border-color: #dbe4f0 !important;
+        }
+        .gradio-container .tab-nav button.selected {
+            background: #eff6ff !important;
+            color: #1d4ed8 !important;
+            border-color: #93c5fd !important;
+        }
+        .gradio-container input, .gradio-container textarea, .gradio-container select {
+            background: #ffffff !important;
+            color: #0f172a !important;
+            border-color: #cbd5e1 !important;
+        }
+        .gradio-container input::placeholder, .gradio-container textarea::placeholder {
+            color: #94a3b8 !important;
+            opacity: 1 !important;
+        }
+        .gradio-container label,
+        .gradio-container legend,
+        .gradio-container fieldset > legend,
+        .gradio-container .label-wrap,
+        .gradio-container .label-wrap *,
+        .gradio-container [data-testid="block-label"],
+        .gradio-container [data-testid="block-info"],
+        .gradio-container .block-info,
+        .gradio-container .block-label,
+        .gradio-container .form label,
+        .gradio-container .form legend {
+            color: #334155 !important;
+            opacity: 1 !important;
+        }
+        .gradio-container button {
+            color: #0f172a !important;
+        }
+        .gradio-container button.primary {
+            color: #ffffff !important;
+        }
+        .gradio-container .wrap .or,
+        .gradio-container .wrap .hint,
+        .gradio-container .wrap .drop-text,
+        .gradio-container .wrap .upload-text,
+        .gradio-container .upload-container,
+        .gradio-container .upload-container * {
+            color: #334155 !important;
+            opacity: 1 !important;
+        }
+        .gradio-container svg, .gradio-container svg * {
+            color: #64748b !important;
+            stroke: currentColor;
+        }
         .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; width: 100%; align-items: stretch;}
         @media (max-width: 1200px) {.metric-strip {grid-template-columns: repeat(2, minmax(220px, 1fr));}}
         @media (max-width: 820px) {.metric-strip {grid-template-columns: 1fr;}}
