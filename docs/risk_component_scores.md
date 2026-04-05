@@ -144,19 +144,29 @@ These metrics measure how clustered the portfolio is.
 
 **How the current model uses it**
 
-- Risk rises when effective holdings falls below roughly `10`.
+- The score is now relative to the number of **meaningful holdings** in the portfolio.
+- A meaningful holding is currently defined as a position with at least `1%` portfolio weight.
+- The concentration risk contribution is:
+
+```text
+effective_holdings_risk = 1 - (effective_holdings / meaningful_holdings_count)
+```
+
+with clipping between `0` and `1`.
 
 **Low value means**
 
-- The portfolio behaves like it only has a few meaningful positions.
+- The portfolio’s effective holdings count is close to the number of meaningful positions.
+- In other words, diversification is broad relative to the portfolio’s true size.
 
 **High value means**
 
-- The portfolio behaves more like a broadly diversified set of holdings.
+- The portfolio behaves like it has far fewer meaningful holdings than it appears to have.
+- In other words, capital is clustered in a small subset of names.
 
 **How it influences overall risk**
 
-- Lower effective holdings raises `concentration_risk`.
+- Lower effective holdings relative to meaningful holdings raises `concentration_risk`.
 
 ## Market Metrics
 

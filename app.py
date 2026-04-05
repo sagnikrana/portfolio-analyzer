@@ -510,6 +510,7 @@ def compute_observed_risk_score(
     max_position_weight: float,
     top_5_weight: float,
     effective_holdings: float | None,
+    meaningful_holdings_count: int,
     annualized_turnover: float | None,
     median_holding_days: float | None,
     equity_exposure: float | None,
@@ -520,10 +521,16 @@ def compute_observed_risk_score(
     years_of_history: float,
     closed_lot_count: int,
 ) -> dict[str, Any]:
+    # Score effective holdings relative to the number of meaningful positions rather than
+    # against a universal threshold. This keeps the metric explainable and portfolio-size aware.
+    effective_holdings_value = effective_holdings or 0.0
+    meaningful_holdings_value = max(int(meaningful_holdings_count or 0), 1)
+    effective_holdings_ratio = min(effective_holdings_value, meaningful_holdings_value) / meaningful_holdings_value
+
     concentration_components = {
         "single_position_weight": clip01((max_position_weight or 0.0) / 0.22),
         "top_5_weight": clip01((top_5_weight or 0.0) / 0.65),
-        "effective_holdings": clip01((10 - (effective_holdings or 10)) / 8),
+        "effective_holdings": clip01(1 - effective_holdings_ratio),
     }
     market_components = {
         "volatility": clip01((annualized_volatility or 0.0) / 0.32),
@@ -572,6 +579,8 @@ def compute_observed_risk_score(
         "alignment_score": alignment_score,
         "confidence_score": confidence_score,
         "confidence_band": confidence_band(confidence_score),
+        "effective_holdings_value": round(effective_holdings_value, 2) if effective_holdings is not None else None,
+        "meaningful_holdings_count": meaningful_holdings_value,
         "dimension_scores": {k: round(v * 100, 1) for k, v in dimension_scores.items()},
         "component_scores": {
             **{f"concentration::{k}": round(v * 100, 1) for k, v in concentration_components.items()},
@@ -647,6 +656,9 @@ def build_market_enriched_metrics(
     hhi = float((open_positions_df["current_weight"].fillna(0.0) ** 2).sum())
     max_position_weight = float(open_positions_df["current_weight"].max()) if not open_positions_df.empty else 0.0
     effective_holdings = (1.0 / hhi) if hhi > 0 else None
+    # Treat positions at or above 1% weight as meaningful so tiny dust positions do not
+    # artificially inflate the diversification baseline used by the explainable risk score.
+    meaningful_holdings_count = int((open_positions_df["current_weight"].fillna(0.0) >= 0.01).sum())
     top_5_weight = (
         float(open_positions_df.nlargest(5, "current_value")["current_weight"].sum())
         if not open_positions_df.empty
@@ -766,6 +778,7 @@ def build_market_enriched_metrics(
         max_position_weight=max_position_weight,
         top_5_weight=top_5_weight,
         effective_holdings=effective_holdings,
+        meaningful_holdings_count=meaningful_holdings_count,
         annualized_turnover=annualized_turnover,
         median_holding_days=median_holding_days,
         equity_exposure=equity_exposure,
