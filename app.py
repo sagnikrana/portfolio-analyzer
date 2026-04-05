@@ -839,6 +839,18 @@ def compute_observed_risk_score(
         min(1.0, (years_of_history / 3.0) * 0.5 + (closed_lot_count / 25.0) * 0.5),
         3,
     )
+    component_raw_values = {
+        "concentration::single_position_weight": max_position_weight,
+        "concentration::top_5_weight": top_5_weight,
+        "concentration::effective_holdings": effective_holdings_value if effective_holdings is not None else None,
+        "market::relative_volatility_to_benchmark": relative_volatility_to_benchmark,
+        "market::relative_drawdown_to_benchmark": relative_drawdown_to_benchmark,
+        "market::relative_downside_capture_to_benchmark": relative_downside_capture_to_benchmark,
+        "market::beta": beta_to_benchmark,
+        "market::equity_exposure": equity_exposure,
+        "behavior::turnover": annualized_turnover,
+        "behavior::short_holding_period": capital_weighted_holding_days,
+    }
     return {
         "score": observed_risk_score,
         "band": risk_band(observed_risk_score),
@@ -857,6 +869,10 @@ def compute_observed_risk_score(
             **{f"concentration::{k}": round(v * 100, 1) for k, v in concentration_components.items()},
             **{f"market::{k}": round(v * 100, 1) for k, v in market_components.items()},
             **{f"behavior::{k}": round(v * 100, 1) for k, v in behavior_components.items()},
+        },
+        "component_raw_values": {
+            key: round(float(value), 4) if value is not None and not pd.isna(value) else None
+            for key, value in component_raw_values.items()
         },
     }
 
@@ -1546,12 +1562,28 @@ def format_display_tables(market_metrics: dict[str, Any]) -> dict[str, pd.DataFr
         selection_alpha,
         currency_columns=["alpha_pnl"],
     )
+    def format_component_raw_value(metric: str, value: Any) -> str:
+        if value is None or pd.isna(value):
+            return "N/A"
+        if metric in {"concentration::single_position_weight", "concentration::top_5_weight", "market::equity_exposure"}:
+            return percent_display(value)
+        if metric == "behavior::short_holding_period":
+            return f"{number_text(value, 1)} days"
+        if metric == "concentration::effective_holdings":
+            return number_text(value, 2)
+        return number_text(value, 4)
+
+    raw_values = market_metrics["risk_score"].get("component_raw_values", {})
     risk_components = pd.DataFrame(
         [
-            {"metric": key, "score": value}
+            {"metric": key, "score": value, "raw_metric_value": raw_values.get(key)}
             for key, value in market_metrics["risk_score"]["component_scores"].items()
         ]
     ).sort_values("score", ascending=False)
+    risk_components["raw_metric_value"] = risk_components.apply(
+        lambda row: format_component_raw_value(str(row["metric"]), row["raw_metric_value"]),
+        axis=1,
+    )
     risk_components = format_display_dataframe(risk_components, number_columns={"score": 1})
     projection = dataframe_from_records(
         market_metrics["projection_scenarios_no_new_contributions"]["table"],
