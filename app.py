@@ -1562,28 +1562,12 @@ def format_display_tables(market_metrics: dict[str, Any]) -> dict[str, pd.DataFr
         selection_alpha,
         currency_columns=["alpha_pnl"],
     )
-    def format_component_raw_value(metric: str, value: Any) -> str:
-        if value is None or pd.isna(value):
-            return "N/A"
-        if metric in {"concentration::single_position_weight", "concentration::top_5_weight", "market::equity_exposure"}:
-            return percent_display(value)
-        if metric == "behavior::short_holding_period":
-            return f"{number_text(value, 1)} days"
-        if metric == "concentration::effective_holdings":
-            return number_text(value, 2)
-        return number_text(value, 4)
-
-    raw_values = market_metrics["risk_score"].get("component_raw_values", {})
     risk_components = pd.DataFrame(
         [
-            {"metric": key, "score": value, "raw_metric_value": raw_values.get(key)}
+            {"metric": key, "score": value}
             for key, value in market_metrics["risk_score"]["component_scores"].items()
         ]
     ).sort_values("score", ascending=False)
-    risk_components["raw_metric_value"] = risk_components.apply(
-        lambda row: format_component_raw_value(str(row["metric"]), row["raw_metric_value"]),
-        axis=1,
-    )
     risk_components = format_display_dataframe(risk_components, number_columns={"score": 1})
     projection = dataframe_from_records(
         market_metrics["projection_scenarios_no_new_contributions"]["table"],
