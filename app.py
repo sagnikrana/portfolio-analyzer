@@ -1073,6 +1073,53 @@ def money_text(value: float | None) -> str:
     return "N/A" if value is None or pd.isna(value) else f"${value:,.2f}"
 
 
+def number_text(value: float | None, decimals: int = 2) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{float(value):,.{decimals}f}"
+
+
+def percent_display(value: float | None, decimals: int = 2) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{float(value) * 100:.{decimals}f}%"
+
+
+def parse_display_number(value: Any) -> float | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace("$", "").replace(",", "").replace("%", "")
+    if not text or text == "N/A":
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def format_display_dataframe(
+    df: pd.DataFrame,
+    *,
+    currency_columns: list[str] | None = None,
+    percent_columns: list[str] | None = None,
+    number_columns: dict[str, int] | None = None,
+) -> pd.DataFrame:
+    # Keep all analytics numeric internally and only format values at the UI boundary.
+    formatted = df.copy()
+    for column in currency_columns or []:
+        if column in formatted.columns:
+            formatted[column] = formatted[column].apply(money_text)
+    for column in percent_columns or []:
+        if column in formatted.columns:
+            formatted[column] = formatted[column].apply(percent_display)
+    for column, decimals in (number_columns or {}).items():
+        if column in formatted.columns:
+            formatted[column] = formatted[column].apply(lambda value, d=decimals: number_text(value, d))
+    return formatted
+
+
 def metric_card(label: str, value: str, subtitle: str = "") -> str:
     subtitle_md = f"<div style='color:#cbd5e1;font-size:12px'>{subtitle}</div>" if subtitle else ""
     return (
@@ -1112,32 +1159,57 @@ def format_display_tables(market_metrics: dict[str, Any]) -> dict[str, pd.DataFr
             "excess_return_vs_benchmark",
         ],
     )
+    holdings = format_display_dataframe(
+        holdings,
+        currency_columns=["avg_cost", "latest_price", "cost_basis_total", "current_value", "unrealized_pnl"],
+        percent_columns=["unrealized_return_pct", "current_weight", "excess_return_vs_benchmark"],
+        number_columns={"quantity": 4},
+    )
     attribution = dataframe_from_records(
         market_metrics["performance_attribution"],
         ["ticker", "realized_pnl", "unrealized_pnl", "combined_pnl", "pnl_contribution_pct"],
+    )
+    attribution = format_display_dataframe(
+        attribution,
+        currency_columns=["realized_pnl", "unrealized_pnl", "combined_pnl"],
+        percent_columns=["pnl_contribution_pct"],
     )
     sold = dataframe_from_records(
         market_metrics["sold_too_early"],
         ["ticker", "missed_upside", "realized_pnl", "if_held_pnl"],
     )
+    sold = format_display_dataframe(
+        sold,
+        currency_columns=["missed_upside", "realized_pnl", "if_held_pnl"],
+    )
     selection_alpha = dataframe_from_records(market_metrics["selection_alpha"], ["ticker", "alpha_pnl"])
+    selection_alpha = format_display_dataframe(
+        selection_alpha,
+        currency_columns=["alpha_pnl"],
+    )
     risk_components = pd.DataFrame(
         [
             {"metric": key, "score": value}
             for key, value in market_metrics["risk_score"]["component_scores"].items()
         ]
     ).sort_values("score", ascending=False)
+    risk_components = format_display_dataframe(risk_components, number_columns={"score": 1})
     projection = dataframe_from_records(
         market_metrics["projection_scenarios_no_new_contributions"]["table"],
         ["year", "conservative", "base", "optimistic"],
     )
+    projection = format_display_dataframe(
+        projection,
+        currency_columns=["conservative", "base", "optimistic"],
+        number_columns={"year": 0},
+    )
     return {
-        "holdings": holdings.round(4),
-        "attribution": attribution.round(2),
-        "sold": sold.round(2),
-        "selection_alpha": selection_alpha.round(2),
-        "risk_components": risk_components.round(1),
-        "projection": projection.round(2),
+        "holdings": holdings,
+        "attribution": attribution,
+        "sold": sold,
+        "selection_alpha": selection_alpha,
+        "risk_components": risk_components,
+        "projection": projection,
     }
 
 
@@ -1252,10 +1324,11 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
 def plot_projection(projection_df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
     if not projection_df.empty:
-        years = pd.to_numeric(projection_df["year"], errors="coerce").fillna(0).astype(int).tolist()
-        conservative = pd.to_numeric(projection_df["conservative"], errors="coerce").fillna(0.0).tolist()
-        base = pd.to_numeric(projection_df["base"], errors="coerce").fillna(0.0).tolist()
-        optimistic = pd.to_numeric(projection_df["optimistic"], errors="coerce").fillna(0.0).tolist()
+        # The table shown in the UI is currency-formatted, so the plot parser strips display symbols as needed.
+        years = pd.Series(projection_df["year"]).apply(parse_display_number).fillna(0).astype(int).tolist()
+        conservative = pd.Series(projection_df["conservative"]).apply(parse_display_number).fillna(0.0).tolist()
+        base = pd.Series(projection_df["base"]).apply(parse_display_number).fillna(0.0).tolist()
+        optimistic = pd.Series(projection_df["optimistic"]).apply(parse_display_number).fillna(0.0).tolist()
         fig.add_trace(
             go.Scatter(
                 x=years,
