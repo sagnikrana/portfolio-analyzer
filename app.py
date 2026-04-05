@@ -262,6 +262,63 @@ def recency_weighted_rolling_downside_capture(
     }
 
 
+def recency_weighted_rolling_market_sensitivity(
+    returns_frame: pd.DataFrame,
+    *,
+    window_days: int = ROLLING_DRAWDOWN_WINDOW_DAYS,
+    half_life_days: int = ROLLING_DRAWDOWN_HALF_LIFE_DAYS,
+) -> dict[str, float | int | None]:
+    if returns_frame.empty:
+        return {
+            "weighted_market_sensitivity": None,
+            "window_days": window_days,
+            "recency_weight_half_life_days": half_life_days,
+        }
+
+    clean_returns = returns_frame.copy()
+    clean_returns.index = pd.to_datetime(clean_returns.index)
+    clean_returns = clean_returns.sort_index().dropna()
+    if len(clean_returns) < 2 or "portfolio" not in clean_returns.columns or "benchmark" not in clean_returns.columns:
+        return {
+            "weighted_market_sensitivity": None,
+            "window_days": window_days,
+            "recency_weight_half_life_days": half_life_days,
+        }
+
+    latest_date = clean_returns.index[-1]
+    window_delta = pd.Timedelta(days=window_days)
+    rolling_betas: list[float] = []
+    recency_weights: list[float] = []
+
+    for end_date in clean_returns.index:
+        window_slice = clean_returns.loc[end_date - window_delta : end_date]
+        if len(window_slice) < 5:
+            continue
+        benchmark_var = float(window_slice["benchmark"].var())
+        if benchmark_var <= 0:
+            continue
+        beta = float(window_slice["portfolio"].cov(window_slice["benchmark"]) / benchmark_var)
+        age_days = max((latest_date - end_date).days, 0)
+        recency_weight = math.exp(-math.log(2) * age_days / max(half_life_days, 1))
+        rolling_betas.append(beta)
+        recency_weights.append(recency_weight)
+
+    weighted_market_sensitivity = None
+    if rolling_betas and sum(recency_weights) > 0:
+        weighted_market_sensitivity = float(
+            sum(beta * weight for beta, weight in zip(rolling_betas, recency_weights))
+            / sum(recency_weights)
+        )
+
+    return {
+        "weighted_market_sensitivity": round(weighted_market_sensitivity, 4)
+        if weighted_market_sensitivity is not None
+        else None,
+        "window_days": window_days,
+        "recency_weight_half_life_days": half_life_days,
+    }
+
+
 def build_lot_analytics(df: pd.DataFrame) -> dict[str, Any]:
     lots: dict[str, deque[PositionLot]] = defaultdict(deque)
     realized_pnl: dict[str, float] = defaultdict(float)
@@ -777,7 +834,7 @@ def compute_observed_risk_score(
     relative_drawdown_to_benchmark: float | None,
     relative_downside_capture_to_benchmark: float | None,
     relative_volatility_to_benchmark: float | None,
-    beta_to_benchmark: float | None,
+    relative_market_sensitivity_to_benchmark: float | None,
     years_of_history: float,
     closed_lot_count: int,
 ) -> dict[str, Any]:
@@ -801,7 +858,9 @@ def compute_observed_risk_score(
             relative_downside_capture_to_benchmark,
             max_ratio=RELATIVE_DOWNSIDE_CAPTURE_MAX_RATIO,
         ),
-        "beta": clip01((beta_to_benchmark or 0.0) / 1.25),
+        "relative_market_sensitivity_to_benchmark": clip01(
+            (relative_market_sensitivity_to_benchmark or 0.0) / 1.25
+        ),
         "equity_exposure": clip01((equity_exposure or 0.0) / 1.0),
     }
     behavior_components = {
@@ -846,7 +905,7 @@ def compute_observed_risk_score(
         "market::relative_volatility_to_benchmark": relative_volatility_to_benchmark,
         "market::relative_drawdown_to_benchmark": relative_drawdown_to_benchmark,
         "market::relative_downside_capture_to_benchmark": relative_downside_capture_to_benchmark,
-        "market::beta": beta_to_benchmark,
+        "market::relative_market_sensitivity_to_benchmark": relative_market_sensitivity_to_benchmark,
         "market::equity_exposure": equity_exposure,
         "behavior::turnover": annualized_turnover,
         "behavior::short_holding_period": capital_weighted_holding_days,
@@ -1059,14 +1118,11 @@ def build_market_enriched_metrics(
     )
     downside_capture_profile = recency_weighted_rolling_downside_capture(aligned_returns)
     relative_downside_capture_to_benchmark = downside_capture_profile["weighted_downside_capture"]
-    beta_to_benchmark = None
+    market_sensitivity_profile = recency_weighted_rolling_market_sensitivity(aligned_returns)
+    relative_market_sensitivity_to_benchmark = market_sensitivity_profile["weighted_market_sensitivity"]
     tracking_error = None
     info_ratio_proxy = None
     if len(aligned_returns) > 5 and aligned_returns["benchmark"].var() > 0:
-        beta_to_benchmark = float(
-            aligned_returns["portfolio"].cov(aligned_returns["benchmark"])
-            / aligned_returns["benchmark"].var()
-        )
         active_return_series = aligned_returns["portfolio"] - aligned_returns["benchmark"]
         tracking_error = (
             float(active_return_series.std() * math.sqrt(252)) if len(active_return_series) > 2 else None
@@ -1126,7 +1182,7 @@ def build_market_enriched_metrics(
         relative_drawdown_to_benchmark=relative_drawdown_to_benchmark,
         relative_downside_capture_to_benchmark=relative_downside_capture_to_benchmark,
         relative_volatility_to_benchmark=relative_volatility_to_benchmark,
-        beta_to_benchmark=beta_to_benchmark,
+        relative_market_sensitivity_to_benchmark=relative_market_sensitivity_to_benchmark,
         years_of_history=years,
         closed_lot_count=len(lot_data["closed_lots"]),
     )
@@ -1258,7 +1314,13 @@ def build_market_enriched_metrics(
         else None,
         "portfolio_volatility_floor_value": round(portfolio_volatility_floor, 2),
         "benchmark_volatility_floor_value": round(benchmark_volatility_floor, 2),
-        "beta_to_benchmark": round(beta_to_benchmark, 4) if beta_to_benchmark is not None else None,
+        "relative_market_sensitivity_to_benchmark": round(relative_market_sensitivity_to_benchmark, 4)
+        if relative_market_sensitivity_to_benchmark is not None
+        else None,
+        "relative_market_sensitivity_window_days": market_sensitivity_profile["window_days"],
+        "relative_market_sensitivity_recency_weight_half_life_days": market_sensitivity_profile[
+            "recency_weight_half_life_days"
+        ],
         "tracking_error": round(tracking_error, 4) if tracking_error is not None else None,
         "information_ratio_proxy": round(info_ratio_proxy, 4) if info_ratio_proxy is not None else None,
         "concentration_hhi": round(hhi, 4),
@@ -1803,7 +1865,7 @@ def build_benchmark_markdown(market_metrics: dict[str, Any]) -> str:
 ### Risk-Relative Metrics
 - Annualized volatility: `{pct_text(headline["annualized_volatility"])}`
 - S&P 500 volatility: `{pct_text(headline["benchmark_annualized_volatility"])}`
-- Beta to S&P 500: `{headline["beta_to_benchmark"]}`
+- Relative market sensitivity to S&P 500: `{headline["relative_market_sensitivity_to_benchmark"]}`
 - Tracking error: `{pct_text(headline["tracking_error"])}`
 - Information ratio proxy: `{headline["information_ratio_proxy"]}`
 """

@@ -326,29 +326,34 @@ relative_downside_capture = weighted portfolio loss on benchmark down days
 
 - It raises `market_risk`.
 
-### `market::beta`
+### `market::relative_market_sensitivity_to_benchmark`
 
 **What it measures**
 
-- Sensitivity of portfolio returns to benchmark returns.
+- The portfolio's rolling market sensitivity to the S&P 500, using recency-weighted 6-month windows.
 
 **Plain-English question**
 
-- How strongly does the portfolio move with the market?
+- How strongly has the portfolio been moving with the S&P 500 in recent market regimes?
 
 **Why it matters**
 
-- Beta captures whether the portfolio amplifies or dampens broad market moves.
+- This captures whether the portfolio has recently been amplifying or dampening broad market moves,
+  while giving more weight to current behavior than old history.
 
 **How the current model uses it**
 
-- It is normalized against roughly `1.25`.
+- The app computes rolling market sensitivity across overlapping 6-month windows using the
+  flow-adjusted portfolio and benchmark return series.
+- Recent windows get more weight through exponential recency weighting.
+- This produces a single weighted market-sensitivity value that is normalized against
+  roughly `1.25`.
 
 **Interpretation**
 
-- `beta < 1`: less sensitive than the market
-- `beta ~ 1`: behaves roughly like the market
-- `beta > 1`: more sensitive than the market
+- `< 1`: less sensitive than the market
+- `~ 1`: behaves roughly like the market
+- `> 1`: more sensitive than the market
 
 **Low value means**
 
@@ -488,7 +493,7 @@ Average of:
 - `market::relative_volatility_to_benchmark`
 - `market::relative_drawdown_to_benchmark`
 - `market::relative_downside_capture_to_benchmark`
-- `market::beta`
+- `market::relative_market_sensitivity_to_benchmark`
 - `market::equity_exposure`
 
 ### `behavioral_risk`
