@@ -172,7 +172,7 @@ with clipping between `0` and `1`.
 
 These metrics measure how risky the portfolio’s market behavior is.
 
-### `market::volatility`
+### `market::portfolio_volatility`
 
 **What it measures**
 
@@ -427,7 +427,7 @@ Average of:
 
 Average of:
 
-- `market::volatility`
+- `market::portfolio_volatility`
 - `market::drawdown`
 - `market::downside_capture`
 - `market::beta`

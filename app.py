@@ -587,7 +587,7 @@ def compute_observed_risk_score(
         "effective_holdings": clip01(1 - effective_holdings_ratio),
     }
     market_components = {
-        "volatility": clip01((annualized_volatility or 0.0) / 0.32),
+        "portfolio_volatility": clip01((annualized_volatility or 0.0) / 0.32),
         "drawdown": clip01(abs(max_drawdown or 0.0) / 0.40),
         "downside_capture": clip01((downside_capture_ratio or 0.0) / 1.15),
         "beta": clip01((beta_to_benchmark or 0.0) / 1.25),
