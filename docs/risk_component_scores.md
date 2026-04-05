@@ -172,7 +172,7 @@ with clipping between `0` and `1`.
 
 These metrics measure how risky the portfolio’s market behavior is.
 
-### `market::portfolio_volatility`
+### `market::relative_volatility_to_benchmark`
 
 **What it measures**
 
@@ -218,7 +218,7 @@ volatility_ratio = portfolio_volatility / benchmark_volatility
 
 - It raises `market_risk`.
 
-### `market::drawdown`
+### `market::relative_drawdown_to_benchmark`
 
 **What it measures**
 
@@ -465,8 +465,8 @@ Average of:
 
 Average of:
 
-- `market::portfolio_volatility`
-- `market::drawdown`
+- `market::relative_volatility_to_benchmark`
+- `market::relative_drawdown_to_benchmark`
 - `market::downside_capture`
 - `market::beta`
 - `market::equity_exposure`

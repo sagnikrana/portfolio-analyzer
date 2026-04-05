@@ -713,9 +713,9 @@ def compute_observed_risk_score(
     annualized_turnover: float | None,
     capital_weighted_holding_days: float | None,
     equity_exposure: float | None,
-    drawdown_ratio_to_benchmark: float | None,
+    relative_drawdown_to_benchmark: float | None,
     downside_capture_ratio: float | None,
-    volatility_ratio_to_benchmark: float | None,
+    relative_volatility_to_benchmark: float | None,
     beta_to_benchmark: float | None,
     years_of_history: float,
     closed_lot_count: int,
@@ -734,8 +734,8 @@ def compute_observed_risk_score(
     market_components = {
         # Volatility and drawdown are benchmark-relative so the portfolio is only
         # penalized for being riskier than the S&P 500 over the same horizon.
-        "portfolio_volatility": score_relative_to_benchmark(volatility_ratio_to_benchmark),
-        "drawdown": score_relative_to_benchmark(drawdown_ratio_to_benchmark),
+        "relative_volatility_to_benchmark": score_relative_to_benchmark(relative_volatility_to_benchmark),
+        "relative_drawdown_to_benchmark": score_relative_to_benchmark(relative_drawdown_to_benchmark),
         "downside_capture": clip01((downside_capture_ratio or 0.0) / 1.15),
         "beta": clip01((beta_to_benchmark or 0.0) / 1.25),
         "equity_exposure": clip01((equity_exposure or 0.0) / 1.0),
@@ -963,14 +963,14 @@ def build_market_enriched_metrics(
         if len(volatility_aligned_returns) > 2
         else None
     )
-    volatility_ratio_to_benchmark = (
+    relative_volatility_to_benchmark = (
         float(annualized_volatility / benchmark_annualized_volatility)
         if annualized_volatility is not None
         and benchmark_annualized_volatility is not None
         and benchmark_annualized_volatility > 0
         else None
     )
-    drawdown_ratio_to_benchmark = (
+    relative_drawdown_to_benchmark = (
         float(drawdown_profile["blended_drawdown"] / benchmark_drawdown_profile["blended_drawdown"])
         if drawdown_profile["blended_drawdown"] is not None
         and benchmark_drawdown_profile["blended_drawdown"] is not None
@@ -1047,9 +1047,9 @@ def build_market_enriched_metrics(
         annualized_turnover=annualized_turnover,
         capital_weighted_holding_days=capital_weighted_holding_days,
         equity_exposure=equity_exposure,
-        drawdown_ratio_to_benchmark=drawdown_ratio_to_benchmark,
+        relative_drawdown_to_benchmark=relative_drawdown_to_benchmark,
         downside_capture_ratio=downside_capture_ratio,
-        volatility_ratio_to_benchmark=volatility_ratio_to_benchmark,
+        relative_volatility_to_benchmark=relative_volatility_to_benchmark,
         beta_to_benchmark=beta_to_benchmark,
         years_of_history=years,
         closed_lot_count=len(lot_data["closed_lots"]),
@@ -1177,8 +1177,8 @@ def build_market_enriched_metrics(
         "benchmark_annualized_volatility": round(benchmark_annualized_volatility, 4)
         if benchmark_annualized_volatility is not None
         else None,
-        "portfolio_volatility_ratio_to_benchmark": round(volatility_ratio_to_benchmark, 4)
-        if volatility_ratio_to_benchmark is not None
+        "relative_volatility_to_benchmark": round(relative_volatility_to_benchmark, 4)
+        if relative_volatility_to_benchmark is not None
         else None,
         "portfolio_volatility_floor_value": round(portfolio_volatility_floor, 2),
         "benchmark_volatility_floor_value": round(benchmark_volatility_floor, 2),
@@ -1195,12 +1195,12 @@ def build_market_enriched_metrics(
         "drawdown_window_days": drawdown_profile["window_days"],
         "drawdown_recency_weight_half_life_days": drawdown_profile["recency_weight_half_life_days"],
         "drawdown_memory_weight": round(float(drawdown_profile["memory_weight"]), 4),
-        "weighted_rolling_portfolio_drawdown": drawdown_profile["weighted_rolling_drawdown"],
-        "blended_portfolio_drawdown_for_risk": drawdown_profile["blended_drawdown"],
-        "weighted_rolling_benchmark_drawdown": benchmark_drawdown_profile["weighted_rolling_drawdown"],
-        "blended_benchmark_drawdown_for_risk": benchmark_drawdown_profile["blended_drawdown"],
-        "portfolio_drawdown_ratio_to_benchmark": round(drawdown_ratio_to_benchmark, 4)
-        if drawdown_ratio_to_benchmark is not None
+        "weighted_rolling_relative_portfolio_drawdown_reference": drawdown_profile["weighted_rolling_drawdown"],
+        "blended_relative_portfolio_drawdown_reference": drawdown_profile["blended_drawdown"],
+        "weighted_rolling_relative_benchmark_drawdown_reference": benchmark_drawdown_profile["weighted_rolling_drawdown"],
+        "blended_relative_benchmark_drawdown_reference": benchmark_drawdown_profile["blended_drawdown"],
+        "relative_drawdown_to_benchmark": round(relative_drawdown_to_benchmark, 4)
+        if relative_drawdown_to_benchmark is not None
         else None,
         "max_portfolio_drawdown": round(float(portfolio_drawdown.min()), 4) if not portfolio_drawdown.empty else None,
         "max_benchmark_drawdown": round(float(benchmark_drawdown.min()), 4) if not benchmark_drawdown.empty else None,
