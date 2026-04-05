@@ -176,27 +176,43 @@ These metrics measure how risky the portfolio’s market behavior is.
 
 **What it measures**
 
-- Annualized volatility of the invested portfolio return series.
+- The portfolio's annualized volatility relative to the S&P 500's annualized volatility
+  over the same investing horizon.
 
 **Plain-English question**
 
-- How much does the portfolio swing around over time?
+- Does this portfolio swing around more than the S&P 500, or less?
 
 **Why it matters**
 
-- Higher volatility usually means a rougher ride and more short-term uncertainty.
+- This keeps the score fair across market regimes. If the whole market was volatile, the
+  portfolio is only penalized for being more volatile than the market itself.
 
 **How the current model uses it**
 
-- It is normalized against roughly `32%` annualized volatility.
+- The app first converts both the portfolio and the trade-matched S&P 500 into
+  flow-adjusted performance indices so buys and sells do not get mistaken for volatility.
+- The app first computes:
+
+```text
+volatility_ratio = portfolio_volatility / benchmark_volatility
+```
+
+- To avoid distortion from tiny early portfolio values and noisy day-level artifacts,
+  volatility is estimated from weekly returns on periods when the portfolio and benchmark
+  sleeves are above a meaningful capital floor.
+- A ratio of `1.0` means the portfolio behaved about as volatile as the S&P 500.
+- Ratios at or below `1.0` contribute no risk on this component.
+- Risk then ramps up as the portfolio becomes more volatile than the benchmark and reaches
+  the cap at a ratio of `2.0x`.
 
 **Low value means**
 
-- Smoother portfolio behavior.
+- The portfolio was no more volatile than the S&P 500, or only modestly more volatile.
 
 **High value means**
 
-- Larger swings and higher uncertainty.
+- The portfolio was materially more volatile than the S&P 500 over the same horizon.
 
 **How it influences overall risk**
 
@@ -206,26 +222,37 @@ These metrics measure how risky the portfolio’s market behavior is.
 
 **What it measures**
 
-- A recency-weighted drawdown severity score built from rolling 6-month drawdown windows,
-  blended with a smaller full-history memory term.
+- The portfolio's recency-weighted drawdown severity relative to the S&P 500's drawdown
+  severity over the same horizon.
 
 **Plain-English question**
 
-- How painful has the portfolio's downside behavior been recently, without forgetting the
-  worst loss periods from earlier history?
+- Has this portfolio suffered worse downside than the S&P 500, or was it roughly in line
+  with the market?
 
 **Why it matters**
 
-- Drawdown reflects the actual depth of losses the investor would have experienced, and this
-  version makes recent drawdowns matter more than distant ones.
+- This makes the score fairer in turbulent markets. A big drawdown only counts as portfolio
+  risk if it was worse than what a simple S&P 500 investor experienced over comparable periods.
 
 **How the current model uses it**
 
-- The app computes drawdown across overlapping rolling 6-month windows, then gives more weight
-  to recent windows using exponential recency weights.
-- A smaller long-history memory term is then blended back in so an older severe drawdown still
-  matters a bit.
-- The blended drawdown number is normalized against roughly `40%`.
+- The app first converts both the portfolio and the trade-matched S&P 500 into
+  flow-adjusted performance indices so capital flows do not get mistaken for drawdowns.
+- The app computes recency-weighted drawdowns for both the portfolio and the S&P 500 using
+  overlapping rolling 6-month windows.
+- A smaller long-history memory term is blended back in for both series so older severe
+  drawdowns still matter a bit.
+- It then computes:
+
+```text
+drawdown_ratio = blended_portfolio_drawdown / blended_benchmark_drawdown
+```
+
+- A ratio of `1.0` means the portfolio's downside was roughly in line with the S&P 500.
+- Ratios at or below `1.0` contribute no risk on this component.
+- Risk ramps up only when the portfolio's drawdown is worse than the benchmark and reaches
+  the cap at a ratio of `2.0x`.
 - Current settings in the app:
   - Rolling window: `183 days`
   - Recency half-life: `365 days`
@@ -233,12 +260,11 @@ These metrics measure how risky the portfolio’s market behavior is.
 
 **Low value means**
 
-- The portfolio has had relatively mild recent drawdowns and limited historical downside stress.
+- The portfolio's downside was in line with, or better than, the S&P 500.
 
 **High value means**
 
-- The portfolio has suffered deeper or more persistent recent drawdowns, and/or it still carries
-  meaningful memory of a severe historical decline.
+- The portfolio has suffered materially worse drawdowns than the S&P 500 over the same horizon.
 
 **How it influences overall risk**
 

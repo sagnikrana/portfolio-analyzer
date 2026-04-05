@@ -26,6 +26,7 @@ SHORT_HOLD_TARGET_DAYS = round(365.25 * 1.5)
 ROLLING_DRAWDOWN_WINDOW_DAYS = round(365.25 / 2)
 ROLLING_DRAWDOWN_MEMORY_WEIGHT = 0.25
 ROLLING_DRAWDOWN_HALF_LIFE_DAYS = round(365.25)
+BENCHMARK_RELATIVE_RISK_MAX_RATIO = 2.0
 
 
 @dataclass
@@ -113,6 +114,19 @@ def max_drawdown_for_series(series: pd.Series) -> float | None:
         return None
     drawdown = (clean_series / clean_series.cummax()) - 1
     return abs(float(drawdown.min()))
+
+
+def score_relative_to_benchmark(
+    ratio: float | None,
+    *,
+    max_ratio: float = BENCHMARK_RELATIVE_RISK_MAX_RATIO,
+) -> float:
+    if ratio is None or max_ratio <= 1:
+        return 0.0
+    # A ratio at or below 1 means the portfolio was no riskier than the S&P 500 on
+    # that metric. Risk only ramps up once the portfolio becomes more extreme than
+    # the benchmark, and reaches the cap at the chosen max ratio.
+    return clip01((ratio - 1.0) / (max_ratio - 1.0))
 
 
 def recency_weighted_rolling_drawdown(
@@ -560,6 +574,54 @@ def build_trade_matched_benchmark_series(df: pd.DataFrame, benchmark_close: pd.S
     return benchmark_value_series, invested_net_cash
 
 
+def build_trade_flow_series(df: pd.DataFrame, market_index: pd.Index) -> pd.Series:
+    trade_events = [
+        # Buying moves cash into the invested sleeve; selling moves it back out.
+        {"date": next_market_date(market_index, row["Activity Date"]), "flow": -float(row["Amount_num"])}
+        for _, row in df[df["Trans Code"].isin(["Buy", "Sell"])].iterrows()
+    ]
+    if not trade_events:
+        return pd.Series(0.0, index=market_index)
+    trade_df = pd.DataFrame(trade_events)
+    return trade_df.groupby("date")["flow"].sum().reindex(market_index, fill_value=0.0).astype(float)
+
+
+def build_flow_adjusted_performance_index(
+    value_series: pd.Series,
+    flow_series: pd.Series,
+    *,
+    min_start_value: float = 1000.0,
+) -> pd.Series:
+    clean_values = pd.to_numeric(value_series, errors="coerce").astype(float)
+    clean_flows = pd.to_numeric(flow_series, errors="coerce").reindex(clean_values.index, fill_value=0.0).astype(float)
+    if clean_values.empty:
+        return pd.Series(dtype=float)
+
+    returns = pd.Series(0.0, index=clean_values.index, dtype=float)
+    started = False
+    for idx in range(1, len(clean_values)):
+        prev_value = float(clean_values.iloc[idx - 1])
+        current_value = float(clean_values.iloc[idx])
+        trade_flow = float(clean_flows.iloc[idx])
+        if not started:
+            if prev_value >= min_start_value:
+                started = True
+            else:
+                continue
+        if prev_value <= 0:
+            continue
+        returns.iloc[idx] = (current_value - prev_value - trade_flow) / prev_value
+
+    wealth_index = (1 + returns).cumprod()
+    wealth_index.iloc[0] = 1.0
+    start_candidates = clean_values[clean_values >= min_start_value]
+    if not start_candidates.empty:
+        first_start = start_candidates.index[0]
+        wealth_index = wealth_index.loc[first_start:]
+        wealth_index = wealth_index / wealth_index.iloc[0]
+    return wealth_index.astype(float)
+
+
 def annualized_return(final_value: float, initial_value: float, years: float) -> float | None:
     if years <= 0 or initial_value <= 0 or final_value <= 0:
         return None
@@ -651,9 +713,9 @@ def compute_observed_risk_score(
     annualized_turnover: float | None,
     capital_weighted_holding_days: float | None,
     equity_exposure: float | None,
-    blended_drawdown: float | None,
+    drawdown_ratio_to_benchmark: float | None,
     downside_capture_ratio: float | None,
-    annualized_volatility: float | None,
+    volatility_ratio_to_benchmark: float | None,
     beta_to_benchmark: float | None,
     years_of_history: float,
     closed_lot_count: int,
@@ -670,10 +732,10 @@ def compute_observed_risk_score(
         "effective_holdings": clip01(1 - effective_holdings_ratio),
     }
     market_components = {
-        "portfolio_volatility": clip01((annualized_volatility or 0.0) / 0.32),
-        # Drawdown risk now emphasizes recent 6-month stress windows while still keeping
-        # a smaller memory of the worst full-history decline in the final blend.
-        "drawdown": clip01(abs(blended_drawdown or 0.0) / 0.40),
+        # Volatility and drawdown are benchmark-relative so the portfolio is only
+        # penalized for being riskier than the S&P 500 over the same horizon.
+        "portfolio_volatility": score_relative_to_benchmark(volatility_ratio_to_benchmark),
+        "drawdown": score_relative_to_benchmark(drawdown_ratio_to_benchmark),
         "downside_capture": clip01((downside_capture_ratio or 0.0) / 1.15),
         "beta": clip01((beta_to_benchmark or 0.0) / 1.25),
         "equity_exposure": clip01((equity_exposure or 0.0) / 1.0),
@@ -843,24 +905,77 @@ def build_market_enriched_metrics(
         portfolio_equity_series = portfolio_equity_series.loc[first_active:]
         account_value_series = account_value_series.loc[first_active:]
         benchmark_value_series = benchmark_value_series.loc[first_active:]
+    trade_flow_series = build_trade_flow_series(df, portfolio_equity_series.index)
 
-    portfolio_returns = (
-        portfolio_equity_series.pct_change().replace([math.inf, -math.inf], float("nan")).fillna(0.0).astype(float)
+    # Build flow-adjusted wealth indices so market-risk metrics reflect market movement rather
+    # than capital deployment between cash and invested positions.
+    portfolio_volatility_floor = max(1000.0, current_portfolio_value * 0.02) if current_portfolio_value > 0 else 1000.0
+    benchmark_volatility_floor = (
+        max(1000.0, benchmark_current_value * 0.02) if benchmark_current_value > 0 else 1000.0
     )
-    benchmark_returns = (
-        benchmark_value_series.pct_change().replace([math.inf, -math.inf], float("nan")).fillna(0.0).astype(float)
+    portfolio_performance_index = build_flow_adjusted_performance_index(
+        portfolio_equity_series,
+        trade_flow_series,
+        min_start_value=portfolio_volatility_floor,
     )
-    aligned_returns = pd.concat(
-        [portfolio_returns.rename("portfolio"), benchmark_returns.rename("benchmark")], axis=1
+    benchmark_performance_index = build_flow_adjusted_performance_index(
+        benchmark_value_series,
+        trade_flow_series,
+        min_start_value=benchmark_volatility_floor,
+    )
+    aligned_performance = pd.concat(
+        [
+            portfolio_performance_index.rename("portfolio"),
+            benchmark_performance_index.rename("benchmark"),
+        ],
+        axis=1,
     ).dropna()
-    portfolio_drawdown = (portfolio_equity_series / portfolio_equity_series.cummax()) - 1
-    benchmark_drawdown = (benchmark_value_series / benchmark_value_series.cummax()) - 1
+    performance_returns = (
+        aligned_performance.pct_change(fill_method=None).replace([math.inf, -math.inf], float("nan")).dropna()
+    )
+    portfolio_returns = performance_returns["portfolio"] if not performance_returns.empty else pd.Series(dtype=float)
+    benchmark_returns = performance_returns["benchmark"] if not performance_returns.empty else pd.Series(dtype=float)
+    # Use weekly flow-adjusted returns for volatility so the score reflects broad portfolio
+    # behavior rather than noisy day-level artifacts from sparse prices or tiny sleeves.
+    portfolio_volatility_series = aligned_performance["portfolio"].resample("W-FRI").last()
+    benchmark_volatility_series = aligned_performance["benchmark"].resample("W-FRI").last()
+    volatility_aligned_returns = pd.concat(
+        [
+            portfolio_volatility_series.pct_change(fill_method=None).rename("portfolio"),
+            benchmark_volatility_series.pct_change(fill_method=None).rename("benchmark"),
+        ],
+        axis=1,
+    ).replace([math.inf, -math.inf], float("nan")).dropna()
+    aligned_returns = performance_returns
+    portfolio_drawdown = (aligned_performance["portfolio"] / aligned_performance["portfolio"].cummax()) - 1
+    benchmark_drawdown = (aligned_performance["benchmark"] / aligned_performance["benchmark"].cummax()) - 1
     # Blend overlapping 6-month drawdowns with recency weights so old crises matter less
     # than the portfolio's more recent downside behavior.
-    drawdown_profile = recency_weighted_rolling_drawdown(portfolio_equity_series)
-    annualized_volatility = float(portfolio_returns.std() * math.sqrt(252)) if len(portfolio_returns) > 2 else None
+    drawdown_profile = recency_weighted_rolling_drawdown(aligned_performance["portfolio"])
+    benchmark_drawdown_profile = recency_weighted_rolling_drawdown(aligned_performance["benchmark"])
+    annualized_volatility = (
+        float(volatility_aligned_returns["portfolio"].std() * math.sqrt(52))
+        if len(volatility_aligned_returns) > 2
+        else None
+    )
     benchmark_annualized_volatility = (
-        float(benchmark_returns.std() * math.sqrt(252)) if len(benchmark_returns) > 2 else None
+        float(volatility_aligned_returns["benchmark"].std() * math.sqrt(52))
+        if len(volatility_aligned_returns) > 2
+        else None
+    )
+    volatility_ratio_to_benchmark = (
+        float(annualized_volatility / benchmark_annualized_volatility)
+        if annualized_volatility is not None
+        and benchmark_annualized_volatility is not None
+        and benchmark_annualized_volatility > 0
+        else None
+    )
+    drawdown_ratio_to_benchmark = (
+        float(drawdown_profile["blended_drawdown"] / benchmark_drawdown_profile["blended_drawdown"])
+        if drawdown_profile["blended_drawdown"] is not None
+        and benchmark_drawdown_profile["blended_drawdown"] is not None
+        and benchmark_drawdown_profile["blended_drawdown"] > 0
+        else None
     )
     beta_to_benchmark = None
     tracking_error = None
@@ -932,9 +1047,9 @@ def build_market_enriched_metrics(
         annualized_turnover=annualized_turnover,
         capital_weighted_holding_days=capital_weighted_holding_days,
         equity_exposure=equity_exposure,
-        blended_drawdown=drawdown_profile["blended_drawdown"],
+        drawdown_ratio_to_benchmark=drawdown_ratio_to_benchmark,
         downside_capture_ratio=downside_capture_ratio,
-        annualized_volatility=annualized_volatility,
+        volatility_ratio_to_benchmark=volatility_ratio_to_benchmark,
         beta_to_benchmark=beta_to_benchmark,
         years_of_history=years,
         closed_lot_count=len(lot_data["closed_lots"]),
@@ -1062,6 +1177,11 @@ def build_market_enriched_metrics(
         "benchmark_annualized_volatility": round(benchmark_annualized_volatility, 4)
         if benchmark_annualized_volatility is not None
         else None,
+        "portfolio_volatility_ratio_to_benchmark": round(volatility_ratio_to_benchmark, 4)
+        if volatility_ratio_to_benchmark is not None
+        else None,
+        "portfolio_volatility_floor_value": round(portfolio_volatility_floor, 2),
+        "benchmark_volatility_floor_value": round(benchmark_volatility_floor, 2),
         "beta_to_benchmark": round(beta_to_benchmark, 4) if beta_to_benchmark is not None else None,
         "tracking_error": round(tracking_error, 4) if tracking_error is not None else None,
         "information_ratio_proxy": round(info_ratio_proxy, 4) if info_ratio_proxy is not None else None,
@@ -1077,6 +1197,11 @@ def build_market_enriched_metrics(
         "drawdown_memory_weight": round(float(drawdown_profile["memory_weight"]), 4),
         "weighted_rolling_portfolio_drawdown": drawdown_profile["weighted_rolling_drawdown"],
         "blended_portfolio_drawdown_for_risk": drawdown_profile["blended_drawdown"],
+        "weighted_rolling_benchmark_drawdown": benchmark_drawdown_profile["weighted_rolling_drawdown"],
+        "blended_benchmark_drawdown_for_risk": benchmark_drawdown_profile["blended_drawdown"],
+        "portfolio_drawdown_ratio_to_benchmark": round(drawdown_ratio_to_benchmark, 4)
+        if drawdown_ratio_to_benchmark is not None
+        else None,
         "max_portfolio_drawdown": round(float(portfolio_drawdown.min()), 4) if not portfolio_drawdown.empty else None,
         "max_benchmark_drawdown": round(float(benchmark_drawdown.min()), 4) if not benchmark_drawdown.empty else None,
         "portfolio_drawdown_on_worst_benchmark_day": round(portfolio_drawdown_on_worst_benchmark_day, 4)
