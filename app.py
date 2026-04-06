@@ -1580,6 +1580,139 @@ def dataframe_from_records(records: list[dict[str, Any]], columns: list[str] | N
     return df
 
 
+def score_readout(score: float | None) -> str:
+    if score is None or pd.isna(score):
+        return "Not available"
+    value = float(score)
+    if value < 20:
+        return "Low concern"
+    if value < 40:
+        return "Mild concern"
+    if value < 60:
+        return "Moderate concern"
+    if value < 80:
+        return "High concern"
+    return "Very high concern"
+
+
+def metric_explanations() -> dict[str, dict[str, str]]:
+    return {
+        "concentration::single_position_weight": {
+            "group": "Concentration",
+            "label": "Largest position size",
+            "meaning": "Checks whether one holding is large enough to dominate the portfolio.",
+            "bigger_picture": "A high score means one stock can strongly drive the whole account.",
+        },
+        "concentration::top_5_weight": {
+            "group": "Concentration",
+            "label": "Top 5 holdings dominance",
+            "meaning": "Checks whether just a few names are carrying most of the portfolio.",
+            "bigger_picture": "A high score means your results depend heavily on a small cluster of stocks.",
+        },
+        "concentration::effective_holdings": {
+            "group": "Concentration",
+            "label": "True diversification",
+            "meaning": "Looks past ticker count and asks how many holdings really matter after concentration is considered.",
+            "bigger_picture": "A high score means the portfolio is less diversified than it appears at first glance.",
+        },
+        "behavior::turnover": {
+            "group": "Behavior",
+            "label": "Trading churn",
+            "meaning": "Measures how much of the portfolio you rotate through selling over time.",
+            "bigger_picture": "A high score means your style is more active and decision-heavy than buy-and-hold.",
+        },
+        "behavior::short_holding_period": {
+            "group": "Behavior",
+            "label": "How long your dollars stay invested",
+            "meaning": "Measures whether larger investments are being held long enough to look like long-term investing.",
+            "bigger_picture": "A high score means bigger dollars are being cycled out faster than a long-term profile would suggest.",
+        },
+        "market::relative_volatility_to_benchmark": {
+            "group": "Market",
+            "label": "Volatility vs S&P 500",
+            "meaning": "Checks whether your portfolio swings around more than the S&P 500 over comparable periods.",
+            "bigger_picture": "A high score means your ride has been rougher than the market's ride.",
+        },
+        "market::relative_drawdown_to_benchmark": {
+            "group": "Market",
+            "label": "Downside depth vs S&P 500",
+            "meaning": "Checks whether your portfolio's bad stretches have been deeper than the S&P 500's.",
+            "bigger_picture": "A high score means your losses in rough periods have been worse than a simple market portfolio.",
+        },
+        "market::relative_downside_capture_to_benchmark": {
+            "group": "Market",
+            "label": "Bad-day behavior vs S&P 500",
+            "meaning": "Checks how your portfolio tends to behave on market down days compared with the S&P 500.",
+            "bigger_picture": "A high score means your portfolio tends to lose more than the market when the market is already under stress.",
+        },
+        "market::relative_market_sensitivity_to_benchmark": {
+            "group": "Market",
+            "label": "Market sensitivity vs S&P 500",
+            "meaning": "Checks how strongly your portfolio tends to move when the S&P 500 moves.",
+            "bigger_picture": "A high score means your portfolio has been amplifying broad market moves rather than moving in line with them.",
+        },
+        "market::equity_exposure": {
+            "group": "Market",
+            "label": "How fully invested you are",
+            "meaning": "Checks how much of your account is currently in the market rather than sitting in cash.",
+            "bigger_picture": "A high score means more of your account is directly exposed to market gains and losses right now.",
+        },
+    }
+
+
+def build_risk_explainer_markdown(risk: dict[str, Any]) -> str:
+    explanations = metric_explanations()
+    component_scores = risk["component_scores"]
+    dimension_scores = risk["dimension_scores"]
+
+    def render_metric(metric_key: str) -> str:
+        info = explanations[metric_key]
+        score = component_scores.get(metric_key)
+        return (
+            f"- **{info['label']}**: `{score}/100` ({score_readout(score)})\n"
+            f"  {info['meaning']} {info['bigger_picture']}"
+        )
+
+    concentration_metrics = [
+        "concentration::single_position_weight",
+        "concentration::top_5_weight",
+        "concentration::effective_holdings",
+    ]
+    behavior_metrics = [
+        "behavior::turnover",
+        "behavior::short_holding_period",
+    ]
+    market_metrics = [
+        "market::relative_volatility_to_benchmark",
+        "market::relative_drawdown_to_benchmark",
+        "market::relative_downside_capture_to_benchmark",
+        "market::relative_market_sensitivity_to_benchmark",
+        "market::equity_exposure",
+    ]
+
+    return f"""
+### Risk Story
+- Stated risk score: `{risk["stated_score"]}/100` (`{risk["stated_band"]}`)
+- Observed portfolio risk: `{risk["score"]}/100` (`{risk["band"]}`)
+- Bigger picture: this portfolio currently reads as **{risk["alignment"].lower()}** with **{risk["confidence_band"].lower()} confidence**.
+
+### 1. Concentration Risk
+- Dimension score: `{risk["dimension_scores"]["concentration_risk"]}/100` ({score_readout(dimension_scores["concentration_risk"])})
+- Bigger picture: this section asks whether your portfolio is too dependent on a small number of names.
+{chr(10).join(render_metric(metric) for metric in concentration_metrics)}
+
+### 2. Behavioral Risk
+- Dimension score: `{risk["dimension_scores"]["behavioral_risk"]}/100` ({score_readout(dimension_scores["behavioral_risk"])})
+- Bigger picture: this section asks whether your trading style looks patient and long-term, or more active and reactive.
+{chr(10).join(render_metric(metric) for metric in behavior_metrics)}
+
+### 3. Market Risk
+- Dimension score: `{risk["dimension_scores"]["market_risk"]}/100` ({score_readout(dimension_scores["market_risk"])})
+- Bigger picture: this section asks how your portfolio has behaved relative to the S&P 500 in real market conditions.
+{chr(10).join(render_metric(metric) for metric in market_metrics)}
+"""
+
+
 def format_display_tables(market_metrics: dict[str, Any]) -> dict[str, pd.DataFrame]:
     holdings = dataframe_from_records(
         market_metrics["open_positions"],
@@ -1624,12 +1757,31 @@ def format_display_tables(market_metrics: dict[str, Any]) -> dict[str, pd.DataFr
         selection_alpha,
         currency_columns=["alpha_pnl"],
     )
+    explanations = metric_explanations()
+    risk_metric_order = [
+        "concentration::single_position_weight",
+        "concentration::top_5_weight",
+        "concentration::effective_holdings",
+        "behavior::turnover",
+        "behavior::short_holding_period",
+        "market::relative_volatility_to_benchmark",
+        "market::relative_drawdown_to_benchmark",
+        "market::relative_downside_capture_to_benchmark",
+        "market::relative_market_sensitivity_to_benchmark",
+        "market::equity_exposure",
+    ]
     risk_components = pd.DataFrame(
         [
-            {"metric": key, "score": value}
-            for key, value in market_metrics["risk_score"]["component_scores"].items()
+            {
+                "group": explanations[key]["group"],
+                "metric": explanations[key]["label"],
+                "score": market_metrics["risk_score"]["component_scores"].get(key),
+                "what_it_means": explanations[key]["meaning"],
+            }
+            for key in risk_metric_order
+            if key in market_metrics["risk_score"]["component_scores"]
         ]
-    ).sort_values("score", ascending=False)
+    )
     risk_components = format_display_dataframe(risk_components, number_columns={"score": 1})
     projection = dataframe_from_records(
         market_metrics["projection_scenarios_no_new_contributions"]["table"],
@@ -1976,19 +2128,7 @@ def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: 
     )
     summary_cards = f"<div class='metric-strip'>{summary_cards_inner}</div>"
 
-    risk_md = f"""
-### Observed Risk Framework
-- Stated risk score: `{risk["stated_score"]}/100` (`{risk["stated_band"]}`)
-- Observed portfolio risk: `{risk["score"]}/100` (`{risk["band"]}`)
-- Difference vs stated: `{risk["difference_vs_stated"]}`
-- Alignment: `{risk["alignment"]}`
-- Confidence: `{risk["confidence_band"]}` (`{risk["confidence_score"]}`)
-
-### Dimension Scores
-- Concentration risk: `{risk["dimension_scores"]["concentration_risk"]}`
-- Market risk: `{risk["dimension_scores"]["market_risk"]}`
-- Behavioral risk: `{risk["dimension_scores"]["behavioral_risk"]}`
-"""
+    risk_md = build_risk_explainer_markdown(risk)
 
     return (
         summary_cards,
@@ -2060,7 +2200,7 @@ def build_app() -> gr.Blocks:
                         attribution_df = gr.Dataframe(label="Performance Attribution", interactive=False)
                     with gr.Tab("Risk"):
                         risk_md = gr.Markdown()
-                        risk_components_df = gr.Dataframe(label="Risk Component Scores", interactive=False)
+                        risk_components_df = gr.Dataframe(label="Risk Breakdown", interactive=False)
                         drawdown_plot = gr.Plot(label="Drawdown Comparison")
                     with gr.Tab("Benchmark"):
                         benchmark_md = gr.Markdown()
