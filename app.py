@@ -1078,17 +1078,20 @@ def build_market_enriched_metrics(
     )
     portfolio_returns = performance_returns["portfolio"] if not performance_returns.empty else pd.Series(dtype=float)
     benchmark_returns = performance_returns["benchmark"] if not performance_returns.empty else pd.Series(dtype=float)
-    # Use weekly flow-adjusted returns for volatility so the score reflects broad portfolio
-    # behavior rather than noisy day-level artifacts from sparse prices or tiny sleeves.
-    portfolio_volatility_series = aligned_performance["portfolio"].resample("W-FRI").last()
-    benchmark_volatility_series = aligned_performance["benchmark"].resample("W-FRI").last()
-    volatility_aligned_returns = pd.concat(
-        [
-            portfolio_volatility_series.pct_change(fill_method=None).rename("portfolio"),
-            benchmark_volatility_series.pct_change(fill_method=None).rename("benchmark"),
-        ],
-        axis=1,
-    ).replace([math.inf, -math.inf], float("nan")).dropna()
+    # Volatility now uses the more robust weekly value-based return method that also powers
+    # the evidence chart, so the score and the proof view tell the same story.
+    volatility_weekly_returns = build_stable_weekly_value_return_frame(
+        pd.DataFrame(
+            {
+                "date": portfolio_equity_series.index,
+                "portfolio_invested_value": portfolio_equity_series.values,
+                "benchmark_value": benchmark_value_series.reindex(portfolio_equity_series.index).values,
+                "trade_flow": trade_flow_series.reindex(portfolio_equity_series.index).values,
+            }
+        ).to_dict(orient="records")
+    )
+    rolling_volatility_frame = build_rolling_relative_volatility_frame(volatility_weekly_returns)
+    recent_rolling_volatility_frame = trim_to_recent_window(rolling_volatility_frame, "date", RECENT_RISK_CHART_DAYS)
     aligned_returns = performance_returns
     portfolio_drawdown = (aligned_performance["portfolio"] / aligned_performance["portfolio"].cummax()) - 1
     benchmark_drawdown = (aligned_performance["benchmark"] / aligned_performance["benchmark"].cummax()) - 1
@@ -1096,23 +1099,15 @@ def build_market_enriched_metrics(
     # than the portfolio's more recent downside behavior.
     drawdown_profile = recency_weighted_rolling_drawdown(aligned_performance["portfolio"])
     benchmark_drawdown_profile = recency_weighted_rolling_drawdown(aligned_performance["benchmark"])
-    annualized_volatility = (
-        float(volatility_aligned_returns["portfolio"].std() * math.sqrt(52))
-        if len(volatility_aligned_returns) > 2
-        else None
-    )
-    benchmark_annualized_volatility = (
-        float(volatility_aligned_returns["benchmark"].std() * math.sqrt(52))
-        if len(volatility_aligned_returns) > 2
-        else None
-    )
-    relative_volatility_to_benchmark = (
-        float(annualized_volatility / benchmark_annualized_volatility)
-        if annualized_volatility is not None
-        and benchmark_annualized_volatility is not None
-        and benchmark_annualized_volatility > 0
-        else None
-    )
+    if not recent_rolling_volatility_frame.empty:
+        latest_volatility_row = recent_rolling_volatility_frame.iloc[-1]
+        annualized_volatility = float(latest_volatility_row["portfolio_volatility"])
+        benchmark_annualized_volatility = float(latest_volatility_row["benchmark_volatility"])
+        relative_volatility_to_benchmark = float(latest_volatility_row["ratio"])
+    else:
+        annualized_volatility = None
+        benchmark_annualized_volatility = None
+        relative_volatility_to_benchmark = None
     relative_drawdown_to_benchmark = (
         float(drawdown_profile["blended_drawdown"] / benchmark_drawdown_profile["blended_drawdown"])
         if drawdown_profile["blended_drawdown"] is not None
@@ -2145,6 +2140,34 @@ def build_stable_weekly_value_return_frame(timeseries_records: list[dict[str, An
     return weekly[["date", "portfolio_ret", "benchmark_ret"]]
 
 
+def build_rolling_relative_volatility_frame(weekly_returns: pd.DataFrame) -> pd.DataFrame:
+    if weekly_returns.empty:
+        return pd.DataFrame(columns=["date", "ratio", "portfolio_volatility", "benchmark_volatility"])
+
+    rows: list[dict[str, Any]] = []
+    window_delta = pd.Timedelta(days=ROLLING_DRAWDOWN_WINDOW_DAYS)
+    weekly_returns = weekly_returns.copy()
+    weekly_returns["date"] = pd.to_datetime(weekly_returns["date"])
+    weekly_returns = weekly_returns.set_index("date").sort_index()
+    for end_date in weekly_returns.index:
+        window_slice = weekly_returns.loc[end_date - window_delta : end_date]
+        if len(window_slice) < 8:
+            continue
+        benchmark_vol = float(window_slice["benchmark_ret"].std() * math.sqrt(52))
+        if benchmark_vol <= 0:
+            continue
+        portfolio_vol = float(window_slice["portfolio_ret"].std() * math.sqrt(52))
+        rows.append(
+            {
+                "date": end_date,
+                "ratio": portfolio_vol / benchmark_vol,
+                "portfolio_volatility": portfolio_vol,
+                "benchmark_volatility": benchmark_vol,
+            }
+        )
+    return pd.DataFrame(rows, columns=["date", "ratio", "portfolio_volatility", "benchmark_volatility"])
+
+
 def trim_to_recent_window(df: pd.DataFrame, date_column: str, lookback_days: int) -> pd.DataFrame:
     if df.empty or date_column not in df.columns:
         return df
@@ -2213,21 +2236,7 @@ def rolling_relative_volatility_frame(timeseries_records: list[dict[str, Any]]) 
     weekly_returns = build_stable_weekly_value_return_frame(timeseries_records)
     if weekly_returns.empty:
         return pd.DataFrame(columns=["date", "ratio"])
-
-    rows: list[dict[str, Any]] = []
-    window_delta = pd.Timedelta(days=ROLLING_DRAWDOWN_WINDOW_DAYS)
-    weekly_returns["date"] = pd.to_datetime(weekly_returns["date"])
-    weekly_returns = weekly_returns.set_index("date").sort_index()
-    for end_date in weekly_returns.index:
-        window_slice = weekly_returns.loc[end_date - window_delta : end_date]
-        if len(window_slice) < 8:
-            continue
-        benchmark_vol = float(window_slice["benchmark_ret"].std() * math.sqrt(52))
-        if benchmark_vol <= 0:
-            continue
-        portfolio_vol = float(window_slice["portfolio_ret"].std() * math.sqrt(52))
-        rows.append({"date": end_date, "ratio": portfolio_vol / benchmark_vol})
-    frame = pd.DataFrame(rows, columns=["date", "ratio"])
+    frame = build_rolling_relative_volatility_frame(weekly_returns)
     return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS)
 
 
