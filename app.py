@@ -1285,6 +1285,44 @@ def build_market_enriched_metrics(
         projection_rows.append(row)
     projection_df = pd.DataFrame(projection_rows)
 
+    # Attribute 2025 volatility to the holdings that actually drove the portfolio's
+    # day-to-day variance so users can connect the chart behavior back to real names.
+    volatility_driver_rows: list[dict[str, Any]] = []
+    asset_returns = price_matrix.pct_change(fill_method=None).replace([math.inf, -math.inf], float("nan"))
+    value_matrix = (share_matrix * price_matrix).astype(float)
+    total_value_series = value_matrix.sum(axis=1).replace(0.0, pd.NA)
+    lagged_weights = value_matrix.shift(1).div(total_value_series.shift(1), axis=0)
+    lagged_weights = lagged_weights.replace([math.inf, -math.inf], float("nan")).fillna(0.0)
+    contribution_matrix = (lagged_weights * asset_returns).fillna(0.0)
+    contribution_period = contribution_matrix.loc["2025-01-01":"2025-10-31"].dropna(how="all")
+    if not contribution_period.empty:
+        portfolio_return_period = contribution_period.sum(axis=1).dropna()
+        contribution_period = contribution_period.loc[portfolio_return_period.index]
+        portfolio_variance = float(portfolio_return_period.var()) if len(portfolio_return_period) > 1 else 0.0
+        if portfolio_variance > 0:
+            for ticker in contribution_period.columns:
+                ticker_contribution = contribution_period[ticker]
+                covariance_to_portfolio = ticker_contribution.cov(portfolio_return_period)
+                if pd.isna(covariance_to_portfolio):
+                    continue
+                ticker_returns = asset_returns.loc[contribution_period.index, ticker]
+                avg_weight = float(lagged_weights.loc[contribution_period.index, ticker].mean())
+                volatility_driver_rows.append(
+                    {
+                        "ticker": ticker,
+                        "avg_weight_pct": round(avg_weight, 4),
+                        "asset_volatility_pct": round(float(ticker_returns.std() * math.sqrt(252)), 4)
+                        if len(ticker_returns.dropna()) > 1
+                        else None,
+                        "variance_contribution_pct": round(float(covariance_to_portfolio / portfolio_variance), 4),
+                    }
+                )
+            volatility_driver_rows = sorted(
+                [row for row in volatility_driver_rows if row["avg_weight_pct"] > 0],
+                key=lambda row: row["variance_contribution_pct"],
+                reverse=True,
+            )[:12]
+
     headline_metrics = {
         "benchmark_symbol": benchmark_symbol,
         "benchmark_method": "Trade-matched S&P 500 comparison excluding uninvested cash, with money-weighted return metrics",
@@ -1381,6 +1419,7 @@ def build_market_enriched_metrics(
         "risk_score": risk_score,
         "open_positions": open_positions_df.sort_values("current_value", ascending=False).round(4).to_dict(orient="records"),
         "performance_attribution": attribution_rows[:15],
+        "top_volatility_drivers_2025": volatility_driver_rows,
         "sold_too_early": sold_too_early.head(15).round(4).to_dict(orient="records") if not sold_too_early.empty else [],
         "selection_alpha": selection_alpha.head(15).round(4).to_dict(orient="records") if not selection_alpha.empty else [],
         "projection_scenarios_no_new_contributions": {
@@ -1802,6 +1841,14 @@ def format_display_tables(market_metrics: dict[str, Any]) -> dict[str, pd.DataFr
         selection_alpha,
         currency_columns=["alpha_pnl"],
     )
+    volatility_drivers = dataframe_from_records(
+        market_metrics.get("top_volatility_drivers_2025", []),
+        ["ticker", "avg_weight_pct", "asset_volatility_pct", "variance_contribution_pct"],
+    )
+    volatility_drivers = format_display_dataframe(
+        volatility_drivers,
+        percent_columns=["avg_weight_pct", "asset_volatility_pct", "variance_contribution_pct"],
+    )
     explanations = metric_explanations()
     risk_metric_order = [
         "concentration::single_position_weight",
@@ -1842,6 +1889,7 @@ def format_display_tables(market_metrics: dict[str, Any]) -> dict[str, pd.DataFr
         "attribution": attribution,
         "sold": sold,
         "selection_alpha": selection_alpha,
+        "volatility_drivers": volatility_drivers,
         "risk_components": risk_components,
         "projection": projection,
     }
@@ -2964,6 +3012,7 @@ def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: 
         tables["attribution"],
         tables["sold"],
         tables["selection_alpha"],
+        tables["volatility_drivers"],
         tables["risk_components"],
         tables["projection"],
         eq_fig,
@@ -3026,6 +3075,7 @@ def build_app() -> gr.Blocks:
                         attribution_df = gr.Dataframe(label="Performance Attribution", interactive=False)
                     with gr.Tab("Risk"):
                         risk_md = gr.HTML()
+                        volatility_drivers_df = gr.Dataframe(label="Top Drivers of 2025 Volatility", interactive=False)
                         risk_components_df = gr.Dataframe(label="Risk Signals", interactive=False)
                         recent_volatility_plot = gr.Plot(label="Recent Volatility vs S&P 500")
                         risk_evidence_plot = gr.Plot(label="Evidence Behind Very High Concerns")
@@ -3053,6 +3103,7 @@ def build_app() -> gr.Blocks:
                 attribution_df,
                 sold_df,
                 selection_alpha_df,
+                volatility_drivers_df,
                 risk_components_df,
                 projection_df,
                 equity_plot,
