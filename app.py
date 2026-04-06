@@ -3532,9 +3532,8 @@ def build_app() -> gr.Blocks:
                 with gr.Tabs(selected="overview") as main_tabs:
                     with gr.Tab("Overview", id="overview"):
                         sector_overview_md = gr.Markdown()
-                        with gr.Row():
-                            equity_plot = gr.Plot(label="Benchmark")
-                            sector_plot = gr.Plot(label="Sector Allocation")
+                        equity_plot = gr.Plot(label="Benchmark")
+                        sector_plot = gr.Plot(label="Sector Allocation")
                     with gr.Tab("Risk", id="risk"):
                         risk_md = gr.HTML()
                         metric_card_components: list[gr.HTML] = []
