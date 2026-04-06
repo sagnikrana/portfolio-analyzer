@@ -2358,6 +2358,104 @@ def rolling_relative_market_sensitivity_frame(timeseries_records: list[dict[str,
     return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS, fallback_to_full=False)
 
 
+def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) -> go.Figure:
+    frame = rolling_relative_volatility_frame(timeseries_records)
+    if frame.empty:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Recent volatility evidence is unavailable for the last 18 months.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15, "color": "#e2e8f0"},
+        )
+        fig.update_layout(
+            title="Recent 6-Month Rolling Volatility vs S&P 500",
+            height=360,
+            margin={"l": 24, "r": 24, "t": 60, "b": 24},
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(17,24,39,0.55)",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
+    frame = frame.copy()
+    frame["date"] = pd.to_datetime(frame["date"])
+    x_values = frame["date"].dt.strftime("%Y-%m-%d").tolist()
+    portfolio_values = (frame["portfolio_volatility"] * 100).tolist()
+    benchmark_values = (frame["benchmark_volatility"] * 100).tolist()
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=portfolio_values,
+            mode="lines",
+            name="Portfolio",
+            line={"width": 3, "color": "#3B82F6"},
+            hovertemplate="%{x}<br>Portfolio volatility: %{y:.1f}%<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=benchmark_values,
+            mode="lines",
+            name="S&P 500",
+            line={"width": 3, "color": "#F59E0B"},
+            hovertemplate="%{x}<br>S&P 500 volatility: %{y:.1f}%<extra></extra>",
+        )
+    )
+    fig.add_annotation(
+        x=x_values[-1],
+        y=float(portfolio_values[-1]),
+        text=f"Portfolio: {portfolio_values[-1]:.1f}%",
+        showarrow=True,
+        arrowhead=2,
+        ax=42,
+        ay=-28,
+        bgcolor="rgba(15,23,42,0.92)",
+        bordercolor="#3B82F6",
+        font={"color": "#f8fafc", "size": 11},
+    )
+    fig.add_annotation(
+        x=x_values[-1],
+        y=float(benchmark_values[-1]),
+        text=f"S&P 500: {benchmark_values[-1]:.1f}%",
+        showarrow=True,
+        arrowhead=2,
+        ax=42,
+        ay=28,
+        bgcolor="rgba(15,23,42,0.92)",
+        bordercolor="#F59E0B",
+        font={"color": "#f8fafc", "size": 11},
+    )
+    fig.update_layout(
+        title="Recent 6-Month Rolling Volatility vs S&P 500",
+        height=360,
+        margin={"l": 40, "r": 24, "t": 60, "b": 36},
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
+    )
+    fig.update_xaxes(title_text="Date", gridcolor="rgba(148,163,184,0.18)")
+    fig.update_yaxes(
+        title_text="Annualized Volatility (%)",
+        gridcolor="rgba(148,163,184,0.18)",
+        range=padded_axis_range(
+            portfolio_values + benchmark_values,
+            min_padding=1.5,
+        ),
+    )
+    return fig
+
+
 def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[str, Any]) -> go.Figure:
     risk = market_metrics["risk_score"]
     scores = risk["component_scores"]
@@ -2818,6 +2916,7 @@ def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: 
     risk = market_metrics["risk_score"]
     eq_fig = plot_equity_curves(market_metrics["timeseries"])
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
+    recent_volatility_fig = plot_recent_volatility_comparison(market_metrics["timeseries"])
     risk_evidence_fig = plot_risk_evidence(market_metrics, portfolio_summary)
     proj_fig = plot_projection(tables["projection"])
     elapsed_seconds = time.perf_counter() - started_at
@@ -2851,6 +2950,7 @@ def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: 
         tables["projection"],
         eq_fig,
         dd_fig,
+        recent_volatility_fig,
         risk_evidence_fig,
         proj_fig,
     )
@@ -2909,6 +3009,7 @@ def build_app() -> gr.Blocks:
                     with gr.Tab("Risk"):
                         risk_md = gr.HTML()
                         risk_components_df = gr.Dataframe(label="Risk Signals", interactive=False)
+                        recent_volatility_plot = gr.Plot(label="Recent Volatility vs S&P 500")
                         risk_evidence_plot = gr.Plot(label="Evidence Behind Very High Concerns")
                         drawdown_plot = gr.Plot(label="Drawdown Comparison")
                     with gr.Tab("Benchmark"):
@@ -2938,6 +3039,7 @@ def build_app() -> gr.Blocks:
                 projection_df,
                 equity_plot,
                 drawdown_plot,
+                recent_volatility_plot,
                 risk_evidence_plot,
                 projection_plot,
             ],
