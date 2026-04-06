@@ -1951,6 +1951,7 @@ def build_metric_card_values(risk: dict[str, Any]) -> list[str]:
             f"<div style='font-size:13px;color:#e2e8f0;font-weight:600'>{info['label']}</div>"
             f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>{info['bigger_picture']}</div>"
             f"<div style='font-size:12px;color:#93c5fd;margin-top:8px'>Score: {score:.1f}/100 · {score_readout(score)}</div>"
+            "<div style='font-size:11px;color:#7dd3fc;margin-top:10px'>Show in Risk Guide -></div>"
             "</div>"
         )
     return values
@@ -3232,13 +3233,10 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
 
     return (
         summary_cards,
-        benchmark_md,
         risk_md,
         risk_guide_html,
         tables["holdings"],
         tables["attribution"],
-        tables["sold"],
-        tables["selection_alpha"],
         tables["volatility_drivers"],
         tables["risk_components"],
         eq_fig,
@@ -3315,12 +3313,8 @@ def build_app() -> gr.Blocks:
                         recent_volatility_plot = gr.Plot(label="Recent Volatility vs S&P 500")
                         risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
                         drawdown_plot = gr.Plot(label="Drawdown Comparison")
-                        with gr.Accordion("Risk Guide", open=False):
-                            risk_guide_md = gr.HTML()
-                    with gr.Tab("Benchmark", id="benchmark"):
-                        benchmark_md = gr.Markdown()
-                        selection_alpha_df = gr.Dataframe(label="Ticker Alpha vs Benchmark", interactive=False)
-                        sold_df = gr.Dataframe(label="Potential Sold-Too-Early Signals", interactive=False)
+                    with gr.Tab("Risk Guide", id="risk-guide"):
+                        risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
                         holdings_df = gr.Dataframe(label="Open Holdings", interactive=False)
                         attribution_df = gr.Dataframe(label="Performance Attribution", interactive=False)
@@ -3330,13 +3324,10 @@ def build_app() -> gr.Blocks:
             inputs=[upload, risk_profile, dataset_source],
             outputs=[
                 cards,
-                benchmark_md,
                 risk_md,
                 risk_guide_md,
                 holdings_df,
                 attribution_df,
-                sold_df,
-                selection_alpha_df,
                 volatility_drivers_df,
                 risk_components_df,
                 equity_plot,
