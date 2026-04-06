@@ -1958,7 +1958,12 @@ def build_metric_button_updates(risk: dict[str, Any]) -> list[dict[str, Any]]:
         score = float(component_scores.get(metric_key, 0.0))
         updates.append(
             gr.Button.update(
-                value=f"{info['label']}\n{score:.1f}/100 · {score_readout(score)}",
+                value=(
+                    f"{info['label']}\n"
+                    f"{info['bigger_picture']}\n"
+                    f"{score:.1f}/100 · {score_readout(score)}\n"
+                    "Open in Risk Guide ->"
+                ),
             )
         )
     return updates
@@ -3273,7 +3278,19 @@ def build_app() -> gr.Blocks:
         css="""
         .app-shell {max-width: 1400px; margin: 0 auto;}
         .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; width: 100%; align-items: stretch;}
-        .metric-nav-button button {white-space: normal !important; min-height: 86px; text-align: left !important; line-height: 1.35; padding: 14px 16px !important;}
+        .metric-nav-button button {
+            white-space: pre-wrap !important;
+            min-height: 154px;
+            text-align: left !important;
+            line-height: 1.42;
+            padding: 16px 18px !important;
+            border-radius: 14px !important;
+            border: 1px solid rgba(148,163,184,.16) !important;
+            background: linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.92)) !important;
+            color: #f8fafc !important;
+            box-shadow: 0 8px 24px rgba(2,6,23,.18);
+            font-weight: 500;
+        }
         @media (max-width: 1200px) {.metric-strip {grid-template-columns: repeat(2, minmax(220px, 1fr));}}
         @media (max-width: 820px) {.metric-strip {grid-template-columns: 1fr;}}
         """,
@@ -3325,7 +3342,7 @@ def build_app() -> gr.Blocks:
                         gr.Markdown("**Open A Metric In Risk Guide**")
                         metric_buttons: list[gr.Button] = []
                         for group_name, metric_keys, _subtitle in metric_group_order():
-                            gr.Markdown(f"`{group_name}`")
+                            gr.Markdown(f"**{group_name}**")
                             with gr.Row():
                                 for metric_key in metric_keys:
                                     button = gr.Button(
