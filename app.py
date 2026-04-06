@@ -2599,6 +2599,10 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
             weight_values = (weights_df["current_weight"].fillna(0.0) * 100).tolist()
             largest_weight = float(raw_values.get("concentration::single_position_weight") or 0.0) * 100
             largest_score = float(scores.get("concentration::single_position_weight", 0.0))
+            top_5_weight = float(raw_values.get("concentration::top_5_weight") or 0.0) * 100
+            top_5_score = float(scores.get("concentration::top_5_weight", 0.0))
+            effective_holdings = float(raw_values.get("concentration::effective_holdings") or 0.0)
+            effective_holdings_score = float(scores.get("concentration::effective_holdings", 0.0))
             fig.add_trace(
                 go.Bar(
                     x=weight_values,
@@ -2613,16 +2617,6 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                 ),
                 row=row_idx,
                 col=1,
-            )
-            fig.add_vline(x=22, line_dash="dash", line_color="#F59E0B", row=row_idx, col=1)
-            fig.add_annotation(
-                x=22,
-                y=1,
-                xref=f"x{'' if row_idx == 1 else row_idx}",
-                yref=f"paper",
-                text="Single-stock high-risk line",
-                showarrow=False,
-                font={"size": 11, "color": "#F59E0B"},
             )
             if not weights_df.empty:
                 fig.add_annotation(
@@ -2639,9 +2633,31 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                     row=row_idx,
                     col=1,
                 )
+            summary_text = (
+                f"Largest position: {largest_weight:.1f}% | score {largest_score:.1f}/100"
+                "<br>"
+                f"Top 5 holdings: {top_5_weight:.1f}% | score {top_5_score:.1f}/100"
+                "<br>"
+                f"Effective holdings: {effective_holdings:.1f} | score {effective_holdings_score:.1f}/100"
+            )
+            fig.add_annotation(
+                x=1.02,
+                y=0.85,
+                xref=f"x domain{'' if row_idx == 1 else row_idx}",
+                yref=f"y domain{'' if row_idx == 1 else row_idx}",
+                text=summary_text,
+                showarrow=False,
+                align="left",
+                bgcolor="rgba(15,23,42,0.92)",
+                bordercolor="#475569",
+                borderwidth=1,
+                font={"color": "#e2e8f0", "size": 12},
+                row=row_idx,
+                col=1,
+            )
             fig.update_xaxes(title_text="Current Weight (%)", row=row_idx, col=1)
             fig.update_xaxes(
-                range=padded_axis_range(weight_values, baseline_values=[22], min_padding=2.0),
+                range=padded_axis_range(weight_values, min_padding=2.0),
                 row=row_idx,
                 col=1,
             )
