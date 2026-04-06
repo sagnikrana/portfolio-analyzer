@@ -32,6 +32,7 @@ RELATIVE_DOWNSIDE_CAPTURE_MAX_RATIO = 1.15
 RELATIVE_MARKET_SENSITIVITY_MAX_RATIO = 1.75
 VERY_HIGH_CONCERN_SCORE = 80.0
 RECENT_RISK_CHART_DAYS = round(365.25 * 1.5)
+RISK_CHART_START_DATE = "2024-01-01"
 WEEKLY_FLOW_DOMINANCE_LIMIT = 0.25
 MAX_STABLE_WEEKLY_RETURN = 0.75
 
@@ -2023,7 +2024,7 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         )
     fig.update_layout(
         title="Recent 6-Month Rolling Drawdown Depth vs S&P 500",
-        height=460,
+        height=520,
         margin={"l": 24, "r": 24, "t": 56, "b": 24},
         xaxis_title="Date",
         yaxis_title="Drawdown (%)",
@@ -2329,6 +2330,22 @@ def trim_to_recent_window(
     return df.copy() if fallback_to_full else df.iloc[0:0].copy()
 
 
+def trim_to_start_date(
+    df: pd.DataFrame,
+    date_column: str,
+    start_date: str,
+    *,
+    fallback_to_full: bool = True,
+) -> pd.DataFrame:
+    if df.empty or date_column not in df.columns:
+        return df
+    start_timestamp = pd.Timestamp(start_date)
+    trimmed = df[pd.to_datetime(df[date_column]) >= start_timestamp].copy()
+    if not trimmed.empty:
+        return trimmed
+    return df.copy() if fallback_to_full else df.iloc[0:0].copy()
+
+
 def trim_index_to_recent_window(df: pd.DataFrame, lookback_days: int) -> pd.DataFrame:
     if df.empty or not isinstance(df.index, pd.DatetimeIndex):
         return df
@@ -2395,7 +2412,7 @@ def rolling_relative_volatility_frame(timeseries_records: list[dict[str, Any]]) 
     if weekly_returns.empty:
         return pd.DataFrame(columns=["date", "ratio"])
     frame = build_rolling_relative_volatility_frame(weekly_returns)
-    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS, fallback_to_full=False)
+    return trim_to_start_date(frame, "date", RISK_CHART_START_DATE, fallback_to_full=False)
 
 
 def rolling_relative_drawdown_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -2403,7 +2420,7 @@ def rolling_relative_drawdown_frame(timeseries_records: list[dict[str, Any]]) ->
     if weekly_returns.empty:
         return pd.DataFrame(columns=["date", "ratio", "portfolio_drawdown", "benchmark_drawdown"])
     frame = build_rolling_relative_drawdown_frame(weekly_returns)
-    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS, fallback_to_full=False)
+    return trim_to_start_date(frame, "date", RISK_CHART_START_DATE, fallback_to_full=False)
 
 
 def rolling_relative_downside_capture_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -2423,7 +2440,7 @@ def rolling_relative_downside_capture_frame(timeseries_records: list[dict[str, A
             continue
         rows.append({"date": end_date, "ratio": float(downside_slice["portfolio"].mean() / benchmark_down_mean)})
     frame = pd.DataFrame(rows, columns=["date", "ratio"])
-    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS)
+    return trim_to_start_date(frame, "date", RISK_CHART_START_DATE, fallback_to_full=False)
 
 
 def rolling_relative_market_sensitivity_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -2431,7 +2448,7 @@ def rolling_relative_market_sensitivity_frame(timeseries_records: list[dict[str,
     if weekly_returns.empty:
         return pd.DataFrame(columns=["date", "ratio"])
     frame = build_rolling_relative_market_sensitivity_frame(weekly_returns)
-    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS, fallback_to_full=False)
+    return trim_to_start_date(frame, "date", RISK_CHART_START_DATE, fallback_to_full=False)
 
 
 def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) -> go.Figure:
@@ -2449,7 +2466,7 @@ def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) 
         )
         fig.update_layout(
             title="Recent 6-Month Rolling Volatility vs S&P 500",
-            height=460,
+            height=520,
             margin={"l": 24, "r": 24, "t": 60, "b": 24},
             template="plotly_dark",
             paper_bgcolor="rgba(0,0,0,0)",
@@ -2512,7 +2529,7 @@ def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) 
     )
     fig.update_layout(
         title="Recent 6-Month Rolling Volatility vs S&P 500",
-        height=460,
+        height=520,
         margin={"l": 40, "r": 24, "t": 60, "b": 36},
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -2880,7 +2897,7 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
 
     fig.update_layout(
         title="Recent Evidence Behind Top Risk Signals",
-        height=max(420, 360 * len(evidence_specs)),
+        height=max(520, 420 * len(evidence_specs)),
         margin={"l": 40, "r": 24, "t": 72, "b": 24},
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
