@@ -1893,6 +1893,7 @@ def plot_equity_curves(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         },
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,24,39,0.55)",
+        hoverlabel=dark_hoverlabel(),
     )
     fig.update_yaxes(tickprefix="$", separatethousands=True, gridcolor="rgba(148,163,184,0.18)")
     fig.update_xaxes(gridcolor="rgba(148,163,184,0.18)")
@@ -1978,6 +1979,7 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         },
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,24,39,0.55)",
+        hoverlabel=dark_hoverlabel(),
     )
     fig.update_yaxes(ticksuffix="%", gridcolor="rgba(148,163,184,0.18)")
     fig.update_xaxes(gridcolor="rgba(148,163,184,0.18)")
@@ -2040,6 +2042,7 @@ def plot_projection(projection_df: pd.DataFrame) -> go.Figure:
         },
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,24,39,0.55)",
+        hoverlabel=dark_hoverlabel(),
     )
     fig.update_yaxes(tickprefix="$", separatethousands=True, gridcolor="rgba(148,163,184,0.18)")
     fig.update_xaxes(dtick=1, gridcolor="rgba(148,163,184,0.18)")
@@ -2319,6 +2322,14 @@ def add_latest_annotation(fig: go.Figure, x_value: str, y_value: float, text: st
     )
 
 
+def dark_hoverlabel() -> dict[str, Any]:
+    return {
+        "bgcolor": "rgba(15,23,42,0.96)",
+        "bordercolor": "#475569",
+        "font": {"color": "#f8fafc", "size": 13},
+    }
+
+
 def rolling_relative_volatility_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
     weekly_returns = build_stable_weekly_value_return_frame(timeseries_records)
     if weekly_returns.empty:
@@ -2448,6 +2459,7 @@ def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) 
         plot_bgcolor="rgba(17,24,39,0.55)",
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
+        hoverlabel=dark_hoverlabel(),
     )
     fig.update_xaxes(title_text="Date", gridcolor="rgba(148,163,184,0.18)")
     fig.update_yaxes(
@@ -2775,6 +2787,7 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
         plot_bgcolor="rgba(17,24,39,0.55)",
         hovermode="x unified",
         barmode="stack",
+        hoverlabel=dark_hoverlabel(),
     )
     fig.update_xaxes(gridcolor="rgba(148,163,184,0.18)")
     fig.update_yaxes(gridcolor="rgba(148,163,184,0.18)")
