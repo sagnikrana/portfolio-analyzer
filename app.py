@@ -1917,15 +1917,6 @@ def build_risk_explainer_html(risk: dict[str, Any]) -> str:
     observed_subtitle = f"{risk['band']} · {observed_vs_stated}"
     market_subtitle = f"Relative to S&P 500 · Confidence: {risk['confidence_band']}"
 
-    group_html = []
-    for group_name, _metric_keys, subtitle in metric_group_order():
-        group_html.append(
-            "<div style='padding:16px;border:1px solid rgba(148,163,184,.16);border-radius:16px;background:rgba(15,23,42,.28)'>"
-            f"<div style='font-size:18px;font-weight:700;color:#f8fafc'>{group_name}</div>"
-            f"<div style='font-size:13px;color:#cbd5e1;margin-top:4px'>{subtitle}</div>"
-            "</div>"
-        )
-
     return (
         "<div style='display:grid;gap:16px'>"
         "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px'>"
@@ -1934,10 +1925,7 @@ def build_risk_explainer_html(risk: dict[str, Any]) -> str:
         f"{render_dimension_card('Behavior', dimension_scores['behavioral_risk'], 'How patient or active your investing style looks')}"
         f"{render_dimension_card('Market', dimension_scores['market_risk'], market_subtitle)}"
         "</div>"
-        "<div style='font-size:12px;color:#60a5fa'>Use the metric tiles below to open the matching explanation in the Risk Guide tab.</div>"
-        "<div style='display:grid;gap:14px'>"
-        f"{''.join(group_html)}"
-        "</div>"
+        "<div style='font-size:12px;color:#60a5fa'>Each metric card below summarizes what the score is trying to say. Use the guide link under a card to open the full explanation in the Risk Guide tab.</div>"
         "</div>"
     )
 
@@ -1949,24 +1937,23 @@ def metric_navigation_order() -> list[str]:
     return ordered
 
 
-def build_metric_button_updates(risk: dict[str, Any]) -> list[dict[str, Any]]:
+def build_metric_card_values(risk: dict[str, Any]) -> list[str]:
     explanations = metric_explanations()
     component_scores = risk["component_scores"]
-    updates: list[dict[str, Any]] = []
+    values: list[str] = []
     for metric_key in metric_navigation_order():
         info = explanations[metric_key]
         score = float(component_scores.get(metric_key, 0.0))
-        updates.append(
-            gr.Button.update(
-                value=(
-                    f"{info['label']}\n"
-                    f"{info['bigger_picture']}\n"
-                    f"{score:.1f}/100 · {score_readout(score)}\n"
-                    "Open in Risk Guide ->"
-                ),
-            )
+        values.append(
+            "<div class='risk-metric-card' style='padding:12px 14px;border:1px solid rgba(148,163,184,.16);"
+            "border-radius:12px;background:rgba(15,23,42,.38);min-height:132px'>"
+            f"<div style='font-size:13px;color:#e2e8f0;font-weight:600'>{info['label']}</div>"
+            f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>{info['bigger_picture']}</div>"
+            f"<div style='font-size:12px;color:#93c5fd;margin-top:8px'>Score: {score:.1f}/100 · {score_readout(score)}</div>"
+            "<div style='font-size:11px;color:#60a5fa;margin-top:8px'>Open in Risk Guide below</div>"
+            "</div>"
         )
-    return updates
+    return values
 
 
 def open_metric_guide(metric_key: str, risk: dict[str, Any] | None) -> tuple[dict[str, Any], str]:
@@ -3228,7 +3215,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
     headline = market_metrics["headline_metrics"]
     risk = market_metrics["risk_score"]
     risk_guide_html = build_risk_guide_html(risk)
-    metric_button_updates = build_metric_button_updates(risk)
+    metric_card_values = build_metric_card_values(risk)
     eq_fig = plot_equity_curves(market_metrics["timeseries"])
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
     recent_volatility_fig = plot_recent_volatility_comparison(market_metrics["timeseries"])
@@ -3267,7 +3254,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         dd_fig,
         recent_volatility_fig,
         risk_evidence_fig,
-        *metric_button_updates,
+        *metric_card_values,
     )
 
 
@@ -3278,19 +3265,7 @@ def build_app() -> gr.Blocks:
         css="""
         .app-shell {max-width: 1400px; margin: 0 auto;}
         .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; width: 100%; align-items: stretch;}
-        .metric-nav-button button {
-            white-space: pre-wrap !important;
-            min-height: 154px;
-            text-align: left !important;
-            line-height: 1.42;
-            padding: 16px 18px !important;
-            border-radius: 14px !important;
-            border: 1px solid rgba(148,163,184,.16) !important;
-            background: linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.92)) !important;
-            color: #f8fafc !important;
-            box-shadow: 0 8px 24px rgba(2,6,23,.18);
-            font-weight: 500;
-        }
+        .risk-guide-link button {min-height: 34px; border-radius: 10px !important;}
         @media (max-width: 1200px) {.metric-strip {grid-template-columns: repeat(2, minmax(220px, 1fr));}}
         @media (max-width: 820px) {.metric-strip {grid-template-columns: 1fr;}}
         """,
@@ -3339,17 +3314,22 @@ def build_app() -> gr.Blocks:
                         equity_plot = gr.Plot(label="Portfolio vs S&P 500")
                     with gr.Tab("Risk", id="risk"):
                         risk_md = gr.HTML()
-                        gr.Markdown("**Open A Metric In Risk Guide**")
+                        metric_card_components: list[gr.HTML] = []
                         metric_buttons: list[gr.Button] = []
                         for group_name, metric_keys, _subtitle in metric_group_order():
                             gr.Markdown(f"**{group_name}**")
                             with gr.Row():
                                 for metric_key in metric_keys:
-                                    button = gr.Button(
-                                        metric_explanations()[metric_key]["label"],
-                                        elem_classes=["metric-nav-button"],
-                                    )
-                                    metric_buttons.append(button)
+                                    with gr.Column():
+                                        card = gr.HTML()
+                                        button = gr.Button(
+                                            "Open in Risk Guide",
+                                            variant="secondary",
+                                            size="sm",
+                                            elem_classes=["risk-guide-link"],
+                                        )
+                                        metric_card_components.append(card)
+                                        metric_buttons.append(button)
                         volatility_drivers_df = gr.Dataframe(label="Top Drivers of 2025 Volatility", interactive=False)
                         risk_components_df = gr.Dataframe(label="Risk Signals", interactive=False)
                         recent_volatility_plot = gr.Plot(label="Recent Volatility vs S&P 500")
@@ -3385,7 +3365,7 @@ def build_app() -> gr.Blocks:
                 drawdown_plot,
                 recent_volatility_plot,
                 risk_evidence_plot,
-                *metric_buttons,
+                *metric_card_components,
             ],
         )
 
