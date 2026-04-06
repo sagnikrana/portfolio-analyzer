@@ -1095,6 +1095,12 @@ def build_market_enriched_metrics(
     aligned_returns = performance_returns
     portfolio_drawdown = (aligned_performance["portfolio"] / aligned_performance["portfolio"].cummax()) - 1
     benchmark_drawdown = (aligned_performance["benchmark"] / aligned_performance["benchmark"].cummax()) - 1
+    rolling_drawdown_frame = build_rolling_relative_drawdown_frame(volatility_weekly_returns)
+    recent_rolling_drawdown_frame = trim_to_recent_window(rolling_drawdown_frame, "date", RECENT_RISK_CHART_DAYS)
+    rolling_market_sensitivity_frame = build_rolling_relative_market_sensitivity_frame(volatility_weekly_returns)
+    recent_rolling_market_sensitivity_frame = trim_to_recent_window(
+        rolling_market_sensitivity_frame, "date", RECENT_RISK_CHART_DAYS
+    )
     # Blend overlapping 6-month drawdowns with recency weights so old crises matter less
     # than the portfolio's more recent downside behavior.
     drawdown_profile = recency_weighted_rolling_drawdown(aligned_performance["portfolio"])
@@ -1108,17 +1114,19 @@ def build_market_enriched_metrics(
         annualized_volatility = None
         benchmark_annualized_volatility = None
         relative_volatility_to_benchmark = None
-    relative_drawdown_to_benchmark = (
-        float(drawdown_profile["blended_drawdown"] / benchmark_drawdown_profile["blended_drawdown"])
-        if drawdown_profile["blended_drawdown"] is not None
-        and benchmark_drawdown_profile["blended_drawdown"] is not None
-        and benchmark_drawdown_profile["blended_drawdown"] > 0
-        else None
-    )
+    if not recent_rolling_drawdown_frame.empty:
+        latest_drawdown_row = recent_rolling_drawdown_frame.iloc[-1]
+        relative_drawdown_to_benchmark = float(latest_drawdown_row["ratio"])
+    else:
+        relative_drawdown_to_benchmark = None
     downside_capture_profile = recency_weighted_rolling_downside_capture(aligned_returns)
     relative_downside_capture_to_benchmark = downside_capture_profile["weighted_downside_capture"]
     market_sensitivity_profile = recency_weighted_rolling_market_sensitivity(aligned_returns)
-    relative_market_sensitivity_to_benchmark = market_sensitivity_profile["weighted_market_sensitivity"]
+    if not recent_rolling_market_sensitivity_frame.empty:
+        latest_market_sensitivity_row = recent_rolling_market_sensitivity_frame.iloc[-1]
+        relative_market_sensitivity_to_benchmark = float(latest_market_sensitivity_row["ratio"])
+    else:
+        relative_market_sensitivity_to_benchmark = None
     tracking_error = None
     info_ratio_proxy = None
     if len(aligned_returns) > 5 and aligned_returns["benchmark"].var() > 0:
@@ -2168,7 +2176,77 @@ def build_rolling_relative_volatility_frame(weekly_returns: pd.DataFrame) -> pd.
     return pd.DataFrame(rows, columns=["date", "ratio", "portfolio_volatility", "benchmark_volatility"])
 
 
-def trim_to_recent_window(df: pd.DataFrame, date_column: str, lookback_days: int) -> pd.DataFrame:
+def build_rolling_relative_drawdown_frame(weekly_returns: pd.DataFrame) -> pd.DataFrame:
+    if weekly_returns.empty:
+        return pd.DataFrame(columns=["date", "ratio", "portfolio_drawdown", "benchmark_drawdown"])
+
+    rows: list[dict[str, Any]] = []
+    window_delta = pd.Timedelta(days=ROLLING_DRAWDOWN_WINDOW_DAYS)
+    clean_returns = weekly_returns.copy()
+    clean_returns["date"] = pd.to_datetime(clean_returns["date"])
+    clean_returns = clean_returns.set_index("date").sort_index().dropna()
+    wealth_frame = pd.DataFrame(
+        {
+            "portfolio": (1 + clean_returns["portfolio_ret"]).cumprod(),
+            "benchmark": (1 + clean_returns["benchmark_ret"]).cumprod(),
+        }
+    ).dropna()
+    for end_date in wealth_frame.index:
+        window_slice = wealth_frame.loc[end_date - window_delta : end_date]
+        if len(window_slice) < 2:
+            continue
+        portfolio_dd = max_drawdown_for_series(window_slice["portfolio"])
+        benchmark_dd = max_drawdown_for_series(window_slice["benchmark"])
+        if portfolio_dd is None or benchmark_dd is None or benchmark_dd <= 0:
+            continue
+        rows.append(
+            {
+                "date": end_date,
+                "ratio": portfolio_dd / benchmark_dd,
+                "portfolio_drawdown": portfolio_dd,
+                "benchmark_drawdown": benchmark_dd,
+            }
+        )
+    return pd.DataFrame(rows, columns=["date", "ratio", "portfolio_drawdown", "benchmark_drawdown"])
+
+
+def build_rolling_relative_market_sensitivity_frame(aligned_returns: pd.DataFrame) -> pd.DataFrame:
+    if aligned_returns.empty:
+        return pd.DataFrame(columns=["date", "ratio"])
+
+    rows: list[dict[str, Any]] = []
+    window_delta = pd.Timedelta(days=ROLLING_DRAWDOWN_WINDOW_DAYS)
+    clean_returns = aligned_returns.copy()
+    if "date" in clean_returns.columns:
+        clean_returns["date"] = pd.to_datetime(clean_returns["date"])
+        clean_returns = clean_returns.set_index("date")
+    clean_returns.index = pd.to_datetime(clean_returns.index)
+    clean_returns = clean_returns.sort_index().dropna()
+    if "portfolio_ret" in clean_returns.columns and "benchmark_ret" in clean_returns.columns:
+        clean_returns = clean_returns.rename(columns={"portfolio_ret": "portfolio", "benchmark_ret": "benchmark"})
+    for end_date in clean_returns.index:
+        window_slice = clean_returns.loc[end_date - window_delta : end_date]
+        if len(window_slice) < 5:
+            continue
+        benchmark_var = float(window_slice["benchmark"].var())
+        if benchmark_var <= 0:
+            continue
+        rows.append(
+            {
+                "date": end_date,
+                "ratio": float(window_slice["portfolio"].cov(window_slice["benchmark"]) / benchmark_var),
+            }
+        )
+    return pd.DataFrame(rows, columns=["date", "ratio"])
+
+
+def trim_to_recent_window(
+    df: pd.DataFrame,
+    date_column: str,
+    lookback_days: int,
+    *,
+    fallback_to_full: bool = True,
+) -> pd.DataFrame:
     if df.empty or date_column not in df.columns:
         return df
     latest_date = pd.to_datetime(df[date_column]).max()
@@ -2176,7 +2254,9 @@ def trim_to_recent_window(df: pd.DataFrame, date_column: str, lookback_days: int
         return df
     cutoff = latest_date - pd.Timedelta(days=lookback_days)
     trimmed = df[pd.to_datetime(df[date_column]) >= cutoff].copy()
-    return trimmed if not trimmed.empty else df.copy()
+    if not trimmed.empty:
+        return trimmed
+    return df.copy() if fallback_to_full else df.iloc[0:0].copy()
 
 
 def trim_index_to_recent_window(df: pd.DataFrame, lookback_days: int) -> pd.DataFrame:
@@ -2237,27 +2317,15 @@ def rolling_relative_volatility_frame(timeseries_records: list[dict[str, Any]]) 
     if weekly_returns.empty:
         return pd.DataFrame(columns=["date", "ratio"])
     frame = build_rolling_relative_volatility_frame(weekly_returns)
-    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS)
+    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS, fallback_to_full=False)
 
 
 def rolling_relative_drawdown_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
-    aligned_performance = build_market_evidence_series(timeseries_records)["aligned_performance"]
-    if aligned_performance.empty:
-        return pd.DataFrame(columns=["date", "ratio"])
-
-    rows: list[dict[str, Any]] = []
-    window_delta = pd.Timedelta(days=ROLLING_DRAWDOWN_WINDOW_DAYS)
-    for end_date in aligned_performance.index:
-        window_slice = aligned_performance.loc[end_date - window_delta : end_date]
-        if len(window_slice) < 2:
-            continue
-        portfolio_dd = max_drawdown_for_series(window_slice["portfolio"])
-        benchmark_dd = max_drawdown_for_series(window_slice["benchmark"])
-        if portfolio_dd is None or benchmark_dd is None or benchmark_dd <= 0:
-            continue
-        rows.append({"date": end_date, "ratio": portfolio_dd / benchmark_dd})
-    frame = pd.DataFrame(rows, columns=["date", "ratio"])
-    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS)
+    weekly_returns = build_stable_weekly_value_return_frame(timeseries_records)
+    if weekly_returns.empty:
+        return pd.DataFrame(columns=["date", "ratio", "portfolio_drawdown", "benchmark_drawdown"])
+    frame = build_rolling_relative_drawdown_frame(weekly_returns)
+    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS, fallback_to_full=False)
 
 
 def rolling_relative_downside_capture_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -2281,27 +2349,11 @@ def rolling_relative_downside_capture_frame(timeseries_records: list[dict[str, A
 
 
 def rolling_relative_market_sensitivity_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
-    aligned_returns = build_market_evidence_series(timeseries_records)["aligned_returns"]
-    if aligned_returns.empty:
+    weekly_returns = build_stable_weekly_value_return_frame(timeseries_records)
+    if weekly_returns.empty:
         return pd.DataFrame(columns=["date", "ratio"])
-
-    rows: list[dict[str, Any]] = []
-    window_delta = pd.Timedelta(days=ROLLING_DRAWDOWN_WINDOW_DAYS)
-    for end_date in aligned_returns.index:
-        window_slice = aligned_returns.loc[end_date - window_delta : end_date]
-        if len(window_slice) < 5:
-            continue
-        benchmark_var = float(window_slice["benchmark"].var())
-        if benchmark_var <= 0:
-            continue
-        rows.append(
-            {
-                "date": end_date,
-                "ratio": float(window_slice["portfolio"].cov(window_slice["benchmark"]) / benchmark_var),
-            }
-        )
-    frame = pd.DataFrame(rows, columns=["date", "ratio"])
-    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS)
+    frame = build_rolling_relative_market_sensitivity_frame(weekly_returns)
+    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS, fallback_to_full=False)
 
 
 def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[str, Any]) -> go.Figure:
