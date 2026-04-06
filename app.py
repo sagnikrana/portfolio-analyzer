@@ -1957,6 +1957,12 @@ def build_metric_card_values(risk: dict[str, Any]) -> list[str]:
     return values
 
 
+def open_metric_guide(metric_key: str, risk: dict[str, Any] | None) -> tuple[dict[str, Any], str]:
+    if risk is None:
+        raise gr.Error("Run the analysis first so the guide can open the right metric.")
+    return gr.Tabs.update(selected="risk-guide"), build_risk_guide_html(risk, focused_metric=metric_key)
+
+
 def format_display_tables(market_metrics: dict[str, Any]) -> dict[str, pd.DataFrame]:
     holdings = dataframe_from_records(
         market_metrics["open_positions"],
@@ -3271,6 +3277,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         summary_cards,
         risk_md,
         risk_guide_html,
+        risk,
         tables["holdings"],
         tables["attribution"],
         tables["volatility_drivers"],
@@ -3289,6 +3296,15 @@ def build_app() -> gr.Blocks:
         css="""
         .app-shell {max-width: 1400px; margin: 0 auto;}
         .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; width: 100%; align-items: stretch;}
+        .risk-guide-link button {
+            min-height: 26px !important;
+            padding: 3px 10px !important;
+            border-radius: 999px !important;
+            font-size: 11px !important;
+            line-height: 1.1 !important;
+            width: auto !important;
+            min-width: 0 !important;
+        }
         @media (max-width: 1200px) {.metric-strip {grid-template-columns: repeat(2, minmax(220px, 1fr));}}
         @media (max-width: 820px) {.metric-strip {grid-template-columns: 1fr;}}
         """,
@@ -3329,20 +3345,29 @@ def build_app() -> gr.Blocks:
                 )
 
             with gr.Column(scale=3):
+                risk_state = gr.State(value=None)
                 cards = gr.HTML(label="Summary Cards")
-                with gr.Tabs(selected="overview"):
+                with gr.Tabs(selected="overview") as main_tabs:
                     with gr.Tab("Overview", id="overview"):
                         equity_plot = gr.Plot(label="Benchmark")
                     with gr.Tab("Risk", id="risk"):
                         risk_md = gr.HTML()
                         metric_card_components: list[gr.HTML] = []
+                        metric_buttons: list[gr.Button] = []
                         for group_name, metric_keys, _subtitle in metric_group_order():
                             gr.Markdown(f"**{group_name}**")
                             with gr.Row():
                                 for metric_key in metric_keys:
                                     with gr.Column():
                                         card = gr.HTML()
+                                        button = gr.Button(
+                                            "Show in Risk Guide",
+                                            variant="secondary",
+                                            size="sm",
+                                            elem_classes=["risk-guide-link"],
+                                        )
                                         metric_card_components.append(card)
+                                        metric_buttons.append(button)
                         volatility_drivers_df = gr.Dataframe(label="Top Drivers of 2025 Volatility", interactive=False)
                         recent_volatility_plot = gr.Plot(label="Volatility vs S&P 500")
                         risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
@@ -3360,6 +3385,7 @@ def build_app() -> gr.Blocks:
                 cards,
                 risk_md,
                 risk_guide_md,
+                risk_state,
                 holdings_df,
                 attribution_df,
                 volatility_drivers_df,
@@ -3370,6 +3396,13 @@ def build_app() -> gr.Blocks:
                 *metric_card_components,
             ],
         )
+
+        for metric_key, button in zip(metric_navigation_order(), metric_buttons):
+            button.click(
+                fn=lambda risk, key=metric_key: open_metric_guide(key, risk),
+                inputs=[risk_state],
+                outputs=[main_tabs, risk_guide_md],
+            )
 
     return demo
 
