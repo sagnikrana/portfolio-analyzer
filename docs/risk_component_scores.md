@@ -1,58 +1,49 @@
-# Risk Component Scores
+# Risk Metric Guide
 
-This document explains the current observed portfolio risk model used by the portfolio analyzer.
+This document explains the current observed portfolio risk model in plain English.
 
-It covers:
+The goal of this guide is simple:
 
-- what each risk component metric means
-- what high and low values indicate
-- how the component metrics roll up into dimension scores
-- how the dimension scores roll up into the final observed risk score
+- help a user understand what each risk metric is trying to say
+- explain why each metric matters
+- show how the component metrics roll up into the final score
 
-## What This Risk Model Is
+This is not a full financial-planning or suitability model. It is an observed risk model based on:
 
-The current model is an **observed portfolio risk score**.
-
-It is designed to answer:
-
-- How risky does the portfolio look based on actual holdings and behavior?
-- What specific factors are driving that risk?
-- Is the observed portfolio risk aligned with the user’s stated risk score?
-
-It is **not** a full financial suitability model.
+- current holdings
+- portfolio construction
+- recent market behavior
+- actual trading behavior
 
 It does not yet include:
 
 - outside assets
 - debt
 - income stability
-- tax constraints
+- taxes
 - options or leverage exposure
-- sector-specific macro risk
-- fundamentals or valuation risk
-- liquidity needs
+- sector-specific macro modeling
+- valuation or fundamentals
 
-So this should be interpreted as a **portfolio- and behavior-based observed risk model**, not a complete financial planning framework.
+So the right interpretation is:
 
-## High-Level Structure
+> This is an observed portfolio risk score, not a complete personal finance risk profile.
 
-The model has three dimensions:
+## How The Score Works
+
+The model has 3 dimensions:
 
 - `concentration_risk`
 - `market_risk`
 - `behavioral_risk`
 
-Each dimension is made up of several component metrics.
+Current weights:
 
-Each component is normalized into a value between `0` and `1`, then displayed in the UI as a `0-100` score.
+- concentration: `40%`
+- market: `40%`
+- behavior: `20%`
 
-The current weighting is:
-
-- `concentration_risk`: `40%`
-- `market_risk`: `40%`
-- `behavioral_risk`: `20%`
-
-The final score is:
+That means the final score is:
 
 ```text
 overall_risk_score =
@@ -61,424 +52,321 @@ overall_risk_score =
 + 0.2 * behavioral_risk
 ```
 
-## Concentration Metrics
+Why those weights:
 
-These metrics measure how clustered the portfolio is.
+- concentration matters because a portfolio can look strong but still be fragile if too much money sits in a few names
+- market behavior matters because a portfolio can be risky even when it is diversified if it behaves much more aggressively than the market
+- behavior matters because investor actions can add risk even when the holdings themselves look reasonable
+
+## 1. Concentration Metrics
+
+These metrics ask a simple question:
+
+> Is too much of the portfolio riding on too few holdings?
 
 ### `concentration::single_position_weight`
 
-**What it measures**
+**Label in the app**
 
-- The weight of the single largest holding in the portfolio.
+- Largest position size
 
 **Plain-English question**
 
 - How dependent is the portfolio on one stock?
 
+**What it means**
+
+- This looks at the biggest holding in the portfolio and asks whether that one name is large enough to dominate results.
+
 **Why it matters**
 
-- If one stock becomes too large, a negative move in that one name can heavily damage the total portfolio.
+- Even a great company can become a portfolio risk if it gets too large.
+- If one position is oversized, one bad earnings report, one bad year, or one re-rating can hit the whole account hard.
 
-**How the current model uses it**
+**How to read the score**
 
-- It is normalized against roughly `22%`.
-- Around `22%` or above in one position pushes this metric toward high risk.
+- Low score: no single stock dominates the account
+- High score: one stock can materially move the whole portfolio
 
-**Low value means**
+**Bigger picture**
 
-- No single stock dominates the portfolio.
-
-**High value means**
-
-- One stock is carrying a large share of the risk.
-
-**How it influences overall risk**
-
-- It raises `concentration_risk`.
-- Since concentration is `40%` of the total score, this metric can materially increase the final risk score.
+- A high score here means the portfolio is fragile to stock-specific risk.
 
 ### `concentration::top_5_weight`
 
-**What it measures**
+**Label in the app**
 
-- The total portfolio weight held in the top 5 positions.
+- Top 5 holdings dominance
 
 **Plain-English question**
 
-- Are just a few holdings driving most of the portfolio?
+- Are a few holdings driving most of the portfolio?
+
+**What it means**
+
+- This looks at how much of the portfolio sits in the top 5 positions combined.
 
 **Why it matters**
 
-- A portfolio can have many tickers but still be effectively concentrated if the top 5 names dominate the value.
+- A portfolio can look diversified because it owns many tickers, but still be effectively concentrated if most of the money sits in the top few names.
 
-**How the current model uses it**
+**How to read the score**
 
-- It is normalized against roughly `65%`.
-- If the top 5 holdings are around `65%` or more of the portfolio, this metric becomes high risk.
+- Low score: money is spread more broadly
+- High score: a small cluster of stocks is doing most of the work
 
-**Low value means**
+**Bigger picture**
 
-- Capital is spread across more holdings.
-
-**High value means**
-
-- A small set of positions controls most of the portfolio outcome.
-
-**How it influences overall risk**
-
-- It raises `concentration_risk`.
+- A high score here means diversification is thinner than the ticker count suggests.
 
 ### `concentration::effective_holdings`
 
-**What it measures**
+**Label in the app**
 
-- The effective number of holdings, derived from concentration using `1 / HHI`.
-
-**Plain-English question**
-
-- How many equally weighted positions does this portfolio behave like?
-
-**Why it matters**
-
-- A portfolio with many tickers can still behave like a very concentrated portfolio if most capital is clustered in a few names.
-
-**How the current model uses it**
-
-- The score is now relative to the number of **meaningful holdings** in the portfolio.
-- A meaningful holding is currently defined as a position with at least `1%` portfolio weight.
-- The concentration risk contribution is:
-
-```text
-effective_holdings_risk = 1 - (effective_holdings / meaningful_holdings_count)
-```
-
-with clipping between `0` and `1`.
-
-**Low value means**
-
-- The portfolio’s effective holdings count is close to the number of meaningful positions.
-- In other words, diversification is broad relative to the portfolio’s true size.
-
-**High value means**
-
-- The portfolio behaves like it has far fewer meaningful holdings than it appears to have.
-- In other words, capital is clustered in a small subset of names.
-
-**How it influences overall risk**
-
-- Lower effective holdings relative to meaningful holdings raises `concentration_risk`.
-
-## Market Metrics
-
-These metrics measure how risky the portfolio’s market behavior is.
-
-### `market::relative_volatility_to_benchmark`
-
-**What it measures**
-
-- The portfolio's annualized volatility relative to the S&P 500's annualized volatility
-  over the same investing horizon.
+- True diversification
 
 **Plain-English question**
 
-- Does this portfolio swing around more than the S&P 500, or less?
+- How many holdings really matter once concentration is taken into account?
+
+**What it means**
+
+- This tries to answer:
+  - “How many equally sized positions would this portfolio behave like?”
+
+- It does not just count tickers.
+- It adjusts for the fact that some positions are much bigger than others.
 
 **Why it matters**
 
-- This keeps the score fair across market regimes. If the whole market was volatile, the
-  portfolio is only penalized for being more volatile than the market itself.
+- A portfolio with 25 tickers can still behave like a 10-holding portfolio if most of the money is unevenly concentrated.
 
-**How the current model uses it**
+**How to read the score**
 
-- The app first converts both the portfolio and the trade-matched S&P 500 into
-  flow-adjusted performance indices so buys and sells do not get mistaken for volatility.
-- The app first computes:
+- Low score: the portfolio behaves like it has many meaningful positions
+- High score: the portfolio behaves like fewer holdings really matter
 
-```text
-volatility_ratio = portfolio_volatility / benchmark_volatility
-```
+**Bigger picture**
 
-- To avoid distortion from tiny early portfolio values and noisy day-level artifacts,
-  volatility is estimated from weekly returns on periods when the portfolio and benchmark
-  sleeves are above a meaningful capital floor.
-- A ratio of `1.0` means the portfolio behaved about as volatile as the S&P 500.
-- Ratios at or below `1.0` contribute no risk on this component.
-- Risk then ramps up as the portfolio becomes more volatile than the benchmark and reaches
-  the cap at a ratio of `2.0x`.
+- A high score here means diversification is weaker than it first appears.
 
-**Low value means**
+## 2. Behavior Metrics
 
-- The portfolio was no more volatile than the S&P 500, or only modestly more volatile.
+These metrics ask:
 
-**High value means**
-
-- The portfolio was materially more volatile than the S&P 500 over the same horizon.
-
-**How it influences overall risk**
-
-- It raises `market_risk`.
-
-### `market::relative_drawdown_to_benchmark`
-
-**What it measures**
-
-- The portfolio's recency-weighted drawdown severity relative to the S&P 500's drawdown
-  severity over the same horizon.
-
-**Plain-English question**
-
-- Has this portfolio suffered worse downside than the S&P 500, or was it roughly in line
-  with the market?
-
-**Why it matters**
-
-- This makes the score fairer in turbulent markets. A big drawdown only counts as portfolio
-  risk if it was worse than what a simple S&P 500 investor experienced over comparable periods.
-
-**How the current model uses it**
-
-- The app first converts both the portfolio and the trade-matched S&P 500 into
-  flow-adjusted performance indices so capital flows do not get mistaken for drawdowns.
-- The app computes recency-weighted drawdowns for both the portfolio and the S&P 500 using
-  overlapping rolling 6-month windows.
-- A smaller long-history memory term is blended back in for both series so older severe
-  drawdowns still matter a bit.
-- It then computes:
-
-```text
-drawdown_ratio = blended_portfolio_drawdown / blended_benchmark_drawdown
-```
-
-- A ratio of `1.0` means the portfolio's downside was roughly in line with the S&P 500.
-- Ratios at or below `1.0` contribute no risk on this component.
-- Risk ramps up only when the portfolio's drawdown is worse than the benchmark and reaches
-  the cap at a ratio of `2.0x`.
-- Current settings in the app:
-  - Rolling window: `183 days`
-  - Recency half-life: `365 days`
-  - Full-history memory weight: `25%`
-
-**Low value means**
-
-- The portfolio's downside was in line with, or better than, the S&P 500.
-
-**High value means**
-
-- The portfolio has suffered materially worse drawdowns than the S&P 500 over the same horizon.
-
-**How it influences overall risk**
-
-- It raises `market_risk`.
-
-### `market::relative_downside_capture_to_benchmark`
-
-**What it measures**
-
-- How the portfolio behaves relative to the S&P 500 during rolling 6-month windows when
-  the benchmark is falling.
-
-**Plain-English question**
-
-- In recent bad-market periods, does this portfolio fall less than the S&P 500, about the
-  same, or more?
-
-**Why it matters**
-
-- It focuses on bad-market behavior and makes recent downside sensitivity matter more than
-  distant market history.
-
-**How the current model uses it**
-
-- The app computes downside capture across overlapping rolling 6-month windows using the
-  flow-adjusted portfolio and benchmark return series.
-- Recent windows get more weight through exponential recency weighting.
-- It then computes a weighted benchmark-relative ratio:
-
-```text
-relative_downside_capture = weighted portfolio loss on benchmark down days
-                            /
-                            weighted benchmark loss on benchmark down days
-```
-
-- A ratio of `1.0` means the portfolio behaved about like the S&P 500 during bad periods.
-- Ratios at or below `1.0` contribute no risk on this component.
-- Risk ramps up when the portfolio loses more than the benchmark and reaches the cap at
-  roughly `1.15x`.
-- Current settings in the app:
-  - Rolling window: `183 days`
-  - Recency half-life: `365 days`
-
-**Interpretation**
-
-- Below `1`: the portfolio tends to lose less than the benchmark on bad days
-- Around `1`: similar downside behavior to the benchmark
-- Above `1`: tends to lose more than the benchmark on bad days
-
-**Low value means**
-
-- More defensive downside behavior relative to the S&P 500.
-
-**High value means**
-
-- More aggressive downside behavior relative to the S&P 500.
-
-**How it influences overall risk**
-
-- It raises `market_risk`.
-
-### `market::relative_market_sensitivity_to_benchmark`
-
-**What it measures**
-
-- The portfolio's rolling market sensitivity to the S&P 500, using recency-weighted 6-month windows.
-
-**Plain-English question**
-
-- How strongly has the portfolio been moving with the S&P 500 in recent market regimes?
-
-**Why it matters**
-
-- This captures whether the portfolio has recently been amplifying or dampening broad market moves,
-  while giving more weight to current behavior than old history.
-
-**How the current model uses it**
-
-- The app computes rolling market sensitivity across overlapping 6-month windows using the
-  flow-adjusted portfolio and benchmark return series.
-- Recent windows get more weight through exponential recency weighting.
-- This produces a single weighted market-sensitivity value that is normalized against
-  roughly `1.25`.
-
-**Interpretation**
-
-- `< 1`: less sensitive than the market
-- `~ 1`: behaves roughly like the market
-- `> 1`: more sensitive than the market
-
-**Low value means**
-
-- Lower market sensitivity.
-
-**High value means**
-
-- Higher market sensitivity and more aggressive market exposure.
-
-**How it influences overall risk**
-
-- It raises `market_risk`.
-
-### `market::equity_exposure`
-
-**What it measures**
-
-- The invested portfolio value divided by total account value estimate.
-
-**Plain-English question**
-
-- How much of the account is actually exposed to market risk instead of sitting in cash?
-
-**Why it matters**
-
-- A fully invested account is more exposed to market moves than an account holding significant idle cash.
-
-**How the current model uses it**
-
-- It is normalized against `1.0`.
-
-**Low value means**
-
-- More cash buffer and less immediate market exposure.
-
-**High value means**
-
-- Most or all capital is currently exposed to the market.
-
-**How it influences overall risk**
-
-- It raises `market_risk`.
-
-## Behavioral Metrics
-
-These metrics measure how aggressive the investor’s behavior looks based on actual trading patterns.
+> Does the investor’s actual behavior look patient and long-term, or more reactive and churn-heavy?
 
 ### `behavior::turnover`
 
-**What it measures**
+**Label in the app**
 
-- Annualized turnover proxy based on sell activity relative to buy activity.
+- Trading churn
 
 **Plain-English question**
 
-- How actively is the investor trading?
+- How much of the portfolio are you trading instead of holding?
+
+**What it means**
+
+- Turnover measures how much of the portfolio is being rotated through selling over time.
 
 **Why it matters**
 
-- Higher turnover often suggests a more active, tactical, or speculative style.
+- More turnover usually means more decisions, more timing risk, and more opportunities for behavior to hurt outcomes.
+- High turnover does not automatically mean “bad.”
+- It does mean behavior is playing a bigger role.
 
-**How the current model uses it**
+**How to read the score**
 
-- It is normalized against roughly `0.50`.
+- Low score: calmer, more buy-and-hold behavior
+- High score: more active, more tactical, more churn
 
-**Low value means**
+**Bigger picture**
 
-- Low churn and more accumulation-and-hold behavior.
-
-**High value means**
-
-- More active trading and more speculative behavior.
-
-**How it influences overall risk**
-
-- It raises `behavioral_risk`.
+- A high score here means the investor’s style is more active and decision-heavy than a patient long-term style.
 
 ### `behavior::short_holding_period`
 
-**What it measures**
+**Label in the app**
 
-- How short the capital-weighted median holding period is across both open and closed lots.
+- How long your dollars stay invested
 
 **Plain-English question**
 
-- How long are the investor’s dollars typically held before being sold or before today if still open?
+- How long do your invested dollars usually stay in positions?
+
+**What it means**
+
+- This measures how long larger investments are held, not just how long tiny trades are held.
+- The current model uses a capital-weighted holding period so bigger dollar decisions matter more than small flips.
 
 **Why it matters**
 
-- A plain trade-count median can be distorted by tiny speculative positions.
-- Weighting by cost basis makes larger capital commitments matter more than tiny flips.
+- A plain median holding period can be distorted by tiny speculative trades.
+- Weighting by invested dollars makes the metric better reflect real investor behavior.
 
-**How the current model uses it**
+**How to read the score**
 
-- It uses an `18-month` target, which is about `548 days`.
-- It computes a cost-basis-weighted median holding duration across:
-  - closed lots: `sell_date - buy_date`
-  - open lots: `today - buy_date`
-- Shorter capital-weighted holding periods increase risk.
+- Low score: bigger dollars are usually being held for longer
+- High score: bigger dollars are being rotated out faster
 
-The current normalization is:
+**Bigger picture**
 
-```text
-short_holding_period_risk =
-1 - min(capital_weighted_median_holding_days / 548, 1)
-```
+- A high score here means meaningful capital is being cycled faster than a long-term investing profile would suggest.
 
-**Low value means**
+## 3. Market Metrics
 
-- The investor’s dollars are generally held for long enough to resemble patient, longer-term investing.
+These metrics ask:
 
-**High value means**
+> How has the portfolio behaved relative to the S&P 500, and how much of the account is exposed to that behavior?
 
-- The investor’s dollars are typically rotated out more quickly.
-- This suggests more active or tactical behavior.
+### `market::relative_volatility_to_benchmark`
 
-**How it influences overall risk**
+**Label in the app**
 
-- It raises `behavioral_risk`.
+- Volatility vs S&P 500
 
-## How Component Metrics Roll Up
+**Plain-English question**
 
-The component metrics are averaged inside each dimension.
+- Has the portfolio been swinging around more than the market?
 
-### `concentration_risk`
+**What it means**
+
+- This compares the portfolio’s rolling volatility to the S&P 500 over comparable periods.
+- It is benchmark-relative on purpose.
+
+**Why it matters**
+
+- If the whole market was volatile, that should not automatically count against the portfolio.
+- This metric only penalizes the portfolio for being more volatile than the S&P 500, not for living through a rough market.
+
+**How to read the score**
+
+- Low score: volatility is market-like or calmer
+- High score: the portfolio has been materially more volatile than the market
+
+**Bigger picture**
+
+- A high score here means the ride has been rougher than a simple S&P 500 portfolio.
+
+### `market::relative_drawdown_to_benchmark`
+
+**Label in the app**
+
+- Downside depth vs S&P 500
+
+**Plain-English question**
+
+- When the portfolio goes through a bad stretch, is the drop deeper than the S&P 500’s?
+
+**What it means**
+
+- This compares rolling 6-month drawdown depth in the portfolio to rolling 6-month drawdown depth in the S&P 500.
+- Recent periods matter more than old periods in the score.
+
+**Why it matters**
+
+- Investors usually feel drawdowns more than volatility.
+- A portfolio should not be called “risky” just because the market had a bad stretch.
+- It should be called riskier if its downside was worse than the market’s downside.
+
+**How to read the score**
+
+- Low score: recent drawdowns have been in line with or better than the benchmark
+- High score: recent downside has been deeper than the market’s
+
+**Bigger picture**
+
+- A high score here means the painful periods have been worse than what a simple S&P 500 investor experienced.
+
+### `market::relative_downside_capture_to_benchmark`
+
+**Label in the app**
+
+- Bad-day behavior vs S&P 500
+
+**Plain-English question**
+
+- On bad market days, does the portfolio hold up better than the S&P 500, about the same, or worse?
+
+**What it means**
+
+- This looks specifically at market down days and asks whether the portfolio tends to lose less than the benchmark, about the same, or more.
+
+**Why it matters**
+
+- This is a very intuitive stress metric.
+- It tells you what the portfolio tends to do on the days people care about most: the red days.
+
+**How to read the score**
+
+- Low score: the portfolio usually holds up at least as well as the S&P 500 on bad days
+- High score: the portfolio tends to lose more than the market during stress
+
+**Bigger picture**
+
+- A high score here means the portfolio amplifies pain when the market is already weak.
+
+### `market::relative_market_sensitivity_to_benchmark`
+
+**Label in the app**
+
+- Market sensitivity vs S&P 500
+
+**Plain-English question**
+
+- When the S&P 500 moves, does the portfolio usually move about the same, less, or more?
+
+**What it means**
+
+- This is the portfolio’s recent market sensitivity relative to the S&P 500.
+- It is based on rolling 6-month windows, with recent periods emphasized.
+
+**Why it matters**
+
+- Some portfolios do not just move with the market. They amplify it.
+- This metric captures whether the portfolio has recently been behaving like a higher-octane version of the S&P 500.
+
+**How to read the score**
+
+- Low score: the portfolio is moving roughly in line with the market or a bit more defensively
+- High score: the portfolio is amplifying broad market moves
+
+**Bigger picture**
+
+- A high score here means the account has been more market-sensitive than a simple benchmark portfolio.
+
+### `market::equity_exposure`
+
+**Label in the app**
+
+- How fully invested you are
+
+**Plain-English question**
+
+- How much of the account is actually exposed to market risk right now?
+
+**What it means**
+
+- This compares invested holdings to total account value.
+- In simple terms, it asks how much of the account is in the market versus sitting in cash.
+
+**Why it matters**
+
+- Two investors can own similar holdings, but the one who is fully invested has more immediate market exposure than the one with a meaningful cash buffer.
+
+**How to read the score**
+
+- Low score: more cash cushion and less immediate market exposure
+- High score: most of the account is participating directly in market moves
+
+**Bigger picture**
+
+- A high score here means more of the account is riding market gains and losses right now.
+
+## How The Metrics Roll Up
+
+### Concentration Risk
 
 Average of:
 
@@ -486,7 +374,7 @@ Average of:
 - `concentration::top_5_weight`
 - `concentration::effective_holdings`
 
-### `market_risk`
+### Market Risk
 
 Average of:
 
@@ -496,92 +384,27 @@ Average of:
 - `market::relative_market_sensitivity_to_benchmark`
 - `market::equity_exposure`
 
-### `behavioral_risk`
+### Behavioral Risk
 
 Average of:
 
 - `behavior::turnover`
 - `behavior::short_holding_period`
 
-## How Dimension Scores Roll Up Into Final Risk
+## Final Reminder
 
-Once each dimension score is computed, the final score is:
+This score is best used to answer:
 
-```text
-overall_risk_score =
-  0.4 * concentration_risk
-+ 0.4 * market_risk
-+ 0.2 * behavioral_risk
-```
+- How concentrated is the portfolio?
+- How has it behaved relative to the S&P 500?
+- Does the investor’s behavior look patient or churn-heavy?
 
-So:
+It is not yet the final word on:
 
-- concentration contributes `40%`
-- market contributes `40%`
-- behavior contributes `20%`
+- personal suitability
+- future returns
+- whether the portfolio is “good” or “bad”
 
-## Example
+It is a structured way of saying:
 
-If the dimension scores are:
-
-- `concentration_risk = 53.4`
-- `market_risk = 71.5`
-- `behavioral_risk = 2.3`
-
-Then the approximate final score is:
-
-```text
-0.4 * 53.4 = 21.36
-0.4 * 71.5 = 28.60
-0.2 * 2.3  = 0.46
-
-Total ≈ 50.42
-```
-
-That gives an overall observed risk score around `50.4/100`.
-
-If the UI shows something like `50.7`, that is usually because:
-
-- the dimension scores shown in the interface are rounded
-- the final risk score is calculated from unrounded internal values
-
-## How To Interpret High and Low Values
-
-### Low values across most metrics
-
-- better diversification
-- smoother portfolio behavior
-- less aggressive trading style
-- lower overall observed risk
-
-### High concentration metrics
-
-- portfolio is more dependent on a few names
-- stock-specific risk matters more
-
-### High market metrics
-
-- portfolio behaves more aggressively in real market conditions
-- higher volatility, bigger drawdowns, higher benchmark sensitivity
-
-### High behavioral metrics
-
-- investor behavior itself appears more aggressive or reactive
-- more trading-driven risk
-
-## Important Caveat
-
-These scores describe:
-
-- observed portfolio risk
-- observed market behavior
-- observed trading behavior
-
-They do **not** fully describe:
-
-- future return potential
-- investor suitability
-- risk capacity
-- whether the portfolio is fundamentally strong or weak
-
-This is a practical MVP risk framework, not a complete wealth-management risk engine.
+> Based on the holdings, behavior, and market history we can observe, how much risk does this portfolio appear to be taking?

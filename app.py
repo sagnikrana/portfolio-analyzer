@@ -1652,65 +1652,243 @@ def metric_explanations() -> dict[str, dict[str, str]]:
     return {
         "concentration::single_position_weight": {
             "group": "Concentration",
+            "anchor": "risk-guide-single-position-weight",
             "label": "Largest position size",
             "meaning": "Checks whether one holding is large enough to dominate the portfolio.",
             "bigger_picture": "A high score means one stock can strongly drive the whole account.",
+            "question": "How dependent is the portfolio on one stock?",
+            "why_it_matters": "Even a great company can create fragile portfolio risk if it grows too large. The bigger one position gets, the more your whole result depends on that one name.",
+            "score_reading": "A low score means no single stock dominates. A high score means one stock can meaningfully move the whole portfolio.",
+            "low_means": "No one position has enough weight to dominate outcomes on its own.",
+            "high_means": "One holding is large enough that a bad move there can materially hurt the full account.",
         },
         "concentration::top_5_weight": {
             "group": "Concentration",
+            "anchor": "risk-guide-top-five-weight",
             "label": "Top 5 holdings dominance",
             "meaning": "Checks whether just a few names are carrying most of the portfolio.",
             "bigger_picture": "A high score means your results depend heavily on a small cluster of stocks.",
+            "question": "Are a few holdings driving most of the portfolio?",
+            "why_it_matters": "A portfolio can look diversified by ticker count but still be heavily concentrated if most of the money sits in the top few names.",
+            "score_reading": "A low score means capital is spread more broadly. A high score means a small group of names is carrying too much of the portfolio.",
+            "low_means": "Your top five holdings do not control most of the portfolio.",
+            "high_means": "A handful of stocks are doing most of the work, so diversification is thinner than it first appears.",
         },
         "concentration::effective_holdings": {
             "group": "Concentration",
+            "anchor": "risk-guide-effective-holdings",
             "label": "True diversification",
             "meaning": "Looks past ticker count and asks how many holdings really matter after concentration is considered.",
             "bigger_picture": "A high score means the portfolio is less diversified than it appears at first glance.",
+            "question": "How many holdings really matter once concentration is taken into account?",
+            "why_it_matters": "Owning many tickers is not the same as being well diversified. If the money is unevenly spread, the portfolio can behave like it has far fewer real positions.",
+            "score_reading": "A low score means the portfolio behaves like it has many meaningful positions. A high score means it behaves like only a smaller set truly matters.",
+            "low_means": "Diversification is broad relative to the number of meaningful positions you actually hold.",
+            "high_means": "The portfolio acts more concentrated than its ticker count suggests.",
         },
         "behavior::turnover": {
             "group": "Behavior",
+            "anchor": "risk-guide-turnover",
             "label": "Trading churn",
             "meaning": "Measures how much of the portfolio you rotate through selling over time.",
             "bigger_picture": "A high score means your style is more active and decision-heavy than buy-and-hold.",
+            "question": "How much of the portfolio are you trading instead of holding?",
+            "why_it_matters": "Higher turnover usually means more decisions, more timing risk, and a more active style. It does not automatically mean bad investing, but it does mean behavior matters more.",
+            "score_reading": "A low score means your trading style looks calmer and more buy-and-hold. A high score means you are rotating capital more actively.",
+            "low_means": "You are mostly accumulating and holding positions rather than constantly cycling through them.",
+            "high_means": "You are trading more actively, which adds behavioral risk even if the holdings themselves are reasonable.",
         },
         "behavior::short_holding_period": {
             "group": "Behavior",
+            "anchor": "risk-guide-short-holding-period",
             "label": "How long your dollars stay invested",
             "meaning": "Measures whether larger investments are being held long enough to look like long-term investing.",
             "bigger_picture": "A high score means bigger dollars are being cycled out faster than a long-term profile would suggest.",
+            "question": "How long do your invested dollars usually stay in positions?",
+            "why_it_matters": "This metric gives more weight to larger investments than tiny trades, so it reflects your real capital behavior instead of being distorted by small speculative flips.",
+            "score_reading": "A low score means your bigger dollars are staying invested for longer. A high score means meaningful capital is being turned over sooner.",
+            "low_means": "Your larger investments are generally held long enough to look patient and long-term.",
+            "high_means": "Your larger investments are being rotated out faster than an 18-month long-term benchmark would suggest.",
         },
         "market::relative_volatility_to_benchmark": {
             "group": "Market",
+            "anchor": "risk-guide-relative-volatility",
             "label": "Volatility vs S&P 500",
             "meaning": "Checks whether your portfolio swings around more than the S&P 500 over comparable periods.",
             "bigger_picture": "A high score means your ride has been rougher than the market's ride.",
+            "question": "Has the portfolio been swinging around more than the market?",
+            "why_it_matters": "This keeps the score fair. If the whole market was volatile, the portfolio is only penalized for being more volatile than the S&P 500, not for simply living through a rough market.",
+            "score_reading": "A low score means your volatility has been close to, or below, the S&P 500. A high score means the ride has been rougher than the market over comparable periods.",
+            "low_means": "Your recent 6-month rolling volatility has looked broadly market-like or calmer.",
+            "high_means": "Your portfolio has been moving around materially more than the S&P 500 over the same kinds of periods.",
         },
         "market::relative_drawdown_to_benchmark": {
             "group": "Market",
+            "anchor": "risk-guide-relative-drawdown",
             "label": "Downside depth vs S&P 500",
             "meaning": "Checks whether your portfolio's bad stretches have been deeper than the S&P 500's.",
             "bigger_picture": "A high score means your losses in rough periods have been worse than a simple market portfolio.",
+            "question": "When the portfolio goes through a bad stretch, is the drop deeper than the S&P 500's?",
+            "why_it_matters": "Investors usually feel drawdowns more than volatility. This metric compares your downside depth to the market so the score reflects pain beyond what a simple S&P 500 investor experienced.",
+            "score_reading": "A low score means recent rolling drawdowns have been similar to, or better than, the benchmark. A high score means your downside has been materially worse than the market's.",
+            "low_means": "Your drawdown depth has been in line with or better than the S&P 500.",
+            "high_means": "Your bad periods have been deeper than what a simple market portfolio would have gone through.",
         },
         "market::relative_downside_capture_to_benchmark": {
             "group": "Market",
+            "anchor": "risk-guide-relative-downside-capture",
             "label": "Bad-day behavior vs S&P 500",
             "meaning": "Checks how your portfolio tends to behave on market down days compared with the S&P 500.",
             "bigger_picture": "A high score means your portfolio tends to lose more than the market when the market is already under stress.",
+            "question": "On bad market days, does the portfolio hold up better than the S&P 500, about the same, or worse?",
+            "why_it_matters": "This focuses on the days investors care about most: the down days. It tells you whether your portfolio tends to amplify market pain when the market is already red.",
+            "score_reading": "A low score means your portfolio has usually held up at least as well as the S&P 500 on bad days. A high score means it tends to lose more than the benchmark during stress.",
+            "low_means": "Your portfolio has been relatively defensive, or at least not worse than the S&P 500, on down-market days.",
+            "high_means": "Your portfolio tends to lose more than the S&P 500 when the market is already falling.",
         },
         "market::relative_market_sensitivity_to_benchmark": {
             "group": "Market",
+            "anchor": "risk-guide-relative-market-sensitivity",
             "label": "Market sensitivity vs S&P 500",
             "meaning": "Checks how strongly your portfolio tends to move when the S&P 500 moves.",
             "bigger_picture": "A high score means your portfolio has been amplifying broad market moves rather than moving in line with them.",
+            "question": "When the S&P 500 moves, does your portfolio usually move about the same, less, or more?",
+            "why_it_matters": "Some portfolios do not just move with the market, they amplify it. This metric captures how strongly your portfolio reacts to broad market moves over recent 6-month windows.",
+            "score_reading": "A low score means your market sensitivity is close to, or below, the S&P 500. A high score means the portfolio has been amplifying market moves.",
+            "low_means": "Your portfolio has behaved roughly like the market or a bit more defensively.",
+            "high_means": "Your portfolio has tended to move more than the S&P 500 when the market moves.",
         },
         "market::equity_exposure": {
             "group": "Market",
+            "anchor": "risk-guide-equity-exposure",
             "label": "How fully invested you are",
             "meaning": "Checks how much of your account is currently in the market rather than sitting in cash.",
             "bigger_picture": "A high score means more of your account is directly exposed to market gains and losses right now.",
+            "question": "How much of the account is actually exposed to market risk right now?",
+            "why_it_matters": "Two investors can own the same stocks but have very different immediate market risk if one is fully invested and the other is holding a meaningful cash buffer.",
+            "score_reading": "A low score means more of the account is sitting in cash. A high score means most of the account is riding market gains and losses right now.",
+            "low_means": "You have more cash cushion and less immediate market exposure.",
+            "high_means": "Most of the account is deployed into the market, so more of your capital participates in market swings.",
         },
     }
+
+
+def metric_group_order() -> list[tuple[str, list[str], str]]:
+    return [
+        (
+            "Concentration",
+            [
+                "concentration::single_position_weight",
+                "concentration::top_5_weight",
+                "concentration::effective_holdings",
+            ],
+            "These metrics ask whether a small number of holdings can drive too much of the portfolio.",
+        ),
+        (
+            "Behavior",
+            [
+                "behavior::turnover",
+                "behavior::short_holding_period",
+            ],
+            "These metrics ask whether your real investing behavior looks patient and steady or more reactive and active.",
+        ),
+        (
+            "Market",
+            [
+                "market::relative_volatility_to_benchmark",
+                "market::relative_drawdown_to_benchmark",
+                "market::relative_downside_capture_to_benchmark",
+                "market::relative_market_sensitivity_to_benchmark",
+                "market::equity_exposure",
+            ],
+            "These metrics ask how your portfolio has behaved relative to the S&P 500 and how much of your money is exposed to that behavior.",
+        ),
+    ]
+
+
+def risk_guide_link_script() -> str:
+    return """
+<script>
+window.__openRiskGuideSection = function(anchorId) {
+  const tabButton = Array.from(document.querySelectorAll('button')).find(
+    (btn) => btn.textContent && btn.textContent.trim() === 'Risk Guide'
+  );
+  if (tabButton) {
+    tabButton.click();
+  }
+  window.setTimeout(() => {
+    const target = document.getElementById(anchorId);
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, 120);
+  return false;
+};
+</script>
+"""
+
+
+def build_risk_guide_html(risk: dict[str, Any]) -> str:
+    explanations = metric_explanations()
+    component_scores = risk["component_scores"]
+    dimension_scores = risk["dimension_scores"]
+
+    def section_card(metric_key: str) -> str:
+        info = explanations[metric_key]
+        score = float(component_scores.get(metric_key, 0.0))
+        return (
+            f"<section id='{info['anchor']}' style='padding:18px;border:1px solid rgba(148,163,184,.18);"
+            "border-radius:18px;background:rgba(15,23,42,.34);scroll-margin-top:16px'>"
+            f"<div style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em'>{info['group']}</div>"
+            f"<div style='font-size:22px;font-weight:700;color:#f8fafc;margin-top:6px'>{info['label']}</div>"
+            f"<div style='font-size:13px;color:#93c5fd;margin-top:6px'>Current score: {score:.1f}/100 · {score_readout(score)}</div>"
+            f"<div style='font-size:15px;color:#e2e8f0;margin-top:14px'><strong>What this metric is asking:</strong> {info['question']}</div>"
+            f"<div style='font-size:14px;color:#cbd5e1;margin-top:12px'><strong>Plain-English meaning:</strong> {info['meaning']}</div>"
+            f"<div style='font-size:14px;color:#cbd5e1;margin-top:10px'><strong>Why it matters:</strong> {info['why_it_matters']}</div>"
+            f"<div style='font-size:14px;color:#cbd5e1;margin-top:10px'><strong>How to read the score:</strong> {info['score_reading']}</div>"
+            f"<div style='font-size:14px;color:#cbd5e1;margin-top:10px'><strong>Low score usually means:</strong> {info['low_means']}</div>"
+            f"<div style='font-size:14px;color:#cbd5e1;margin-top:10px'><strong>High score usually means:</strong> {info['high_means']}</div>"
+            f"<div style='font-size:14px;color:#e2e8f0;margin-top:12px'><strong>Bigger picture:</strong> {info['bigger_picture']}</div>"
+            "</section>"
+        )
+
+    group_sections = []
+    for group_name, metric_keys, subtitle in metric_group_order():
+        dimension_key = f"{group_name.lower()}_risk"
+        score = float(dimension_scores.get(dimension_key, 0.0))
+        toc_links = "".join(
+            f"<a href='#{explanations[key]['anchor']}' "
+            f"onclick=\"return window.__openRiskGuideSection && window.__openRiskGuideSection('{explanations[key]['anchor']}');\" "
+            "style='display:inline-block;margin:0 8px 8px 0;padding:6px 10px;border-radius:999px;"
+            "background:rgba(59,130,246,.12);color:#bfdbfe;text-decoration:none;font-size:12px'>"
+            f"{explanations[key]['label']}</a>"
+            for key in metric_keys
+        )
+        section_cards = "".join(section_card(key) for key in metric_keys)
+        group_sections.append(
+            "<div style='display:grid;gap:14px'>"
+            f"<div style='padding:16px;border:1px solid rgba(148,163,184,.16);border-radius:16px;background:rgba(15,23,42,.28)'>"
+            f"<div style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em'>{group_name} Risk</div>"
+            f"<div style='font-size:28px;font-weight:700;color:#f8fafc;margin-top:8px'>{score:.1f}/100</div>"
+            f"<div style='font-size:14px;color:#cbd5e1;margin-top:8px'>{subtitle}</div>"
+            f"<div style='margin-top:12px'>{toc_links}</div>"
+            "</div>"
+            f"{section_cards}"
+            "</div>"
+        )
+
+    return (
+        risk_guide_link_script()
+        + "<div id='risk-guide-top' style='display:grid;gap:16px'>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.96))'>"
+        "<div style='font-size:28px;font-weight:700;color:#f8fafc'>Risk Guide</div>"
+        "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>This guide explains what each risk metric is trying to measure in plain English. The goal is not just to show scores, but to help the user understand what those scores are saying about the portfolio.</div>"
+        "<div style='font-size:14px;color:#cbd5e1;margin-top:12px'><strong>How the overall score works:</strong> concentration risk is 40% of the final score, market risk is 40%, and behavior risk is 20%.</div>"
+        "</div>"
+        + "".join(group_sections)
+        + "</div>"
+    )
 
 
 def build_risk_explainer_html(risk: dict[str, Any]) -> str:
@@ -1722,12 +1900,16 @@ def build_risk_explainer_html(risk: dict[str, Any]) -> str:
         info = explanations[metric_key]
         score = float(component_scores.get(metric_key, 0.0))
         return (
+            f"<a href='#{info['anchor']}' "
+            f"onclick=\"return window.__openRiskGuideSection && window.__openRiskGuideSection('{info['anchor']}');\" "
+            "style='text-decoration:none;color:inherit'>"
             "<div style='padding:10px 12px;border:1px solid rgba(148,163,184,.16);"
-            "border-radius:12px;background:rgba(15,23,42,.38)'>"
+            "border-radius:12px;background:rgba(15,23,42,.38);min-height:120px'>"
             f"<div style='font-size:13px;color:#e2e8f0;font-weight:600'>{info['label']}</div>"
             f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>{info['bigger_picture']}</div>"
             f"<div style='font-size:12px;color:#93c5fd;margin-top:8px'>Score: {score:.1f}/100 · {score_readout(score)}</div>"
-            "</div>"
+            "<div style='font-size:11px;color:#60a5fa;margin-top:8px'>Open full explanation</div>"
+            "</div></a>"
         )
 
     def render_dimension_card(title: str, score: float, subtitle: str) -> str:
@@ -1741,23 +1923,6 @@ def build_risk_explainer_html(risk: dict[str, Any]) -> str:
             "</div>"
         )
 
-    concentration_metrics = [
-        "concentration::single_position_weight",
-        "concentration::top_5_weight",
-        "concentration::effective_holdings",
-    ]
-    behavior_metrics = [
-        "behavior::turnover",
-        "behavior::short_holding_period",
-    ]
-    market_metrics = [
-        "market::relative_volatility_to_benchmark",
-        "market::relative_drawdown_to_benchmark",
-        "market::relative_downside_capture_to_benchmark",
-        "market::relative_market_sensitivity_to_benchmark",
-        "market::equity_exposure",
-    ]
-
     observed_vs_stated = (
         "about in line with your stated risk"
         if abs(risk["difference_vs_stated"]) < 8
@@ -1768,31 +1933,29 @@ def build_risk_explainer_html(risk: dict[str, Any]) -> str:
     observed_subtitle = f"{risk['band']} · {observed_vs_stated}"
     market_subtitle = f"Relative to S&P 500 · Confidence: {risk['confidence_band']}"
 
+    group_html = []
+    for group_name, metric_keys, subtitle in metric_group_order():
+        group_html.append(
+            "<div style='padding:16px;border:1px solid rgba(148,163,184,.16);border-radius:16px;background:rgba(15,23,42,.28)'>"
+            f"<div style='font-size:18px;font-weight:700;color:#f8fafc'>{group_name}</div>"
+            f"<div style='font-size:13px;color:#cbd5e1;margin-top:4px'>{subtitle}</div>"
+            f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px'>{''.join(render_metric(metric) for metric in metric_keys)}</div>"
+            "</div>"
+        )
+
     # Keep the explanation layer compact so the tab feels like a dashboard, not a document.
     return (
-        "<div style='display:grid;gap:16px'>"
+        risk_guide_link_script()
+        + "<div style='display:grid;gap:16px'>"
         "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px'>"
         f"{render_dimension_card('Observed Risk', risk['score'], observed_subtitle)}"
         f"{render_dimension_card('Concentration', dimension_scores['concentration_risk'], 'How much a few holdings can dominate outcomes')}"
         f"{render_dimension_card('Behavior', dimension_scores['behavioral_risk'], 'How patient or active your investing style looks')}"
         f"{render_dimension_card('Market', dimension_scores['market_risk'], market_subtitle)}"
         "</div>"
+        "<div style='font-size:12px;color:#60a5fa'>Click any metric card to open the full explanation in the Risk Guide tab.</div>"
         "<div style='display:grid;gap:14px'>"
-        "<div style='padding:16px;border:1px solid rgba(148,163,184,.16);border-radius:16px;background:rgba(15,23,42,.28)'>"
-        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>1. Concentration</div>"
-        "<div style='font-size:13px;color:#cbd5e1;margin-top:4px'>These scores show whether a small number of holdings can drive too much of the portfolio.</div>"
-        f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px'>{''.join(render_metric(metric) for metric in concentration_metrics)}</div>"
-        "</div>"
-        "<div style='padding:16px;border:1px solid rgba(148,163,184,.16);border-radius:16px;background:rgba(15,23,42,.28)'>"
-        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>2. Behavior</div>"
-        "<div style='font-size:13px;color:#cbd5e1;margin-top:4px'>These scores show whether your real trading pattern looks steady and long-term or more reactive.</div>"
-        f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px'>{''.join(render_metric(metric) for metric in behavior_metrics)}</div>"
-        "</div>"
-        "<div style='padding:16px;border:1px solid rgba(148,163,184,.16);border-radius:16px;background:rgba(15,23,42,.28)'>"
-        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>3. Market</div>"
-        "<div style='font-size:13px;color:#cbd5e1;margin-top:4px'>These scores show how your portfolio has behaved against the S&P 500 in real market conditions.</div>"
-        f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px'>{''.join(render_metric(metric) for metric in market_metrics)}</div>"
-        "</div>"
+        f"{''.join(group_html)}"
         "</div>"
         "</div>"
     )
@@ -3049,6 +3212,7 @@ def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: 
     insight_md = resolve_ollama_analysis(payload, risk_profile, model_name, use_ollama)
     headline = market_metrics["headline_metrics"]
     risk = market_metrics["risk_score"]
+    risk_guide_html = build_risk_guide_html(risk)
     eq_fig = plot_equity_curves(market_metrics["timeseries"])
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
     recent_volatility_fig = plot_recent_volatility_comparison(market_metrics["timeseries"])
@@ -3076,6 +3240,7 @@ def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: 
         overview_md,
         benchmark_md,
         risk_md,
+        risk_guide_html,
         insight_md,
         tables["holdings"],
         tables["attribution"],
@@ -3149,6 +3314,8 @@ def build_app() -> gr.Blocks:
                         recent_volatility_plot = gr.Plot(label="Recent Volatility vs S&P 500")
                         risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
                         drawdown_plot = gr.Plot(label="Drawdown Comparison")
+                    with gr.Tab("Risk Guide"):
+                        risk_guide_md = gr.HTML()
                     with gr.Tab("Benchmark"):
                         benchmark_md = gr.Markdown()
                         selection_alpha_df = gr.Dataframe(label="Ticker Alpha vs Benchmark", interactive=False)
@@ -3167,6 +3334,7 @@ def build_app() -> gr.Blocks:
                 overview_md,
                 benchmark_md,
                 risk_md,
+                risk_guide_md,
                 insight_md,
                 holdings_df,
                 attribution_df,
