@@ -29,6 +29,7 @@ ROLLING_DRAWDOWN_MEMORY_WEIGHT = 0.25
 ROLLING_DRAWDOWN_HALF_LIFE_DAYS = round(365.25)
 BENCHMARK_RELATIVE_RISK_MAX_RATIO = 2.0
 RELATIVE_DOWNSIDE_CAPTURE_MAX_RATIO = 1.15
+RELATIVE_MARKET_SENSITIVITY_MAX_RATIO = 1.75
 VERY_HIGH_CONCERN_SCORE = 80.0
 RECENT_RISK_CHART_DAYS = round(365.25 * 1.5)
 WEEKLY_FLOW_DOMINANCE_LIMIT = 0.25
@@ -862,8 +863,9 @@ def compute_observed_risk_score(
             relative_downside_capture_to_benchmark,
             max_ratio=RELATIVE_DOWNSIDE_CAPTURE_MAX_RATIO,
         ),
-        "relative_market_sensitivity_to_benchmark": clip01(
-            (relative_market_sensitivity_to_benchmark or 0.0) / 1.25
+        "relative_market_sensitivity_to_benchmark": score_relative_to_benchmark(
+            relative_market_sensitivity_to_benchmark,
+            max_ratio=RELATIVE_MARKET_SENSITIVITY_MAX_RATIO,
         ),
         "equity_exposure": clip01((equity_exposure or 0.0) / 1.0),
     }
@@ -2609,11 +2611,25 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                 col=1,
             )
             fig.add_hline(y=1.0, line_dash="dash", line_color="#10B981", row=row_idx, col=1)
-            fig.add_hline(y=1.25, line_dash="dot", line_color="#F59E0B", row=row_idx, col=1)
+            fig.add_hline(
+                y=RELATIVE_MARKET_SENSITIVITY_MAX_RATIO,
+                line_dash="dot",
+                line_color="#F59E0B",
+                row=row_idx,
+                col=1,
+            )
             if x_values:
                 add_latest_annotation(fig, x_values[-1], float(y_values[-1]), f"Latest: {y_values[-1]:.2f}x", "#A855F7", row=row_idx, col=1)
             fig.update_yaxes(title_text="x Benchmark", row=row_idx, col=1)
-            fig.update_yaxes(range=padded_axis_range(y_values, baseline_values=[1.0, 1.25], min_padding=0.08), row=row_idx, col=1)
+            fig.update_yaxes(
+                range=padded_axis_range(
+                    y_values,
+                    baseline_values=[1.0, RELATIVE_MARKET_SENSITIVITY_MAX_RATIO],
+                    min_padding=0.08,
+                ),
+                row=row_idx,
+                col=1,
+            )
         elif kind == "equity_exposure":
             headline = market_metrics["headline_metrics"]
             invested_value = float(headline.get("current_portfolio_value") or 0.0)
