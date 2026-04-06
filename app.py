@@ -31,6 +31,7 @@ BENCHMARK_RELATIVE_RISK_MAX_RATIO = 2.0
 RELATIVE_DOWNSIDE_CAPTURE_MAX_RATIO = 1.15
 VERY_HIGH_CONCERN_SCORE = 80.0
 RECENT_RISK_CHART_DAYS = round(365.25 * 1.5)
+WEEKLY_FLOW_DOMINANCE_LIMIT = 0.25
 
 
 @dataclass
@@ -1362,6 +1363,7 @@ def build_market_enriched_metrics(
             "portfolio_invested_value": portfolio_equity_series.values,
             "account_value": account_value_series.reindex(portfolio_equity_series.index).values,
             "benchmark_value": benchmark_value_series.reindex(portfolio_equity_series.index).values,
+            "trade_flow": trade_flow_series.reindex(portfolio_equity_series.index).values,
             "portfolio_performance_index": aligned_performance["portfolio"].reindex(portfolio_equity_series.index).values,
             "benchmark_performance_index": aligned_performance["benchmark"].reindex(portfolio_equity_series.index).values,
             "portfolio_drawdown": portfolio_drawdown.reindex(portfolio_equity_series.index).values,
@@ -2064,6 +2066,85 @@ def build_market_evidence_series(timeseries_records: list[dict[str, Any]]) -> di
     return {"aligned_performance": aligned_performance, "aligned_returns": aligned_returns}
 
 
+def modified_dietz_return(end_value: float, begin_value: float, flow_value: float) -> float | None:
+    if pd.isna(begin_value) or begin_value <= 0:
+        return None
+    denominator = begin_value + (0.5 * flow_value)
+    if denominator <= 0:
+        return None
+    return float((end_value - begin_value - flow_value) / denominator)
+
+
+def build_stable_weekly_value_return_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
+    series = pd.DataFrame(timeseries_records)
+    if series.empty:
+        return pd.DataFrame(columns=["date", "portfolio_ret", "benchmark_ret"])
+
+    required_columns = {"date", "portfolio_invested_value", "benchmark_value", "trade_flow"}
+    if not required_columns.issubset(series.columns):
+        return pd.DataFrame(columns=["date", "portfolio_ret", "benchmark_ret"])
+
+    series["date"] = pd.to_datetime(series["date"])
+    series = series.set_index("date").sort_index()
+    weekly = (
+        pd.DataFrame(
+            {
+                "portfolio_value": pd.to_numeric(series["portfolio_invested_value"], errors="coerce"),
+                "benchmark_value": pd.to_numeric(series["benchmark_value"], errors="coerce"),
+                "trade_flow": pd.to_numeric(series["trade_flow"], errors="coerce").fillna(0.0),
+            }
+        )
+        .resample("W-FRI")
+        .agg({"portfolio_value": "last", "benchmark_value": "last", "trade_flow": "sum"})
+        .dropna()
+    )
+    if weekly.empty:
+        return pd.DataFrame(columns=["date", "portfolio_ret", "benchmark_ret"])
+
+    weekly["portfolio_begin"] = weekly["portfolio_value"].shift(1)
+    weekly["benchmark_begin"] = weekly["benchmark_value"].shift(1)
+    weekly["portfolio_ret"] = [
+        modified_dietz_return(end_value, begin_value, flow_value)
+        for end_value, begin_value, flow_value in zip(
+            weekly["portfolio_value"],
+            weekly["portfolio_begin"],
+            weekly["trade_flow"],
+        )
+    ]
+    weekly["benchmark_ret"] = [
+        modified_dietz_return(end_value, begin_value, flow_value)
+        for end_value, begin_value, flow_value in zip(
+            weekly["benchmark_value"],
+            weekly["benchmark_begin"],
+            weekly["trade_flow"],
+        )
+    ]
+
+    current_portfolio_value = float(pd.to_numeric(series["portfolio_invested_value"], errors="coerce").dropna().iloc[-1])
+    current_benchmark_value = float(pd.to_numeric(series["benchmark_value"], errors="coerce").dropna().iloc[-1])
+    portfolio_floor = max(1000.0, current_portfolio_value * 0.02)
+    benchmark_floor = max(1000.0, current_benchmark_value * 0.02)
+
+    weekly["flow_ratio"] = (
+        weekly["trade_flow"].abs() / weekly["portfolio_begin"].abs().replace(0.0, pd.NA)
+    )
+    stable_mask = (
+        (weekly["portfolio_value"] >= portfolio_floor)
+        & (weekly["portfolio_begin"] >= portfolio_floor)
+        & (weekly["benchmark_value"] >= benchmark_floor)
+        & (weekly["benchmark_begin"] >= benchmark_floor)
+        & (weekly["flow_ratio"].fillna(0.0) <= WEEKLY_FLOW_DOMINANCE_LIMIT)
+    )
+    weekly = weekly.loc[stable_mask].copy()
+    weekly = (
+        weekly.replace([math.inf, -math.inf], float("nan"))
+        .dropna(subset=["portfolio_ret", "benchmark_ret"])
+        .reset_index()
+        .rename(columns={"index": "date"})
+    )
+    return weekly[["date", "portfolio_ret", "benchmark_ret"]]
+
+
 def trim_to_recent_window(df: pd.DataFrame, date_column: str, lookback_days: int) -> pd.DataFrame:
     if df.empty or date_column not in df.columns:
         return df
@@ -2129,25 +2210,22 @@ def add_latest_annotation(fig: go.Figure, x_value: str, y_value: float, text: st
 
 
 def rolling_relative_volatility_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
-    aligned_performance = build_market_evidence_series(timeseries_records)["aligned_performance"]
-    if aligned_performance.empty:
-        return pd.DataFrame(columns=["date", "ratio"])
-
-    weekly = aligned_performance.resample("W-FRI").last().dropna()
-    if weekly.empty:
+    weekly_returns = build_stable_weekly_value_return_frame(timeseries_records)
+    if weekly_returns.empty:
         return pd.DataFrame(columns=["date", "ratio"])
 
     rows: list[dict[str, Any]] = []
     window_delta = pd.Timedelta(days=ROLLING_DRAWDOWN_WINDOW_DAYS)
-    for end_date in weekly.index:
-        window_slice = weekly.loc[end_date - window_delta : end_date]
-        returns = window_slice.pct_change(fill_method=None).replace([math.inf, -math.inf], float("nan")).dropna()
-        if len(returns) < 5:
+    weekly_returns["date"] = pd.to_datetime(weekly_returns["date"])
+    weekly_returns = weekly_returns.set_index("date").sort_index()
+    for end_date in weekly_returns.index:
+        window_slice = weekly_returns.loc[end_date - window_delta : end_date]
+        if len(window_slice) < 8:
             continue
-        benchmark_vol = float(returns["benchmark"].std() * math.sqrt(52))
+        benchmark_vol = float(window_slice["benchmark_ret"].std() * math.sqrt(52))
         if benchmark_vol <= 0:
             continue
-        portfolio_vol = float(returns["portfolio"].std() * math.sqrt(52))
+        portfolio_vol = float(window_slice["portfolio_ret"].std() * math.sqrt(52))
         rows.append({"date": end_date, "ratio": portfolio_vol / benchmark_vol})
     frame = pd.DataFrame(rows, columns=["date", "ratio"])
     return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS)
@@ -2377,6 +2455,32 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
             fig.add_hline(y=2.0, line_dash="dot", line_color="#F59E0B", row=row_idx, col=1)
             if x_values:
                 add_latest_annotation(fig, x_values[-1], float(y_values[-1]), f"Latest: {y_values[-1]:.2f}x", "#3B82F6", row=row_idx, col=1)
+                fig.add_annotation(
+                    x=x_values[0],
+                    y=1.0,
+                    text="Same as S&P",
+                    showarrow=False,
+                    xanchor="left",
+                    yanchor="bottom",
+                    bgcolor="rgba(15,23,42,0.88)",
+                    bordercolor="#10B981",
+                    font={"size": 11, "color": "#f8fafc"},
+                    row=row_idx,
+                    col=1,
+                )
+                fig.add_annotation(
+                    x=x_values[0],
+                    y=2.0,
+                    text="High-risk line",
+                    showarrow=False,
+                    xanchor="left",
+                    yanchor="bottom",
+                    bgcolor="rgba(15,23,42,0.88)",
+                    bordercolor="#F59E0B",
+                    font={"size": 11, "color": "#f8fafc"},
+                    row=row_idx,
+                    col=1,
+                )
             fig.update_yaxes(title_text="x Benchmark", row=row_idx, col=1)
             fig.update_yaxes(range=padded_axis_range(y_values, baseline_values=[1.0, 2.0], min_padding=0.2), row=row_idx, col=1)
         elif kind == "relative_drawdown":
