@@ -3177,15 +3177,18 @@ def resolve_ollama_analysis(
         )
 
 
-def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: bool) -> tuple[Any, ...]:
+def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple[Any, ...]:
     started_at = time.perf_counter()
-    if file_obj is None:
-        raise gr.Error("Upload a Robinhood CSV export first.")
+    if dataset_source == "Use bundled fake dataset":
+        csv_path = Path(__file__).resolve().parent / "data" / "raw" / "fake_mantis_invest.csv"
+    else:
+        if file_obj is None:
+            raise gr.Error("Upload a Robinhood CSV export first or switch to the bundled fake dataset.")
+        csv_path = Path(file_obj.name)
 
-    csv_path = Path(file_obj.name)
     transactions = load_transactions(csv_path)
     if transactions.empty:
-        raise gr.Error("No valid transaction rows were found in the uploaded file.")
+        raise gr.Error("No valid transaction rows were found in the selected file.")
 
     lot_data = build_lot_analytics(transactions)
     portfolio_summary = summarize_portfolio(transactions, lot_data)
@@ -3204,11 +3207,9 @@ def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: 
         projection_years=PROJECTION_YEARS,
         stated_risk_score=risk_profile,
     )
-    payload = build_analysis_payload(portfolio_summary, market_metrics)
     tables = format_display_tables(market_metrics)
     overview_md = build_overview_markdown(portfolio_summary, market_metrics)
     benchmark_md = build_benchmark_markdown(market_metrics)
-    insight_md = resolve_ollama_analysis(payload, risk_profile, model_name, use_ollama)
     headline = market_metrics["headline_metrics"]
     risk = market_metrics["risk_score"]
     risk_guide_html = build_risk_guide_html(risk)
@@ -3216,7 +3217,6 @@ def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: 
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
     recent_volatility_fig = plot_recent_volatility_comparison(market_metrics["timeseries"])
     risk_evidence_fig = plot_risk_evidence(market_metrics, portfolio_summary)
-    proj_fig = plot_projection(tables["projection"])
     elapsed_seconds = time.perf_counter() - started_at
 
     summary_cards_inner = (
@@ -3240,19 +3240,16 @@ def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: 
         benchmark_md,
         risk_md,
         risk_guide_html,
-        insight_md,
         tables["holdings"],
         tables["attribution"],
         tables["sold"],
         tables["selection_alpha"],
         tables["volatility_drivers"],
         tables["risk_components"],
-        tables["projection"],
         eq_fig,
         dd_fig,
         recent_volatility_fig,
         risk_evidence_fig,
-        proj_fig,
     )
 
 
@@ -3278,6 +3275,12 @@ def build_app() -> gr.Blocks:
         with gr.Row(elem_classes=["app-shell"]):
             with gr.Column(scale=1, min_width=280):
                 upload = gr.File(label="Robinhood CSV", file_types=[".csv"])
+                dataset_source = gr.Radio(
+                    choices=["Upload my CSV", "Use bundled fake dataset"],
+                    value="Upload my CSV",
+                    label="Dataset Source",
+                    info="Use the fake dataset if you want to explore the dashboard without a Robinhood export.",
+                )
                 risk_profile = gr.Slider(
                     minimum=0,
                     maximum=100,
@@ -3285,8 +3288,6 @@ def build_app() -> gr.Blocks:
                     step=1,
                     label="Stated Risk Profile (0-100)",
                 )
-                use_ollama = gr.Checkbox(label="Generate AI summary with Ollama", value=True)
-                model_name = gr.Textbox(label="Ollama Model", value=DEFAULT_MODEL_NAME)
                 analyze_btn = gr.Button("Run Analysis", variant="primary")
                 gr.Markdown(
                     """
@@ -3294,6 +3295,7 @@ def build_app() -> gr.Blocks:
                     - Benchmark uses `^GSPC`
                     - Benchmark comparison excludes idle cash
                     - Timeframe stats are shown using your actual investing horizon
+                    - A bundled fake dataset is available for demo purposes
                     """
                 )
 
@@ -3303,9 +3305,6 @@ def build_app() -> gr.Blocks:
                     with gr.Tab("Overview"):
                         overview_md = gr.Markdown()
                         equity_plot = gr.Plot(label="Portfolio vs S&P 500")
-                    with gr.Tab("Holdings"):
-                        holdings_df = gr.Dataframe(label="Open Holdings", interactive=False)
-                        attribution_df = gr.Dataframe(label="Performance Attribution", interactive=False)
                     with gr.Tab("Risk"):
                         risk_md = gr.HTML()
                         volatility_drivers_df = gr.Dataframe(label="Top Drivers of 2025 Volatility", interactive=False)
@@ -3313,40 +3312,35 @@ def build_app() -> gr.Blocks:
                         recent_volatility_plot = gr.Plot(label="Recent Volatility vs S&P 500")
                         risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
                         drawdown_plot = gr.Plot(label="Drawdown Comparison")
+                    with gr.Tab("Holdings"):
+                        holdings_df = gr.Dataframe(label="Open Holdings", interactive=False)
+                        attribution_df = gr.Dataframe(label="Performance Attribution", interactive=False)
                     with gr.Tab("Risk Guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Benchmark"):
                         benchmark_md = gr.Markdown()
                         selection_alpha_df = gr.Dataframe(label="Ticker Alpha vs Benchmark", interactive=False)
                         sold_df = gr.Dataframe(label="Potential Sold-Too-Early Signals", interactive=False)
-                    with gr.Tab("Projection"):
-                        projection_df = gr.Dataframe(label="18-Year Projection Table", interactive=False)
-                        projection_plot = gr.Plot(label="Projection Chart")
-                    with gr.Tab("AI Insights"):
-                        insight_md = gr.Markdown()
 
         analyze_btn.click(
             fn=run_analysis,
-            inputs=[upload, risk_profile, model_name, use_ollama],
+            inputs=[upload, risk_profile, dataset_source],
             outputs=[
                 cards,
                 overview_md,
                 benchmark_md,
                 risk_md,
                 risk_guide_md,
-                insight_md,
                 holdings_df,
                 attribution_df,
                 sold_df,
                 selection_alpha_df,
                 volatility_drivers_df,
                 risk_components_df,
-                projection_df,
                 equity_plot,
                 drawdown_plot,
                 recent_volatility_plot,
                 risk_evidence_plot,
-                projection_plot,
             ],
         )
 
