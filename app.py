@@ -1951,7 +1951,7 @@ def build_metric_card_values(risk: dict[str, Any]) -> list[str]:
             f"<div style='font-size:13px;color:#e2e8f0;font-weight:600'>{info['label']}</div>"
             f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>{info['bigger_picture']}</div>"
             f"<div style='font-size:12px;color:#93c5fd;margin-top:8px'>Score: {score:.1f}/100 · {score_readout(score)}</div>"
-            "<div style='font-size:11px;color:#7dd3fc;margin-top:10px'>Show in Risk Guide -></div>"
+            "<div style='font-size:11px;color:#7dd3fc;margin-top:10px'>See matching explanation in Risk Guide</div>"
             "</div>"
         )
     return values
@@ -2649,7 +2649,11 @@ def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) 
             mode="lines",
             name="Portfolio",
             line={"width": 3, "color": "#3B82F6"},
-            hovertemplate="%{x}<br>Portfolio volatility: %{y:.1f}%<extra></extra>",
+            hovertemplate=(
+                "%{x}<br>Portfolio volatility: %{y:.1f}%"
+                "<br>What this means: how much the portfolio has been swinging around"
+                "<extra></extra>"
+            ),
         )
     )
     fig.add_trace(
@@ -2659,7 +2663,11 @@ def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) 
             mode="lines",
             name="S&P 500",
             line={"width": 3, "color": "#F59E0B"},
-            hovertemplate="%{x}<br>S&P 500 volatility: %{y:.1f}%<extra></extra>",
+            hovertemplate=(
+                "%{x}<br>S&P 500 volatility: %{y:.1f}%"
+                "<br>What this means: the market's own recent swing level"
+                "<extra></extra>"
+            ),
         )
     )
     fig.add_annotation(
@@ -2687,7 +2695,7 @@ def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) 
         font={"color": "#f8fafc", "size": 11},
     )
     fig.update_layout(
-        title="Recent 6-Month Rolling Volatility vs S&P 500",
+        title="Volatility vs S&P 500",
         height=520,
         margin={"l": 40, "r": 24, "t": 60, "b": 36},
         template="plotly_dark",
@@ -2699,7 +2707,7 @@ def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) 
     )
     fig.update_xaxes(title_text="Date", gridcolor="rgba(148,163,184,0.18)")
     fig.update_yaxes(
-        title_text="Annualized Volatility (%)",
+        title_text="Volatility (%)",
         gridcolor="rgba(148,163,184,0.18)",
         range=padded_axis_range(
             portfolio_values + benchmark_values,
@@ -2723,19 +2731,19 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
     if any(scores.get(key, 0.0) >= VERY_HIGH_CONCERN_SCORE for key in concentration_keys):
         evidence_specs.append({"kind": "concentration", "title": "Concentration Evidence"})
     if scores.get("behavior::turnover", 0.0) >= VERY_HIGH_CONCERN_SCORE:
-        evidence_specs.append({"kind": "turnover", "title": "Trading Churn Evidence"})
+        evidence_specs.append({"kind": "turnover", "title": "Trading churn"})
     if scores.get("behavior::short_holding_period", 0.0) >= VERY_HIGH_CONCERN_SCORE:
-        evidence_specs.append({"kind": "holding_period", "title": "Holding Period Evidence"})
+        evidence_specs.append({"kind": "holding_period", "title": "How long your dollars stay invested"})
     if scores.get("market::relative_volatility_to_benchmark", 0.0) >= VERY_HIGH_CONCERN_SCORE:
-        evidence_specs.append({"kind": "relative_volatility", "title": "Rolling Volatility vs S&P 500"})
+        evidence_specs.append({"kind": "relative_volatility", "title": "Volatility vs S&P 500"})
     if scores.get("market::relative_drawdown_to_benchmark", 0.0) >= VERY_HIGH_CONCERN_SCORE:
-        evidence_specs.append({"kind": "relative_drawdown", "title": "Rolling Drawdown vs S&P 500"})
+        evidence_specs.append({"kind": "relative_drawdown", "title": "Downside depth vs S&P 500"})
     if scores.get("market::relative_downside_capture_to_benchmark", 0.0) >= VERY_HIGH_CONCERN_SCORE:
-        evidence_specs.append({"kind": "relative_downside_capture", "title": "Bad-Day Behavior vs S&P 500"})
+        evidence_specs.append({"kind": "relative_downside_capture", "title": "Bad-day behavior vs S&P 500"})
     if scores.get("market::relative_market_sensitivity_to_benchmark", 0.0) >= VERY_HIGH_CONCERN_SCORE:
-        evidence_specs.append({"kind": "relative_market_sensitivity", "title": "Rolling Market Sensitivity vs S&P 500"})
+        evidence_specs.append({"kind": "relative_market_sensitivity", "title": "Market sensitivity vs S&P 500"})
     if scores.get("market::equity_exposure", 0.0) >= VERY_HIGH_CONCERN_SCORE:
-        evidence_specs.append({"kind": "equity_exposure", "title": "How Fully Invested the Account Is"})
+        evidence_specs.append({"kind": "equity_exposure", "title": "How fully invested you are"})
 
     if not evidence_specs:
         fig = go.Figure()
@@ -2788,7 +2796,11 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                     name="Weight",
                     text=[f"{value:.1f}%" for value in weight_values],
                     textposition="outside",
-                    hovertemplate="%{y}: %{x:.1f}% of portfolio<extra></extra>",
+                    hovertemplate=(
+                        "%{y}: %{x:.1f}% of portfolio"
+                        "<br>What this means: how much one holding can influence the account"
+                        "<extra></extra>"
+                    ),
                     showlegend=False,
                 ),
                 row=row_idx,
@@ -2845,7 +2857,11 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                     y=["Annualized turnover"],
                     orientation="h",
                     marker={"color": "#EF4444"},
-                    hovertemplate="Turnover: %{x:.2f}<extra></extra>",
+                    hovertemplate=(
+                        "Turnover: %{x:.2f}"
+                        "<br>What this means: how much of the portfolio you are rotating through trades"
+                        "<extra></extra>"
+                    ),
                     showlegend=False,
                 ),
                 row=row_idx,
@@ -2871,7 +2887,11 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                     y=["Capital-weighted holding period"],
                     orientation="h",
                     marker={"color": "#8B5CF6"},
-                    hovertemplate="Holding days: %{x:.0f}<extra></extra>",
+                    hovertemplate=(
+                        "Holding days: %{x:.0f}"
+                        "<br>What this means: how long your invested dollars usually stay in positions"
+                        "<extra></extra>"
+                    ),
                     showlegend=False,
                 ),
                 row=row_idx,
@@ -2899,7 +2919,11 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                     y=y_values,
                     mode="lines",
                     line={"width": 3, "color": "#3B82F6"},
-                    hovertemplate="%{x}<br>Volatility ratio: %{y:.2f}x<extra></extra>",
+                    hovertemplate=(
+                        "%{x}<br>Volatility ratio: %{y:.2f}x"
+                        "<br>What this means: how much rougher the ride has been than the S&P 500"
+                        "<extra></extra>"
+                    ),
                     showlegend=False,
                 ),
                 row=row_idx,
@@ -2947,7 +2971,11 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                     y=y_values,
                     mode="lines",
                     line={"width": 3, "color": "#EF4444"},
-                    hovertemplate="%{x}<br>Drawdown ratio: %{y:.2f}x<extra></extra>",
+                    hovertemplate=(
+                        "%{x}<br>Downside depth ratio: %{y:.2f}x"
+                        "<br>What this means: how much deeper bad stretches have been than the S&P 500"
+                        "<extra></extra>"
+                    ),
                     showlegend=False,
                 ),
                 row=row_idx,
@@ -2969,7 +2997,11 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                     y=y_values,
                     mode="lines",
                     line={"width": 3, "color": "#F97316"},
-                    hovertemplate="%{x}<br>Downside capture: %{y:.2f}x<extra></extra>",
+                    hovertemplate=(
+                        "%{x}<br>Bad-day behavior ratio: %{y:.2f}x"
+                        "<br>What this means: whether the portfolio loses more than the S&P 500 on down days"
+                        "<extra></extra>"
+                    ),
                     showlegend=False,
                 ),
                 row=row_idx,
@@ -2995,7 +3027,11 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                     y=y_values,
                     mode="lines",
                     line={"width": 3, "color": "#A855F7"},
-                    hovertemplate="%{x}<br>Sensitivity: %{y:.2f}x<extra></extra>",
+                    hovertemplate=(
+                        "%{x}<br>Market sensitivity ratio: %{y:.2f}x"
+                        "<br>What this means: how strongly the portfolio reacts when the market moves"
+                        "<extra></extra>"
+                    ),
                     showlegend=False,
                 ),
                 row=row_idx,
@@ -3238,7 +3274,6 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         tables["holdings"],
         tables["attribution"],
         tables["volatility_drivers"],
-        tables["risk_components"],
         eq_fig,
         dd_fig,
         recent_volatility_fig,
@@ -3309,10 +3344,9 @@ def build_app() -> gr.Blocks:
                                         card = gr.HTML()
                                         metric_card_components.append(card)
                         volatility_drivers_df = gr.Dataframe(label="Top Drivers of 2025 Volatility", interactive=False)
-                        risk_components_df = gr.Dataframe(label="Risk Signals", interactive=False)
-                        recent_volatility_plot = gr.Plot(label="Recent Volatility vs S&P 500")
+                        recent_volatility_plot = gr.Plot(label="Volatility vs S&P 500")
                         risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
-                        drawdown_plot = gr.Plot(label="Drawdown Comparison")
+                        drawdown_plot = gr.Plot(label="Downside Depth vs S&P 500")
                     with gr.Tab("Risk Guide", id="risk-guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
@@ -3329,7 +3363,6 @@ def build_app() -> gr.Blocks:
                 holdings_df,
                 attribution_df,
                 volatility_drivers_df,
-                risk_components_df,
                 equity_plot,
                 drawdown_plot,
                 recent_volatility_plot,
