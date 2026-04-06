@@ -33,6 +33,7 @@ RELATIVE_MARKET_SENSITIVITY_MAX_RATIO = 1.75
 VERY_HIGH_CONCERN_SCORE = 80.0
 RECENT_RISK_CHART_DAYS = round(365.25 * 1.5)
 WEEKLY_FLOW_DOMINANCE_LIMIT = 0.25
+MAX_STABLE_WEEKLY_RETURN = 0.75
 
 
 @dataclass
@@ -2133,12 +2134,16 @@ def build_stable_weekly_value_return_frame(timeseries_records: list[dict[str, An
     weekly["flow_ratio"] = (
         weekly["trade_flow"].abs() / weekly["portfolio_begin"].abs().replace(0.0, pd.NA)
     )
+    # Treat extreme one-week jumps as unstable reconstruction periods rather than real
+    # market behavior. This keeps the evidence and score focused on economically believable
+    # weekly moves instead of weeks where the sleeve math is clearly breaking down.
     stable_mask = (
         (weekly["portfolio_value"] >= portfolio_floor)
         & (weekly["portfolio_begin"] >= portfolio_floor)
         & (weekly["benchmark_value"] >= benchmark_floor)
         & (weekly["benchmark_begin"] >= benchmark_floor)
         & (weekly["flow_ratio"].fillna(0.0) <= WEEKLY_FLOW_DOMINANCE_LIMIT)
+        & (weekly["portfolio_ret"].abs() <= MAX_STABLE_WEEKLY_RETURN)
     )
     weekly = weekly.loc[stable_mask].copy()
     weekly = (
