@@ -3265,7 +3265,15 @@ def build_app() -> gr.Blocks:
         css="""
         .app-shell {max-width: 1400px; margin: 0 auto;}
         .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; width: 100%; align-items: stretch;}
-        .risk-guide-link button {min-height: 34px; border-radius: 10px !important;}
+        .risk-guide-link button {
+            min-height: 28px !important;
+            padding: 4px 10px !important;
+            border-radius: 999px !important;
+            font-size: 11px !important;
+            line-height: 1.1 !important;
+            width: auto !important;
+            min-width: 0 !important;
+        }
         @media (max-width: 1200px) {.metric-strip {grid-template-columns: repeat(2, minmax(220px, 1fr));}}
         @media (max-width: 820px) {.metric-strip {grid-template-columns: 1fr;}}
         """,
