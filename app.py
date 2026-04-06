@@ -11,7 +11,7 @@ from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import gradio as gr
 import pandas as pd
 import plotly.graph_objects as go
@@ -1806,38 +1806,25 @@ def metric_group_order() -> list[tuple[str, list[str], str]]:
     ]
 
 
-def risk_guide_link_script() -> str:
-    return """
-<script>
-window.__openRiskGuideSection = function(anchorId) {
-  const tabButton = Array.from(document.querySelectorAll('button')).find(
-    (btn) => btn.textContent && btn.textContent.trim() === 'Risk Guide'
-  );
-  if (tabButton) {
-    tabButton.click();
-  }
-  window.setTimeout(() => {
-    const target = document.getElementById(anchorId);
-    if (target) {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  }, 120);
-  return false;
-};
-</script>
-"""
+def inline_risk_anchor(metric_key: str) -> str:
+    return f"{metric_explanations()[metric_key]['anchor']}-inline"
 
 
-def build_risk_guide_html(risk: dict[str, Any]) -> str:
+def build_risk_guide_sections_html(
+    risk: dict[str, Any],
+    *,
+    anchor_builder: Callable[[str], str],
+    include_group_toc: bool,
+) -> str:
     explanations = metric_explanations()
     component_scores = risk["component_scores"]
-    dimension_scores = risk["dimension_scores"]
 
     def section_card(metric_key: str) -> str:
         info = explanations[metric_key]
         score = float(component_scores.get(metric_key, 0.0))
+        anchor = anchor_builder(metric_key)
         return (
-            f"<section id='{info['anchor']}' style='padding:18px;border:1px solid rgba(148,163,184,.18);"
+            f"<section id='{anchor}' style='padding:18px;border:1px solid rgba(148,163,184,.18);"
             "border-radius:18px;background:rgba(15,23,42,.34);scroll-margin-top:16px'>"
             f"<div style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em'>{info['group']}</div>"
             f"<div style='font-size:22px;font-weight:700;color:#f8fafc;margin-top:6px'>{info['label']}</div>"
@@ -1854,41 +1841,46 @@ def build_risk_guide_html(risk: dict[str, Any]) -> str:
 
     group_sections = []
     for group_name, metric_keys, subtitle in metric_group_order():
-        dimension_key = f"{group_name.lower()}_risk"
-        score = float(dimension_scores.get(dimension_key, 0.0))
-        toc_links = "".join(
-            f"<a href='#{explanations[key]['anchor']}' "
-            f"onclick=\"return window.__openRiskGuideSection && window.__openRiskGuideSection('{explanations[key]['anchor']}');\" "
-            "style='display:inline-block;margin:0 8px 8px 0;padding:6px 10px;border-radius:999px;"
-            "background:rgba(59,130,246,.12);color:#bfdbfe;text-decoration:none;font-size:12px'>"
-            f"{explanations[key]['label']}</a>"
-            for key in metric_keys
-        )
+        toc_links = ""
+        if include_group_toc:
+            toc_links = "".join(
+                f"<a href='#{anchor_builder(key)}' "
+                "style='display:inline-block;margin:0 8px 8px 0;padding:6px 10px;border-radius:999px;"
+                "background:rgba(59,130,246,.12);color:#bfdbfe;text-decoration:none;font-size:12px'>"
+                f"{explanations[key]['label']}</a>"
+                for key in metric_keys
+            )
         section_cards = "".join(section_card(key) for key in metric_keys)
         group_sections.append(
             "<div style='display:grid;gap:14px'>"
             f"<div style='padding:16px;border:1px solid rgba(148,163,184,.16);border-radius:16px;background:rgba(15,23,42,.28)'>"
             f"<div style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em'>{group_name} Risk</div>"
-            f"<div style='font-size:28px;font-weight:700;color:#f8fafc;margin-top:8px'>{score:.1f}/100</div>"
             f"<div style='font-size:14px;color:#cbd5e1;margin-top:8px'>{subtitle}</div>"
             f"<div style='margin-top:12px'>{toc_links}</div>"
             "</div>"
             f"{section_cards}"
             "</div>"
         )
+    return "".join(group_sections)
+
+
+def build_risk_guide_html(risk: dict[str, Any]) -> str:
+    dimension_scores = risk["dimension_scores"]
+    guide_sections = build_risk_guide_sections_html(
+        risk,
+        anchor_builder=lambda metric_key: metric_explanations()[metric_key]["anchor"],
+        include_group_toc=True,
+    )
 
     return (
-        risk_guide_link_script()
-        + "<div id='risk-guide-top' style='display:grid;gap:16px'>"
+        "<div id='risk-guide-top' style='display:grid;gap:16px'>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.96))'>"
         "<div style='font-size:28px;font-weight:700;color:#f8fafc'>Risk Guide</div>"
         "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>This guide explains what each risk metric is trying to measure in plain English. The goal is not just to show scores, but to help the user understand what those scores are saying about the portfolio.</div>"
         "<div style='font-size:14px;color:#cbd5e1;margin-top:12px'><strong>How the overall score works:</strong> concentration risk is 40% of the final score, market risk is 40%, and behavior risk is 20%.</div>"
         "</div>"
-        + "".join(group_sections)
-        + "</div>"
-    )
+    ) + guide_sections + "</div>"
 
 
 def build_risk_explainer_html(risk: dict[str, Any]) -> str:
@@ -1900,15 +1892,14 @@ def build_risk_explainer_html(risk: dict[str, Any]) -> str:
         info = explanations[metric_key]
         score = float(component_scores.get(metric_key, 0.0))
         return (
-            f"<a href='#{info['anchor']}' "
-            f"onclick=\"return window.__openRiskGuideSection && window.__openRiskGuideSection('{info['anchor']}');\" "
+            f"<a href='#{inline_risk_anchor(metric_key)}' "
             "style='text-decoration:none;color:inherit'>"
             "<div style='padding:10px 12px;border:1px solid rgba(148,163,184,.16);"
             "border-radius:12px;background:rgba(15,23,42,.38);min-height:120px'>"
             f"<div style='font-size:13px;color:#e2e8f0;font-weight:600'>{info['label']}</div>"
             f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>{info['bigger_picture']}</div>"
             f"<div style='font-size:12px;color:#93c5fd;margin-top:8px'>Score: {score:.1f}/100 · {score_readout(score)}</div>"
-            "<div style='font-size:11px;color:#60a5fa;margin-top:8px'>Open full explanation</div>"
+            "<div style='font-size:11px;color:#60a5fa;margin-top:8px'>Jump to explanation below</div>"
             "</div></a>"
         )
 
@@ -1932,6 +1923,11 @@ def build_risk_explainer_html(risk: dict[str, Any]) -> str:
     )
     observed_subtitle = f"{risk['band']} · {observed_vs_stated}"
     market_subtitle = f"Relative to S&P 500 · Confidence: {risk['confidence_band']}"
+    inline_guide_sections = build_risk_guide_sections_html(
+        risk,
+        anchor_builder=inline_risk_anchor,
+        include_group_toc=False,
+    )
 
     group_html = []
     for group_name, metric_keys, subtitle in metric_group_order():
@@ -1945,20 +1941,23 @@ def build_risk_explainer_html(risk: dict[str, Any]) -> str:
 
     # Keep the explanation layer compact so the tab feels like a dashboard, not a document.
     return (
-        risk_guide_link_script()
-        + "<div style='display:grid;gap:16px'>"
+        "<div style='display:grid;gap:16px'>"
         "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px'>"
         f"{render_dimension_card('Observed Risk', risk['score'], observed_subtitle)}"
         f"{render_dimension_card('Concentration', dimension_scores['concentration_risk'], 'How much a few holdings can dominate outcomes')}"
         f"{render_dimension_card('Behavior', dimension_scores['behavioral_risk'], 'How patient or active your investing style looks')}"
         f"{render_dimension_card('Market', dimension_scores['market_risk'], market_subtitle)}"
         "</div>"
-        "<div style='font-size:12px;color:#60a5fa'>Click any metric card to open the full explanation in the Risk Guide tab.</div>"
+        "<div style='font-size:12px;color:#60a5fa'>Click any metric card to jump to the detailed explanation below. The Risk Guide tab still has the same content as a dedicated reference view.</div>"
         "<div style='display:grid;gap:14px'>"
         f"{''.join(group_html)}"
         "</div>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.96))'>"
+        "<div style='font-size:24px;font-weight:700;color:#f8fafc'>Detailed Risk Explanations</div>"
+        "<div style='font-size:14px;color:#cbd5e1;margin-top:8px'>These sections mirror the Risk Guide and give a fuller explanation of what each score is trying to say.</div>"
         "</div>"
-    )
+    ) + inline_guide_sections + "</div>"
 
 
 def format_display_tables(market_metrics: dict[str, Any]) -> dict[str, pd.DataFrame]:
