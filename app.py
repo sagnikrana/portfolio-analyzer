@@ -1614,10 +1614,10 @@ def format_display_dataframe(
 def metric_card(label: str, value: str, subtitle: str = "") -> str:
     subtitle_md = f"<div style='color:#cbd5e1;font-size:12px'>{subtitle}</div>" if subtitle else ""
     return (
-        "<div class='metric-card' style='padding:16px 18px;border:1px solid rgba(148,163,184,.22);"
-        "border-radius:16px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.96));"
+        "<div class='metric-card' style='padding:18px 18px;border:1px solid rgba(148,163,184,.18);"
+        "border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.98), rgba(15,23,42,.94));"
         "min-height:120px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;"
-        "box-shadow:0 8px 24px rgba(2,6,23,.22)'>"
+        "box-shadow:0 16px 40px rgba(2,6,23,.24)'>"
         f"<div class='metric-card-label' style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em;line-height:1.25'>{label}</div>"
         f"<div class='metric-card-value' style='font-size:28px;font-weight:700;margin-top:8px;line-height:1.15;word-break:break-word;color:#f8fafc'>{value}</div>"
         f"{subtitle_md}</div>"
@@ -3294,19 +3294,78 @@ def build_app() -> gr.Blocks:
         title="Portfolio Analyzer Dashboard",
         theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
         css="""
-        .app-shell {max-width: 1400px; margin: 0 auto;}
-        .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; width: 100%; align-items: stretch;}
+        .gradio-container {
+            background:
+                radial-gradient(circle at top left, rgba(59,130,246,.12), transparent 28%),
+                radial-gradient(circle at top right, rgba(14,165,233,.10), transparent 26%),
+                linear-gradient(180deg, #0b1220 0%, #111827 100%);
+        }
+        .app-shell {max-width: 1440px; margin: 0 auto; align-items: start;}
+        .control-rail {
+            padding: 18px;
+            border: 1px solid rgba(148,163,184,.16);
+            border-radius: 22px;
+            background: linear-gradient(180deg, rgba(15,23,42,.92), rgba(15,23,42,.78));
+            box-shadow: 0 20px 48px rgba(2,6,23,.24);
+            backdrop-filter: blur(14px);
+        }
+        .content-rail {
+            padding: 8px 0 0;
+        }
+        .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 14px; width: 100%; align-items: stretch;}
+        .metric-card {
+            transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+        }
+        .metric-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 18px 44px rgba(2,6,23,.32);
+            border-color: rgba(96,165,250,.28) !important;
+        }
+        button[role="tab"] {
+            border-radius: 14px 14px 0 0 !important;
+            padding: 10px 16px !important;
+            font-weight: 600 !important;
+            letter-spacing: .01em;
+        }
+        button[role="tab"][aria-selected="true"] {
+            background: linear-gradient(180deg, rgba(59,130,246,.18), rgba(59,130,246,.08)) !important;
+            color: #f8fafc !important;
+            border-color: rgba(96,165,250,.28) !important;
+        }
+        .control-rail .gr-button-primary {
+            min-height: 48px !important;
+            border-radius: 14px !important;
+            box-shadow: 0 12px 30px rgba(37,99,235,.28);
+        }
+        .control-rail .gr-box,
+        .control-rail .gr-form,
+        .control-rail .gradio-file,
+        .control-rail .gradio-slider,
+        .control-rail .gradio-radio,
+        .control-rail .gradio-markdown {
+            border-radius: 14px !important;
+        }
         .risk-guide-link button {
-            min-height: 26px !important;
-            padding: 3px 10px !important;
+            min-height: 28px !important;
+            padding: 4px 10px !important;
             border-radius: 999px !important;
             font-size: 11px !important;
             line-height: 1.1 !important;
             width: auto !important;
             min-width: 0 !important;
         }
-        @media (max-width: 1200px) {.metric-strip {grid-template-columns: repeat(2, minmax(220px, 1fr));}}
-        @media (max-width: 820px) {.metric-strip {grid-template-columns: 1fr;}}
+        .summary-cards-wrap {margin-bottom: 8px;}
+        .risk-guide-link button {
+            opacity: .94;
+        }
+        @media (max-width: 1200px) {
+            .metric-strip {grid-template-columns: repeat(2, minmax(220px, 1fr));}
+            .control-rail {padding: 16px;}
+        }
+        @media (max-width: 820px) {
+            .metric-strip {grid-template-columns: 1fr;}
+            .control-rail {padding: 14px;}
+        }
         """,
     ) as demo:
         gr.Markdown(
@@ -3318,7 +3377,7 @@ def build_app() -> gr.Blocks:
         )
 
         with gr.Row(elem_classes=["app-shell"]):
-            with gr.Column(scale=1, min_width=280):
+            with gr.Column(scale=1, min_width=280, elem_classes=["control-rail"]):
                 upload = gr.File(label="Robinhood CSV", file_types=[".csv"])
                 dataset_source = gr.Radio(
                     choices=["Upload my CSV", "Use bundled fake dataset"],
@@ -3344,9 +3403,9 @@ def build_app() -> gr.Blocks:
                     """
                 )
 
-            with gr.Column(scale=3):
+            with gr.Column(scale=3, elem_classes=["content-rail"]):
                 risk_state = gr.State(value=None)
-                cards = gr.HTML(label="Summary Cards")
+                cards = gr.HTML(label="Summary Cards", elem_classes=["summary-cards-wrap"])
                 with gr.Tabs(selected="overview") as main_tabs:
                     with gr.Tab("Overview", id="overview"):
                         equity_plot = gr.Plot(label="Benchmark")
