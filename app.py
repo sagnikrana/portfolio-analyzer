@@ -2023,7 +2023,7 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         )
     fig.update_layout(
         title="Recent 6-Month Rolling Drawdown Depth vs S&P 500",
-        height=400,
+        height=460,
         margin={"l": 24, "r": 24, "t": 56, "b": 24},
         xaxis_title="Date",
         yaxis_title="Drawdown (%)",
@@ -2449,7 +2449,7 @@ def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) 
         )
         fig.update_layout(
             title="Recent 6-Month Rolling Volatility vs S&P 500",
-            height=360,
+            height=460,
             margin={"l": 24, "r": 24, "t": 60, "b": 24},
             template="plotly_dark",
             paper_bgcolor="rgba(0,0,0,0)",
@@ -2512,7 +2512,7 @@ def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) 
     )
     fig.update_layout(
         title="Recent 6-Month Rolling Volatility vs S&P 500",
-        height=360,
+        height=460,
         margin={"l": 40, "r": 24, "t": 60, "b": 36},
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -2564,7 +2564,7 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
     if not evidence_specs:
         fig = go.Figure()
         fig.add_annotation(
-            text="No metric is currently in the Very High Concern range, so no extra proof charts are needed right now.",
+            text="No metric is currently in the highest-scoring range, so no extra proof charts are needed right now.",
             x=0.5,
             y=0.5,
             xref="paper",
@@ -2573,7 +2573,7 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
             font={"size": 15, "color": "#e2e8f0"},
         )
         fig.update_layout(
-            title="Evidence Behind Very High Concerns",
+            title="Evidence Behind Top Risk Signals",
             height=220,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
             template="plotly_dark",
@@ -2595,14 +2595,19 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
         kind = item["kind"]
         if kind == "concentration":
             weights_df = pd.DataFrame(market_metrics["open_positions"])
-            weights_df = weights_df.sort_values("current_weight", ascending=True).tail(10)
+            weights_df = weights_df.sort_values("current_weight", ascending=True).tail(8)
+            weight_values = (weights_df["current_weight"].fillna(0.0) * 100).tolist()
+            largest_weight = float(raw_values.get("concentration::single_position_weight") or 0.0) * 100
+            largest_score = float(scores.get("concentration::single_position_weight", 0.0))
             fig.add_trace(
                 go.Bar(
-                    x=(weights_df["current_weight"].fillna(0.0) * 100).tolist(),
+                    x=weight_values,
                     y=weights_df["ticker"].tolist(),
                     orientation="h",
                     marker={"color": "#3B82F6"},
                     name="Weight",
+                    text=[f"{value:.1f}%" for value in weight_values],
+                    textposition="outside",
                     hovertemplate="%{y}: %{x:.1f}% of portfolio<extra></extra>",
                     showlegend=False,
                 ),
@@ -2615,12 +2620,31 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                 y=1,
                 xref=f"x{'' if row_idx == 1 else row_idx}",
                 yref=f"paper",
-                text="High-risk line",
+                text="Single-stock high-risk line",
                 showarrow=False,
                 font={"size": 11, "color": "#F59E0B"},
             )
+            if not weights_df.empty:
+                fig.add_annotation(
+                    x=weight_values[-1],
+                    y=weights_df["ticker"].iloc[-1],
+                    text=f"Score {largest_score:.1f}/100 at {largest_weight:.1f}%",
+                    showarrow=True,
+                    arrowhead=2,
+                    ax=70,
+                    ay=-28,
+                    bgcolor="rgba(15,23,42,0.92)",
+                    bordercolor="#3B82F6",
+                    font={"color": "#f8fafc", "size": 11},
+                    row=row_idx,
+                    col=1,
+                )
             fig.update_xaxes(title_text="Current Weight (%)", row=row_idx, col=1)
-            fig.update_xaxes(range=padded_axis_range((weights_df["current_weight"].fillna(0.0) * 100).tolist(), baseline_values=[22], min_padding=3.0), row=row_idx, col=1)
+            fig.update_xaxes(
+                range=padded_axis_range(weight_values, baseline_values=[22], min_padding=2.0),
+                row=row_idx,
+                col=1,
+            )
         elif kind == "turnover":
             actual_turnover = float(raw_values.get("behavior::turnover") or 0.0)
             fig.add_trace(
@@ -2839,8 +2863,8 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
             fig.update_xaxes(range=padded_axis_range([invested_value, cash_value], baseline_values=[invested_value + cash_value], min_padding=5000.0), row=row_idx, col=1)
 
     fig.update_layout(
-        title="Recent Evidence Behind Very High Concerns",
-        height=max(280, 270 * len(evidence_specs)),
+        title="Recent Evidence Behind Top Risk Signals",
+        height=max(420, 360 * len(evidence_specs)),
         margin={"l": 40, "r": 24, "t": 72, "b": 24},
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -3090,7 +3114,7 @@ def build_app() -> gr.Blocks:
                         volatility_drivers_df = gr.Dataframe(label="Top Drivers of 2025 Volatility", interactive=False)
                         risk_components_df = gr.Dataframe(label="Risk Signals", interactive=False)
                         recent_volatility_plot = gr.Plot(label="Recent Volatility vs S&P 500")
-                        risk_evidence_plot = gr.Plot(label="Evidence Behind Very High Concerns")
+                        risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
                         drawdown_plot = gr.Plot(label="Drawdown Comparison")
                     with gr.Tab("Benchmark"):
                         benchmark_md = gr.Markdown()
