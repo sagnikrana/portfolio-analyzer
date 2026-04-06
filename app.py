@@ -30,6 +30,7 @@ ROLLING_DRAWDOWN_HALF_LIFE_DAYS = round(365.25)
 BENCHMARK_RELATIVE_RISK_MAX_RATIO = 2.0
 RELATIVE_DOWNSIDE_CAPTURE_MAX_RATIO = 1.15
 VERY_HIGH_CONCERN_SCORE = 80.0
+RECENT_RISK_CHART_DAYS = round(365.25 * 1.5)
 
 
 @dataclass
@@ -1895,6 +1896,7 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
     fig = go.Figure()
     if not series.empty:
         series["date"] = pd.to_datetime(series["date"])
+        series = trim_to_recent_window(series, "date", RECENT_RISK_CHART_DAYS)
         x_values = series["date"].dt.strftime("%Y-%m-%d").tolist()
         portfolio_drawdown = (pd.to_numeric(series["portfolio_drawdown"], errors="coerce").fillna(0.0) * 100).tolist()
         benchmark_drawdown = (pd.to_numeric(series["benchmark_drawdown"], errors="coerce").fillna(0.0) * 100).tolist()
@@ -1922,8 +1924,36 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
                 hovertemplate="%{x|%Y-%m-%d}<br>S&P DD: %{y:.2f}%<extra></extra>",
             )
         )
+        if x_values:
+            fig.add_annotation(
+                x=x_values[-1],
+                y=portfolio_drawdown[-1],
+                text=f"Latest: {portfolio_drawdown[-1]:.1f}%",
+                showarrow=True,
+                arrowhead=2,
+                ax=40,
+                ay=-24,
+                bgcolor="rgba(15,23,42,0.92)",
+                bordercolor="#EF4444",
+                font={"color": "#f8fafc", "size": 11},
+            )
+            fig.add_annotation(
+                x=x_values[-1],
+                y=benchmark_drawdown[-1],
+                text=f"S&P: {benchmark_drawdown[-1]:.1f}%",
+                showarrow=True,
+                arrowhead=2,
+                ax=40,
+                ay=24,
+                bgcolor="rgba(15,23,42,0.92)",
+                bordercolor="#A855F7",
+                font={"color": "#f8fafc", "size": 11},
+            )
+            y_range = padded_axis_range(portfolio_drawdown + benchmark_drawdown, baseline_values=[0.0], min_padding=2.5)
+            if y_range is not None:
+                fig.update_yaxes(range=y_range)
     fig.update_layout(
-        title="Drawdown Through the Same Time Horizon",
+        title="Recent Drawdown vs S&P 500",
         height=400,
         margin={"l": 24, "r": 24, "t": 56, "b": 24},
         xaxis_title="Date",
@@ -2034,6 +2064,70 @@ def build_market_evidence_series(timeseries_records: list[dict[str, Any]]) -> di
     return {"aligned_performance": aligned_performance, "aligned_returns": aligned_returns}
 
 
+def trim_to_recent_window(df: pd.DataFrame, date_column: str, lookback_days: int) -> pd.DataFrame:
+    if df.empty or date_column not in df.columns:
+        return df
+    latest_date = pd.to_datetime(df[date_column]).max()
+    if pd.isna(latest_date):
+        return df
+    cutoff = latest_date - pd.Timedelta(days=lookback_days)
+    trimmed = df[pd.to_datetime(df[date_column]) >= cutoff].copy()
+    return trimmed if not trimmed.empty else df.copy()
+
+
+def trim_index_to_recent_window(df: pd.DataFrame, lookback_days: int) -> pd.DataFrame:
+    if df.empty or not isinstance(df.index, pd.DatetimeIndex):
+        return df
+    latest_date = df.index.max()
+    if pd.isna(latest_date):
+        return df
+    cutoff = latest_date - pd.Timedelta(days=lookback_days)
+    trimmed = df.loc[df.index >= cutoff].copy()
+    return trimmed if not trimmed.empty else df.copy()
+
+
+def padded_axis_range(
+    values: list[float],
+    *,
+    baseline_values: list[float] | None = None,
+    min_padding: float = 0.15,
+) -> list[float] | None:
+    clean_values = [float(value) for value in values if value is not None and not pd.isna(value)]
+    if baseline_values:
+        clean_values.extend(float(value) for value in baseline_values if value is not None and not pd.isna(value))
+    if not clean_values:
+        return None
+    min_value = min(clean_values)
+    max_value = max(clean_values)
+    spread = max_value - min_value
+    padding = max(spread * 0.15, min_padding)
+    lower = min_value - padding
+    upper = max_value + padding
+    if lower == upper:
+        lower -= min_padding
+        upper += min_padding
+    if min_value >= 0:
+        lower = max(0.0, lower)
+    return [lower, upper]
+
+
+def add_latest_annotation(fig: go.Figure, x_value: str, y_value: float, text: str, color: str, *, row: int, col: int) -> None:
+    fig.add_annotation(
+        x=x_value,
+        y=y_value,
+        text=text,
+        showarrow=True,
+        arrowhead=2,
+        ax=42,
+        ay=-26,
+        bgcolor="rgba(15,23,42,0.92)",
+        bordercolor=color,
+        font={"color": "#f8fafc", "size": 11},
+        row=row,
+        col=col,
+    )
+
+
 def rolling_relative_volatility_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
     aligned_performance = build_market_evidence_series(timeseries_records)["aligned_performance"]
     if aligned_performance.empty:
@@ -2055,7 +2149,8 @@ def rolling_relative_volatility_frame(timeseries_records: list[dict[str, Any]]) 
             continue
         portfolio_vol = float(returns["portfolio"].std() * math.sqrt(52))
         rows.append({"date": end_date, "ratio": portfolio_vol / benchmark_vol})
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows, columns=["date", "ratio"])
+    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS)
 
 
 def rolling_relative_drawdown_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -2074,7 +2169,8 @@ def rolling_relative_drawdown_frame(timeseries_records: list[dict[str, Any]]) ->
         if portfolio_dd is None or benchmark_dd is None or benchmark_dd <= 0:
             continue
         rows.append({"date": end_date, "ratio": portfolio_dd / benchmark_dd})
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows, columns=["date", "ratio"])
+    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS)
 
 
 def rolling_relative_downside_capture_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -2093,7 +2189,8 @@ def rolling_relative_downside_capture_frame(timeseries_records: list[dict[str, A
         if benchmark_down_mean == 0:
             continue
         rows.append({"date": end_date, "ratio": float(downside_slice["portfolio"].mean() / benchmark_down_mean)})
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows, columns=["date", "ratio"])
+    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS)
 
 
 def rolling_relative_market_sensitivity_frame(timeseries_records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -2116,7 +2213,8 @@ def rolling_relative_market_sensitivity_frame(timeseries_records: list[dict[str,
                 "ratio": float(window_slice["portfolio"].cov(window_slice["benchmark"]) / benchmark_var),
             }
         )
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows, columns=["date", "ratio"])
+    return trim_to_recent_window(frame, "date", RECENT_RISK_CHART_DAYS)
 
 
 def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[str, Any]) -> go.Figure:
@@ -2196,7 +2294,17 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                 col=1,
             )
             fig.add_vline(x=22, line_dash="dash", line_color="#F59E0B", row=row_idx, col=1)
+            fig.add_annotation(
+                x=22,
+                y=1,
+                xref=f"x{'' if row_idx == 1 else row_idx}",
+                yref=f"paper",
+                text="High-risk line",
+                showarrow=False,
+                font={"size": 11, "color": "#F59E0B"},
+            )
             fig.update_xaxes(title_text="Current Weight (%)", row=row_idx, col=1)
+            fig.update_xaxes(range=padded_axis_range((weights_df["current_weight"].fillna(0.0) * 100).tolist(), baseline_values=[22], min_padding=3.0), row=row_idx, col=1)
         elif kind == "turnover":
             actual_turnover = float(raw_values.get("behavior::turnover") or 0.0)
             fig.add_trace(
@@ -2212,7 +2320,17 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                 col=1,
             )
             fig.add_vline(x=0.5, line_dash="dash", line_color="#F59E0B", row=row_idx, col=1)
+            fig.add_annotation(
+                x=0.5,
+                y=1,
+                xref=f"x{'' if row_idx == 1 else row_idx}",
+                yref=f"paper",
+                text="High-risk line",
+                showarrow=False,
+                font={"size": 11, "color": "#F59E0B"},
+            )
             fig.update_xaxes(title_text="Turnover Ratio", row=row_idx, col=1)
+            fig.update_xaxes(range=padded_axis_range([actual_turnover], baseline_values=[0.5], min_padding=0.08), row=row_idx, col=1)
         elif kind == "holding_period":
             holding_days = float(raw_values.get("behavior::short_holding_period") or 0.0)
             fig.add_trace(
@@ -2228,13 +2346,25 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                 col=1,
             )
             fig.add_vline(x=SHORT_HOLD_TARGET_DAYS, line_dash="dash", line_color="#10B981", row=row_idx, col=1)
+            fig.add_annotation(
+                x=SHORT_HOLD_TARGET_DAYS,
+                y=1,
+                xref=f"x{'' if row_idx == 1 else row_idx}",
+                yref=f"paper",
+                text="18-month target",
+                showarrow=False,
+                font={"size": 11, "color": "#10B981"},
+            )
             fig.update_xaxes(title_text="Days Held", row=row_idx, col=1)
+            fig.update_xaxes(range=padded_axis_range([holding_days], baseline_values=[SHORT_HOLD_TARGET_DAYS], min_padding=25.0), row=row_idx, col=1)
         elif kind == "relative_volatility":
             frame = rolling_relative_volatility_frame(market_metrics["timeseries"])
+            x_values = pd.to_datetime(frame["date"]).dt.strftime("%Y-%m-%d").tolist()
+            y_values = frame["ratio"].tolist()
             fig.add_trace(
                 go.Scatter(
-                    x=pd.to_datetime(frame["date"]).dt.strftime("%Y-%m-%d").tolist(),
-                    y=frame["ratio"].tolist(),
+                    x=x_values,
+                    y=y_values,
                     mode="lines",
                     line={"width": 3, "color": "#3B82F6"},
                     hovertemplate="%{x}<br>Volatility ratio: %{y:.2f}x<extra></extra>",
@@ -2245,13 +2375,18 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
             )
             fig.add_hline(y=1.0, line_dash="dash", line_color="#10B981", row=row_idx, col=1)
             fig.add_hline(y=2.0, line_dash="dot", line_color="#F59E0B", row=row_idx, col=1)
+            if x_values:
+                add_latest_annotation(fig, x_values[-1], float(y_values[-1]), f"Latest: {y_values[-1]:.2f}x", "#3B82F6", row=row_idx, col=1)
             fig.update_yaxes(title_text="x Benchmark", row=row_idx, col=1)
+            fig.update_yaxes(range=padded_axis_range(y_values, baseline_values=[1.0, 2.0], min_padding=0.2), row=row_idx, col=1)
         elif kind == "relative_drawdown":
             frame = rolling_relative_drawdown_frame(market_metrics["timeseries"])
+            x_values = pd.to_datetime(frame["date"]).dt.strftime("%Y-%m-%d").tolist()
+            y_values = frame["ratio"].tolist()
             fig.add_trace(
                 go.Scatter(
-                    x=pd.to_datetime(frame["date"]).dt.strftime("%Y-%m-%d").tolist(),
-                    y=frame["ratio"].tolist(),
+                    x=x_values,
+                    y=y_values,
                     mode="lines",
                     line={"width": 3, "color": "#EF4444"},
                     hovertemplate="%{x}<br>Drawdown ratio: %{y:.2f}x<extra></extra>",
@@ -2262,13 +2397,18 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
             )
             fig.add_hline(y=1.0, line_dash="dash", line_color="#10B981", row=row_idx, col=1)
             fig.add_hline(y=2.0, line_dash="dot", line_color="#F59E0B", row=row_idx, col=1)
+            if x_values:
+                add_latest_annotation(fig, x_values[-1], float(y_values[-1]), f"Latest: {y_values[-1]:.2f}x", "#EF4444", row=row_idx, col=1)
             fig.update_yaxes(title_text="x Benchmark", row=row_idx, col=1)
+            fig.update_yaxes(range=padded_axis_range(y_values, baseline_values=[1.0, 2.0], min_padding=0.2), row=row_idx, col=1)
         elif kind == "relative_downside_capture":
             frame = rolling_relative_downside_capture_frame(market_metrics["timeseries"])
+            x_values = pd.to_datetime(frame["date"]).dt.strftime("%Y-%m-%d").tolist()
+            y_values = frame["ratio"].tolist()
             fig.add_trace(
                 go.Scatter(
-                    x=pd.to_datetime(frame["date"]).dt.strftime("%Y-%m-%d").tolist(),
-                    y=frame["ratio"].tolist(),
+                    x=x_values,
+                    y=y_values,
                     mode="lines",
                     line={"width": 3, "color": "#F97316"},
                     hovertemplate="%{x}<br>Downside capture: %{y:.2f}x<extra></extra>",
@@ -2279,13 +2419,22 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
             )
             fig.add_hline(y=1.0, line_dash="dash", line_color="#10B981", row=row_idx, col=1)
             fig.add_hline(y=RELATIVE_DOWNSIDE_CAPTURE_MAX_RATIO, line_dash="dot", line_color="#F59E0B", row=row_idx, col=1)
+            if x_values:
+                add_latest_annotation(fig, x_values[-1], float(y_values[-1]), f"Latest: {y_values[-1]:.2f}x", "#F97316", row=row_idx, col=1)
             fig.update_yaxes(title_text="x Benchmark", row=row_idx, col=1)
+            fig.update_yaxes(
+                range=padded_axis_range(y_values, baseline_values=[1.0, RELATIVE_DOWNSIDE_CAPTURE_MAX_RATIO], min_padding=0.08),
+                row=row_idx,
+                col=1,
+            )
         elif kind == "relative_market_sensitivity":
             frame = rolling_relative_market_sensitivity_frame(market_metrics["timeseries"])
+            x_values = pd.to_datetime(frame["date"]).dt.strftime("%Y-%m-%d").tolist()
+            y_values = frame["ratio"].tolist()
             fig.add_trace(
                 go.Scatter(
-                    x=pd.to_datetime(frame["date"]).dt.strftime("%Y-%m-%d").tolist(),
-                    y=frame["ratio"].tolist(),
+                    x=x_values,
+                    y=y_values,
                     mode="lines",
                     line={"width": 3, "color": "#A855F7"},
                     hovertemplate="%{x}<br>Sensitivity: %{y:.2f}x<extra></extra>",
@@ -2296,7 +2445,10 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
             )
             fig.add_hline(y=1.0, line_dash="dash", line_color="#10B981", row=row_idx, col=1)
             fig.add_hline(y=1.25, line_dash="dot", line_color="#F59E0B", row=row_idx, col=1)
+            if x_values:
+                add_latest_annotation(fig, x_values[-1], float(y_values[-1]), f"Latest: {y_values[-1]:.2f}x", "#A855F7", row=row_idx, col=1)
             fig.update_yaxes(title_text="x Benchmark", row=row_idx, col=1)
+            fig.update_yaxes(range=padded_axis_range(y_values, baseline_values=[1.0, 1.25], min_padding=0.08), row=row_idx, col=1)
         elif kind == "equity_exposure":
             headline = market_metrics["headline_metrics"]
             invested_value = float(headline.get("current_portfolio_value") or 0.0)
@@ -2328,9 +2480,10 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                 col=1,
             )
             fig.update_xaxes(title_text="Dollar Value", row=row_idx, col=1)
+            fig.update_xaxes(range=padded_axis_range([invested_value, cash_value], baseline_values=[invested_value + cash_value], min_padding=5000.0), row=row_idx, col=1)
 
     fig.update_layout(
-        title="Evidence Behind Very High Concerns",
+        title="Recent Evidence Behind Very High Concerns",
         height=max(280, 270 * len(evidence_specs)),
         margin={"l": 40, "r": 24, "t": 72, "b": 24},
         template="plotly_dark",
