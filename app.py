@@ -10,6 +10,7 @@ import urllib.request
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 import gradio as gr
@@ -555,6 +556,21 @@ def normalize_ticker_for_yahoo(symbol: str) -> str:
     return str(symbol).strip().replace(".", "-")
 
 
+@lru_cache(maxsize=512)
+def fetch_yahoo_sector_label(yahoo_symbol: str) -> str:
+    try:
+        info = yf.Ticker(yahoo_symbol).info or {}
+    except Exception:
+        return "Unclassified"
+    sector = info.get("sectorDisp") or info.get("sector")
+    if sector:
+        return str(sector)
+    quote_type = str(info.get("quoteType") or "").upper()
+    if quote_type in {"ETF", "MUTUALFUND", "INDEX", "FUND"}:
+        return "ETF / Fund"
+    return "Unclassified"
+
+
 def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_date: str) -> dict[str, Any]:
     tickers = sorted(set(symbol for symbol in traded_symbols if symbol))
     yahoo_map = {symbol: normalize_ticker_for_yahoo(symbol) for symbol in tickers}
@@ -588,12 +604,14 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
 
     latest_prices = ticker_close.ffill().iloc[-1].dropna().to_dict() if not ticker_close.empty else {}
     latest_benchmark_price = float(benchmark_close.iloc[-1]) if not benchmark_close.empty else None
+    sector_by_ticker = {symbol: fetch_yahoo_sector_label(yahoo_symbol) for symbol, yahoo_symbol in yahoo_map.items()}
 
     return {
         "ticker_close": ticker_close,
         "latest_prices": latest_prices,
         "benchmark_close": benchmark_close,
         "latest_benchmark_price": latest_benchmark_price,
+        "sector_by_ticker": sector_by_ticker,
     }
 
 
@@ -957,6 +975,7 @@ def build_market_enriched_metrics(
     ticker_close = market_data["ticker_close"]
     latest_prices = market_data["latest_prices"]
     benchmark_close = market_data["benchmark_close"]
+    sector_by_ticker = market_data.get("sector_by_ticker", {})
 
     if benchmark_close.empty:
         raise RuntimeError(f"No benchmark history returned for {benchmark_symbol}")
@@ -975,6 +994,7 @@ def build_market_enriched_metrics(
         )
 
     open_positions_df["latest_price"] = open_positions_df["ticker"].map(latest_prices)
+    open_positions_df["sector"] = open_positions_df["ticker"].map(sector_by_ticker).fillna("Unclassified")
     open_positions_df["current_value"] = open_positions_df["quantity"] * open_positions_df["latest_price"]
     open_positions_df["unrealized_pnl"] = open_positions_df["current_value"] - open_positions_df["cost_basis_total"]
     open_positions_df["unrealized_return_pct"] = (
@@ -1007,6 +1027,31 @@ def build_market_enriched_metrics(
         open_positions_df["current_weight"] = open_positions_df["current_value"] / current_portfolio_value
     else:
         open_positions_df["current_weight"] = 0.0
+
+    sector_allocation = pd.DataFrame(columns=["sector", "current_value", "weight_pct", "excess_return_vs_benchmark"])
+    if not open_positions_df.empty:
+        sector_rows = open_positions_df[["sector", "current_value", "excess_return_vs_benchmark"]].copy()
+        sector_rows["weighted_excess_value"] = (
+            sector_rows["current_value"].fillna(0.0) * sector_rows["excess_return_vs_benchmark"].fillna(0.0)
+        )
+        sector_allocation = (
+            sector_rows.groupby("sector", dropna=False)[["current_value", "weighted_excess_value"]]
+            .sum()
+            .reset_index()
+        )
+        sector_allocation["weight_pct"] = (
+            sector_allocation["current_value"] / current_portfolio_value if current_portfolio_value > 0 else 0.0
+        )
+        sector_allocation["excess_return_vs_benchmark"] = sector_allocation.apply(
+            lambda row: row["weighted_excess_value"] / row["current_value"] if row["current_value"] > 0 else None,
+            axis=1,
+        )
+        sector_allocation = sector_allocation.sort_values("current_value", ascending=False).reset_index(drop=True)
+
+    best_sector_row = None
+    valid_sector_alpha = sector_allocation.dropna(subset=["excess_return_vs_benchmark"])
+    if not valid_sector_alpha.empty:
+        best_sector_row = valid_sector_alpha.sort_values("excess_return_vs_benchmark", ascending=False).iloc[0]
 
     hhi = float((open_positions_df["current_weight"].fillna(0.0) ** 2).sum())
     max_position_weight = float(open_positions_df["current_weight"].max()) if not open_positions_df.empty else 0.0
@@ -1420,6 +1465,19 @@ def build_market_enriched_metrics(
         "headline_metrics": headline_metrics,
         "risk_score": risk_score,
         "open_positions": open_positions_df.sort_values("current_value", ascending=False).round(4).to_dict(orient="records"),
+        "sector_allocation": sector_allocation[["sector", "current_value", "weight_pct", "excess_return_vs_benchmark"]]
+        .round(4)
+        .to_dict(orient="records"),
+        "best_sector_vs_benchmark": (
+            {
+                "sector": str(best_sector_row["sector"]),
+                "current_value": round(float(best_sector_row["current_value"]), 2),
+                "weight_pct": round(float(best_sector_row["weight_pct"]), 4),
+                "excess_return_vs_benchmark": round(float(best_sector_row["excess_return_vs_benchmark"]), 4),
+            }
+            if best_sector_row is not None
+            else None
+        ),
         "performance_attribution": attribution_rows[:15],
         "top_volatility_drivers_2025": volatility_driver_rows,
         "sold_too_early": sold_too_early.head(15).round(4).to_dict(orient="records") if not sold_too_early.empty else [],
@@ -2209,6 +2267,53 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
     )
     fig.update_yaxes(ticksuffix="%", gridcolor="rgba(148,163,184,0.18)")
     fig.update_xaxes(gridcolor="rgba(148,163,184,0.18)")
+    return fig
+
+
+def plot_sector_allocation(sector_rows: list[dict[str, Any]]) -> go.Figure:
+    fig = go.Figure()
+    frame = pd.DataFrame(sector_rows)
+    if not frame.empty:
+        frame = frame.copy()
+        frame["current_value"] = pd.to_numeric(frame["current_value"], errors="coerce").fillna(0.0)
+        frame["weight_pct"] = pd.to_numeric(frame["weight_pct"], errors="coerce").fillna(0.0) * 100
+        frame = frame[frame["current_value"] > 0].sort_values("current_value", ascending=False)
+        fig.add_trace(
+            go.Pie(
+                labels=frame["sector"].tolist(),
+                values=frame["current_value"].tolist(),
+                hole=0.46,
+                textinfo="label+percent",
+                textposition="inside",
+                hovertemplate=(
+                    "%{label}<br>Current value: $%{value:,.2f}"
+                    "<br>Weight: %{percent}"
+                    "<extra></extra>"
+                ),
+                marker={"line": {"color": "rgba(15,23,42,0.95)", "width": 2}},
+            )
+        )
+    else:
+        fig.add_annotation(
+            text="Sector allocation is unavailable for the current portfolio.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15, "color": "#e2e8f0"},
+        )
+    fig.update_layout(
+        title="Current Sector Allocation",
+        height=430,
+        margin={"l": 24, "r": 24, "t": 56, "b": 24},
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+        showlegend=True,
+        legend={"orientation": "v", "x": 1.02, "xanchor": "left", "y": 0.5, "yanchor": "middle"},
+        hoverlabel=dark_hoverlabel(),
+    )
     return fig
 
 
@@ -3163,6 +3268,21 @@ def build_benchmark_markdown(market_metrics: dict[str, Any]) -> str:
 """
 
 
+def build_sector_overview_markdown(market_metrics: dict[str, Any]) -> str:
+    best_sector = market_metrics.get("best_sector_vs_benchmark")
+    sector_rows = market_metrics.get("sector_allocation", [])
+    if not sector_rows:
+        return "### Sector View\nSector allocation is unavailable for the current portfolio."
+    if not best_sector:
+        return "### Sector View\nSector allocation is available below, but benchmark-relative sector performance could not be estimated yet."
+    return (
+        "### Sector View\n"
+        f"- Best current sector vs trade-matched S&P 500: `{best_sector['sector']}`\n"
+        f"- Weighted excess return vs benchmark: `{pct_text(best_sector['excess_return_vs_benchmark'])}`\n"
+        f"- Current portfolio weight: `{pct_text(best_sector['weight_pct'])}`\n"
+    )
+
+
 def generate_fallback_insight(portfolio_summary: dict[str, Any], market_metrics: dict[str, Any]) -> str:
     headline = market_metrics["headline_metrics"]
     risk = market_metrics["risk_score"]
@@ -3247,12 +3367,13 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         stated_risk_score=risk_profile,
     )
     tables = format_display_tables(market_metrics)
-    benchmark_md = build_benchmark_markdown(market_metrics)
+    sector_overview_md = build_sector_overview_markdown(market_metrics)
     headline = market_metrics["headline_metrics"]
     risk = market_metrics["risk_score"]
     risk_guide_html = build_risk_guide_html(risk)
     metric_card_values = build_metric_card_values(risk)
     eq_fig = plot_equity_curves(market_metrics["timeseries"])
+    sector_fig = plot_sector_allocation(market_metrics.get("sector_allocation", []))
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
     recent_volatility_fig = plot_recent_volatility_comparison(market_metrics["timeseries"])
     risk_evidence_fig = plot_risk_evidence(market_metrics, portfolio_summary)
@@ -3275,6 +3396,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
 
     return (
         summary_cards,
+        sector_overview_md,
         risk_md,
         risk_guide_html,
         risk,
@@ -3282,6 +3404,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         tables["attribution"],
         tables["volatility_drivers"],
         eq_fig,
+        sector_fig,
         dd_fig,
         recent_volatility_fig,
         risk_evidence_fig,
@@ -3408,7 +3531,10 @@ def build_app() -> gr.Blocks:
                 cards = gr.HTML(label="Summary Cards", elem_classes=["summary-cards-wrap"])
                 with gr.Tabs(selected="overview") as main_tabs:
                     with gr.Tab("Overview", id="overview"):
-                        equity_plot = gr.Plot(label="Benchmark")
+                        sector_overview_md = gr.Markdown()
+                        with gr.Row():
+                            equity_plot = gr.Plot(label="Benchmark")
+                            sector_plot = gr.Plot(label="Sector Allocation")
                     with gr.Tab("Risk", id="risk"):
                         risk_md = gr.HTML()
                         metric_card_components: list[gr.HTML] = []
@@ -3442,6 +3568,7 @@ def build_app() -> gr.Blocks:
             inputs=[upload, risk_profile, dataset_source],
             outputs=[
                 cards,
+                sector_overview_md,
                 risk_md,
                 risk_guide_md,
                 risk_state,
@@ -3449,6 +3576,7 @@ def build_app() -> gr.Blocks:
                 attribution_df,
                 volatility_drivers_df,
                 equity_plot,
+                sector_plot,
                 drawdown_plot,
                 recent_volatility_plot,
                 risk_evidence_plot,
@@ -3468,4 +3596,4 @@ def build_app() -> gr.Blocks:
 
 if __name__ == "__main__":
     app = build_app()
-    app.launch(server_name="127.0.0.1", server_port=7860, share=True)
+    app.launch(server_name="127.0.0.1", server_port=7861, share=True)
