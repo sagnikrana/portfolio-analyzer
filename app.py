@@ -1660,17 +1660,32 @@ def metric_explanations() -> dict[str, dict[str, str]]:
     }
 
 
-def build_risk_explainer_markdown(risk: dict[str, Any]) -> str:
+def build_risk_explainer_html(risk: dict[str, Any]) -> str:
     explanations = metric_explanations()
     component_scores = risk["component_scores"]
     dimension_scores = risk["dimension_scores"]
 
     def render_metric(metric_key: str) -> str:
         info = explanations[metric_key]
-        score = component_scores.get(metric_key)
+        score = float(component_scores.get(metric_key, 0.0))
         return (
-            f"- **{info['label']}**: `{score}/100` ({score_readout(score)})\n"
-            f"  {info['meaning']} {info['bigger_picture']}"
+            "<div style='padding:10px 12px;border:1px solid rgba(148,163,184,.16);"
+            "border-radius:12px;background:rgba(15,23,42,.38)'>"
+            f"<div style='font-size:13px;color:#e2e8f0;font-weight:600'>{info['label']}</div>"
+            f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>{info['bigger_picture']}</div>"
+            f"<div style='font-size:12px;color:#93c5fd;margin-top:8px'>Score: {score:.1f}/100 · {score_readout(score)}</div>"
+            "</div>"
+        )
+
+    def render_dimension_card(title: str, score: float, subtitle: str) -> str:
+        return (
+            "<div style='padding:14px 16px;border:1px solid rgba(148,163,184,.16);"
+            "border-radius:14px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.92));"
+            "box-shadow:0 8px 24px rgba(2,6,23,.18)'>"
+            f"<div style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em'>{title}</div>"
+            f"<div style='font-size:28px;font-weight:700;color:#f8fafc;margin-top:8px'>{score:.1f}</div>"
+            f"<div style='font-size:12px;color:#cbd5e1;margin-top:6px'>{subtitle}</div>"
+            "</div>"
         )
 
     concentration_metrics = [
@@ -1690,27 +1705,44 @@ def build_risk_explainer_markdown(risk: dict[str, Any]) -> str:
         "market::equity_exposure",
     ]
 
-    return f"""
-### Risk Story
-- Stated risk score: `{risk["stated_score"]}/100` (`{risk["stated_band"]}`)
-- Observed portfolio risk: `{risk["score"]}/100` (`{risk["band"]}`)
-- Bigger picture: this portfolio currently reads as **{risk["alignment"].lower()}** with **{risk["confidence_band"].lower()} confidence**.
+    observed_vs_stated = (
+        "about in line with your stated risk"
+        if abs(risk["difference_vs_stated"]) < 8
+        else "higher than your stated risk"
+        if risk["difference_vs_stated"] > 0
+        else "lower than your stated risk"
+    )
+    observed_subtitle = f"{risk['band']} · {observed_vs_stated}"
+    market_subtitle = f"Relative to S&P 500 · Confidence: {risk['confidence_band']}"
 
-### 1. Concentration Risk
-- Dimension score: `{risk["dimension_scores"]["concentration_risk"]}/100` ({score_readout(dimension_scores["concentration_risk"])})
-- Bigger picture: this section asks whether your portfolio is too dependent on a small number of names.
-{chr(10).join(render_metric(metric) for metric in concentration_metrics)}
-
-### 2. Behavioral Risk
-- Dimension score: `{risk["dimension_scores"]["behavioral_risk"]}/100` ({score_readout(dimension_scores["behavioral_risk"])})
-- Bigger picture: this section asks whether your trading style looks patient and long-term, or more active and reactive.
-{chr(10).join(render_metric(metric) for metric in behavior_metrics)}
-
-### 3. Market Risk
-- Dimension score: `{risk["dimension_scores"]["market_risk"]}/100` ({score_readout(dimension_scores["market_risk"])})
-- Bigger picture: this section asks how your portfolio has behaved relative to the S&P 500 in real market conditions.
-{chr(10).join(render_metric(metric) for metric in market_metrics)}
-"""
+    # Keep the explanation layer compact so the tab feels like a dashboard, not a document.
+    return (
+        "<div style='display:grid;gap:16px'>"
+        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px'>"
+        f"{render_dimension_card('Observed Risk', risk['score'], observed_subtitle)}"
+        f"{render_dimension_card('Concentration', dimension_scores['concentration_risk'], 'How much a few holdings can dominate outcomes')}"
+        f"{render_dimension_card('Behavior', dimension_scores['behavioral_risk'], 'How patient or active your investing style looks')}"
+        f"{render_dimension_card('Market', dimension_scores['market_risk'], market_subtitle)}"
+        "</div>"
+        "<div style='display:grid;gap:14px'>"
+        "<div style='padding:16px;border:1px solid rgba(148,163,184,.16);border-radius:16px;background:rgba(15,23,42,.28)'>"
+        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>1. Concentration</div>"
+        "<div style='font-size:13px;color:#cbd5e1;margin-top:4px'>These scores show whether a small number of holdings can drive too much of the portfolio.</div>"
+        f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px'>{''.join(render_metric(metric) for metric in concentration_metrics)}</div>"
+        "</div>"
+        "<div style='padding:16px;border:1px solid rgba(148,163,184,.16);border-radius:16px;background:rgba(15,23,42,.28)'>"
+        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>2. Behavior</div>"
+        "<div style='font-size:13px;color:#cbd5e1;margin-top:4px'>These scores show whether your real trading pattern looks steady and long-term or more reactive.</div>"
+        f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px'>{''.join(render_metric(metric) for metric in behavior_metrics)}</div>"
+        "</div>"
+        "<div style='padding:16px;border:1px solid rgba(148,163,184,.16);border-radius:16px;background:rgba(15,23,42,.28)'>"
+        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>3. Market</div>"
+        "<div style='font-size:13px;color:#cbd5e1;margin-top:4px'>These scores show how your portfolio has behaved against the S&P 500 in real market conditions.</div>"
+        f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px'>{''.join(render_metric(metric) for metric in market_metrics)}</div>"
+        "</div>"
+        "</div>"
+        "</div>"
+    )
 
 
 def format_display_tables(market_metrics: dict[str, Any]) -> dict[str, pd.DataFrame]:
@@ -1770,13 +1802,13 @@ def format_display_tables(market_metrics: dict[str, Any]) -> dict[str, pd.DataFr
         "market::relative_market_sensitivity_to_benchmark",
         "market::equity_exposure",
     ]
+    # Keep the table short and scannable; the richer narrative lives in the cards above.
     risk_components = pd.DataFrame(
         [
             {
                 "group": explanations[key]["group"],
                 "metric": explanations[key]["label"],
                 "score": market_metrics["risk_score"]["component_scores"].get(key),
-                "what_it_means": explanations[key]["meaning"],
             }
             for key in risk_metric_order
             if key in market_metrics["risk_score"]["component_scores"]
@@ -2128,7 +2160,7 @@ def run_analysis(file_obj: Any, risk_profile: int, model_name: str, use_ollama: 
     )
     summary_cards = f"<div class='metric-strip'>{summary_cards_inner}</div>"
 
-    risk_md = build_risk_explainer_markdown(risk)
+    risk_md = build_risk_explainer_html(risk)
 
     return (
         summary_cards,
@@ -2199,8 +2231,8 @@ def build_app() -> gr.Blocks:
                         holdings_df = gr.Dataframe(label="Open Holdings", interactive=False)
                         attribution_df = gr.Dataframe(label="Performance Attribution", interactive=False)
                     with gr.Tab("Risk"):
-                        risk_md = gr.Markdown()
-                        risk_components_df = gr.Dataframe(label="Risk Breakdown", interactive=False)
+                        risk_md = gr.HTML()
+                        risk_components_df = gr.Dataframe(label="Risk Signals", interactive=False)
                         drawdown_plot = gr.Plot(label="Drawdown Comparison")
                     with gr.Tab("Benchmark"):
                         benchmark_md = gr.Markdown()
