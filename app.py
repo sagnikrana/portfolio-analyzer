@@ -1949,14 +1949,16 @@ def plot_equity_curves(timeseries_records: list[dict[str, Any]]) -> go.Figure:
 
 
 def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
-    series = pd.DataFrame(timeseries_records)
     fig = go.Figure()
-    if not series.empty:
-        series["date"] = pd.to_datetime(series["date"])
-        series = trim_to_recent_window(series, "date", RECENT_RISK_CHART_DAYS)
-        x_values = series["date"].dt.strftime("%Y-%m-%d").tolist()
-        portfolio_drawdown = (pd.to_numeric(series["portfolio_drawdown"], errors="coerce").fillna(0.0) * 100).tolist()
-        benchmark_drawdown = (pd.to_numeric(series["benchmark_drawdown"], errors="coerce").fillna(0.0) * 100).tolist()
+    frame = rolling_relative_drawdown_frame(timeseries_records)
+    if not frame.empty:
+        frame = frame.copy()
+        frame["date"] = pd.to_datetime(frame["date"])
+        x_values = frame["date"].dt.strftime("%Y-%m-%d").tolist()
+        # The rolling drawdown engine stores drawdown depth as positive magnitudes.
+        # Flip them negative for charting so the visual reads like a normal drawdown curve.
+        portfolio_drawdown = (-pd.to_numeric(frame["portfolio_drawdown"], errors="coerce").fillna(0.0) * 100).tolist()
+        benchmark_drawdown = (-pd.to_numeric(frame["benchmark_drawdown"], errors="coerce").fillna(0.0) * 100).tolist()
         fig.add_trace(
             go.Scatter(
                 x=x_values,
@@ -2009,8 +2011,18 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
             y_range = padded_axis_range(portfolio_drawdown + benchmark_drawdown, baseline_values=[0.0], min_padding=2.5)
             if y_range is not None:
                 fig.update_yaxes(range=y_range)
+    else:
+        fig.add_annotation(
+            text="Recent rolling drawdown evidence is unavailable for the last 18 months.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15, "color": "#e2e8f0"},
+        )
     fig.update_layout(
-        title="Recent Drawdown vs S&P 500",
+        title="Recent 6-Month Rolling Drawdown Depth vs S&P 500",
         height=400,
         margin={"l": 24, "r": 24, "t": 56, "b": 24},
         xaxis_title="Date",
