@@ -2263,7 +2263,7 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         },
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,24,39,0.55)",
-        hoverlabel=dark_hoverlabel(),
+        hoverlabel=dark_hoverlabel() ,
     )
     fig.update_yaxes(ticksuffix="%", gridcolor="rgba(148,163,184,0.18)")
     fig.update_xaxes(gridcolor="rgba(148,163,184,0.18)")
