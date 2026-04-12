@@ -20,6 +20,8 @@ from plotly.subplots import make_subplots
 import yfinance as yf
 
 
+APP_DIR = Path(__file__).resolve().parent
+REPO_ROOT = APP_DIR.parent
 DEFAULT_MODEL_NAME = "gemma:2b"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 BENCHMARK_SYMBOL = "^GSPC"
@@ -3339,7 +3341,7 @@ def resolve_ollama_analysis(
 def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple[Any, ...]:
     started_at = time.perf_counter()
     if dataset_source == "Use bundled fake dataset":
-        csv_path = Path(__file__).resolve().parent / "data" / "raw" / "fake_mantis_invest.csv"
+        csv_path = REPO_ROOT / "data" / "raw" / "fake_mantis_invest.csv"
     else:
         if file_obj is None:
             raise gr.Error("Upload a Robinhood CSV export first or switch to the bundled fake dataset.")
@@ -3593,6 +3595,10 @@ def build_app() -> gr.Blocks:
     return demo
 
 
-if __name__ == "__main__":
+def launch_app() -> None:
     app = build_app()
     app.launch(server_name="127.0.0.1", server_port=7861, share=True)
+
+
+if __name__ == "__main__":
+    launch_app()

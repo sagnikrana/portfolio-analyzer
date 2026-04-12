@@ -18,6 +18,9 @@ Hyper-personalized stock portfolio analyzer
 │   ├── processed      <- The final, canonical data sets for modeling.
 │   └── raw            <- The original, immutable data dump.
 │
+├── data_pipeline      <- Interactive notebooks for external data-source experiments
+│   └── build_data_jupyter.ipynb
+│
 ├── docs               <- A default mkdocs project; see www.mkdocs.org for details
 │
 ├── models             <- Trained and serialized models, model predictions, or model summaries
@@ -42,6 +45,8 @@ Hyper-personalized stock portfolio analyzer
 └── portfolio_analyzer   <- Source code for use in this project.
     │
     ├── __init__.py             <- Makes portfolio_analyzer a Python module
+    ├── __main__.py             <- Lets you launch the app with `python -m portfolio_analyzer`
+    ├── app.py                  <- Gradio dashboard app
     │
     ├── config.py               <- Store useful variables and configuration
     │
@@ -59,3 +64,9 @@ Hyper-personalized stock portfolio analyzer
 
 --------
 
+## Run The App
+
+```bash
+source .venv/bin/activate
+python -m portfolio_analyzer
+```
