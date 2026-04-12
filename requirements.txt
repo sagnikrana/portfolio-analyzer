@@ -4,6 +4,7 @@ torch
 transformers
 ruff
 pandas
+pyarrow
 yfinance
 gradio
 plotly
