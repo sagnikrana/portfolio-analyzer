@@ -22,6 +22,11 @@ import yfinance as yf
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
+DATA_DIR = REPO_ROOT / "data"
+PROCESSED_DIR = DATA_DIR / "processed"
+INTERIM_DIR = DATA_DIR / "interim"
+DIAGNOSIS_DIR = PROCESSED_DIR / "diagnosis"
+DIAGNOSIS_RUNS_DIR = INTERIM_DIR / "diagnosis_runs"
 DEFAULT_MODEL_NAME = "gemma:2b"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 BENCHMARK_SYMBOL = "^GSPC"
@@ -1570,6 +1575,122 @@ def make_json_safe(value: Any) -> Any:
     except Exception:
         pass
     return value
+
+
+def write_json_file(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{json.dumps(make_json_safe(payload), indent=2)}\n", encoding="utf-8")
+
+
+def write_csv_file(path: Path, data: pd.DataFrame | list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame = data.copy() if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
+    frame = frame.apply(lambda column: column.map(make_json_safe)) if not frame.empty else frame
+    frame.to_csv(path, index=False)
+
+
+def build_diagnosis_metric_frames(market_metrics: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    explanations = metric_explanations()
+    risk = market_metrics["risk_score"]
+    raw_metrics = risk.get("raw_metrics", {})
+    component_scores = risk.get("component_scores", {})
+
+    metric_rows: list[dict[str, Any]] = []
+    for metric_key in metric_navigation_order():
+        info = explanations.get(metric_key, {})
+        metric_rows.append(
+            {
+                "metric_key": metric_key,
+                "group": info.get("group"),
+                "label": info.get("label"),
+                "raw_value": raw_metrics.get(metric_key),
+                "score": component_scores.get(metric_key),
+                "score_readout": score_readout(component_scores.get(metric_key)),
+                "meaning": info.get("meaning"),
+                "bigger_picture": info.get("bigger_picture"),
+            }
+        )
+
+    dimension_rows = [
+        {
+            "dimension": dimension,
+            "score": score,
+            "score_readout": score_readout(score),
+        }
+        for dimension, score in risk.get("dimension_scores", {}).items()
+    ]
+
+    return pd.DataFrame(metric_rows), pd.DataFrame(dimension_rows)
+
+
+def save_diagnosis_artifacts(
+    *,
+    csv_path: Path,
+    dataset_source: str,
+    risk_profile: int,
+    transactions: pd.DataFrame,
+    portfolio_summary: dict[str, Any],
+    market_metrics: dict[str, Any],
+) -> dict[str, str]:
+    generated_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    latest_dir = DIAGNOSIS_DIR
+    run_dir = DIAGNOSIS_RUNS_DIR / run_id
+    metric_frame, dimension_frame = build_diagnosis_metric_frames(market_metrics)
+
+    bundle_manifest = {
+        "generated_at": generated_at,
+        "run_id": run_id,
+        "dataset_source": dataset_source,
+        "input_csv_path": str(csv_path),
+        "stated_risk_profile": risk_profile,
+        "analysis_start": market_metrics["headline_metrics"]["analysis_start"],
+        "analysis_end": market_metrics["headline_metrics"]["analysis_end"],
+        "benchmark_symbol": market_metrics["headline_metrics"]["benchmark_symbol"],
+        "files": [
+            "transactions.csv",
+            "open_positions.csv",
+            "sector_allocation.csv",
+            "timeseries.csv",
+            "risk_metric_scores.csv",
+            "risk_dimension_scores.csv",
+            "top_volatility_drivers_2025.csv",
+            "performance_attribution.csv",
+            "portfolio_summary.json",
+            "headline_metrics.json",
+            "risk_score.json",
+            "diagnosis_manifest.json",
+        ],
+    }
+
+    file_writes: list[tuple[str, Any]] = [
+        ("transactions.csv", transactions),
+        ("open_positions.csv", market_metrics["open_positions"]),
+        ("sector_allocation.csv", market_metrics["sector_allocation"]),
+        ("timeseries.csv", market_metrics["timeseries"]),
+        ("risk_metric_scores.csv", metric_frame),
+        ("risk_dimension_scores.csv", dimension_frame),
+        ("top_volatility_drivers_2025.csv", market_metrics.get("top_volatility_drivers_2025", [])),
+        ("performance_attribution.csv", market_metrics.get("performance_attribution", [])),
+        ("portfolio_summary.json", portfolio_summary),
+        ("headline_metrics.json", market_metrics["headline_metrics"]),
+        ("risk_score.json", market_metrics["risk_score"]),
+        ("diagnosis_manifest.json", bundle_manifest),
+    ]
+
+    for target_dir in (latest_dir, run_dir):
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for file_name, payload in file_writes:
+            path = target_dir / file_name
+            if file_name.endswith(".json"):
+                write_json_file(path, payload)
+            else:
+                write_csv_file(path, payload)
+
+    return {
+        "latest_dir": str(latest_dir),
+        "run_dir": str(run_dir),
+    }
 
 
 def call_ollama(
@@ -3367,6 +3488,14 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         benchmark_symbol=BENCHMARK_SYMBOL,
         projection_years=PROJECTION_YEARS,
         stated_risk_score=risk_profile,
+    )
+    save_diagnosis_artifacts(
+        csv_path=csv_path,
+        dataset_source=dataset_source,
+        risk_profile=risk_profile,
+        transactions=transactions,
+        portfolio_summary=portfolio_summary,
+        market_metrics=market_metrics,
     )
     tables = format_display_tables(market_metrics)
     sector_overview_md = build_sector_overview_markdown(market_metrics)

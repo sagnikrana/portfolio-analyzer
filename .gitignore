@@ -209,3 +209,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Local pipeline/runtime outputs
+data/processed/diagnosis/
+data/interim/diagnosis_runs/
+data/processed/unstructured/
+data/vector/
