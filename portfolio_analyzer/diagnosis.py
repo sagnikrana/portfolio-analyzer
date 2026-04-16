@@ -54,6 +54,48 @@ class DiagnosisSourceCoverage(BaseModel):
     performance_attribution_available: bool
     filing_text_available: bool = False
     news_text_available: bool = False
+    company_facts_available: bool = False
+    company_profiles_available: bool = False
+    macro_series_available: bool = False
+
+
+class MacroRegimeSnapshot(BaseModel):
+    as_of_date: Optional[str] = None
+    fed_funds_rate: Optional[float] = None
+    inflation_yoy: Optional[float] = None
+    unemployment_rate: Optional[float] = None
+    ten_year_yield: Optional[float] = None
+    two_year_yield: Optional[float] = None
+    yield_curve_spread: Optional[float] = None
+    regime_flags: list[str] = Field(default_factory=list)
+    summary: str
+
+
+class CompanyFundamentalSnapshot(BaseModel):
+    ticker: str
+    company_name: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    market_cap: Optional[float] = None
+    beta: Optional[float] = None
+    revenue: Optional[float] = None
+    net_income: Optional[float] = None
+    cash_and_equivalents: Optional[float] = None
+    total_assets: Optional[float] = None
+    total_liabilities: Optional[float] = None
+    stockholders_equity: Optional[float] = None
+    operating_cash_flow: Optional[float] = None
+    latest_filed_date: Optional[str] = None
+    signals: list[str] = Field(default_factory=list)
+
+
+class NarrativeEvidence(BaseModel):
+    ticker: str
+    source_type: str
+    document_date: Optional[str] = None
+    title: Optional[str] = None
+    url: Optional[str] = None
+    snippet: str
 
 
 class PortfolioRiskDiagnosis(BaseModel):
@@ -74,6 +116,9 @@ class PortfolioRiskDiagnosis(BaseModel):
     top_holding_drivers: list[HoldingRiskDriver] = Field(default_factory=list)
     top_sector_drivers: list[SectorRiskDriver] = Field(default_factory=list)
     supporting_metrics: list[RiskMetricObservation] = Field(default_factory=list)
+    macro_context: Optional[MacroRegimeSnapshot] = None
+    holding_fundamentals: list[CompanyFundamentalSnapshot] = Field(default_factory=list)
+    narrative_evidence: list[NarrativeEvidence] = Field(default_factory=list)
     data_coverage: DiagnosisSourceCoverage
     evidence_gaps: list[str] = Field(default_factory=list)
 
@@ -114,6 +159,7 @@ def _safe_float(value: Any) -> Optional[float]:
 
 
 def load_diagnosis_bundle(base_dir: Path) -> dict[str, Any]:
+    processed_dir = base_dir.parent
     return {
         "manifest": _load_json(base_dir / "diagnosis_manifest.json"),
         "headline": _load_json(base_dir / "headline_metrics.json"),
@@ -125,6 +171,11 @@ def load_diagnosis_bundle(base_dir: Path) -> dict[str, Any]:
         "sector_allocation": _load_csv(base_dir / "sector_allocation.csv"),
         "performance_attribution": _load_csv(base_dir / "performance_attribution.csv"),
         "volatility_drivers": _load_csv(base_dir / "top_volatility_drivers_2025.csv"),
+        "company_facts": _load_csv(processed_dir / "structured" / "company_facts.csv"),
+        "company_profiles": _load_csv(processed_dir / "structured" / "company_profiles.csv"),
+        "macro_series": _load_csv(processed_dir / "structured" / "macro_series.csv"),
+        "news_metadata": _load_csv(processed_dir / "structured" / "news_metadata.csv"),
+        "document_corpus": _load_csv(processed_dir / "unstructured" / "document_corpus.csv"),
     }
 
 
@@ -203,6 +254,205 @@ def _build_holding_drivers(bundle: dict[str, Any]) -> list[HoldingRiskDriver]:
             )
 
     return driver_rows[:5]
+
+
+def _latest_metric_value(
+    company_facts: pd.DataFrame,
+    ticker: str,
+    canonical_metric: str,
+) -> tuple[Optional[float], Optional[str]]:
+    subset = company_facts[
+        (company_facts["ticker"] == ticker)
+        & (company_facts["canonical_metric"] == canonical_metric)
+    ].copy()
+    if subset.empty:
+        return None, None
+    subset["filed_date"] = pd.to_datetime(subset["filed_date"], errors="coerce")
+    subset["value"] = pd.to_numeric(subset["value"], errors="coerce")
+    subset = subset.dropna(subset=["filed_date", "value"]).sort_values("filed_date")
+    if subset.empty:
+        return None, None
+    row = subset.iloc[-1]
+    return _safe_float(row.get("value")), str(row.get("filed_date").date())
+
+
+def _build_macro_context(bundle: dict[str, Any]) -> Optional[MacroRegimeSnapshot]:
+    macro = bundle["macro_series"].copy()
+    if macro.empty:
+        return None
+    macro["date"] = pd.to_datetime(macro["date"], errors="coerce")
+    macro["value"] = pd.to_numeric(macro["value"], errors="coerce")
+    macro = macro.dropna(subset=["date", "value"])
+    if macro.empty:
+        return None
+
+    def latest_value(series_id: str) -> tuple[Optional[float], Optional[pd.Timestamp]]:
+        subset = macro[macro["series_id"] == series_id].sort_values("date")
+        if subset.empty:
+            return None, None
+        row = subset.iloc[-1]
+        return _safe_float(row["value"]), row["date"]
+
+    fed_funds_rate, fed_date = latest_value("FEDFUNDS")
+    unemployment_rate, unrate_date = latest_value("UNRATE")
+    ten_year_yield, ten_year_date = latest_value("DGS10")
+    two_year_yield, two_year_date = latest_value("DGS2")
+
+    cpi = macro[macro["series_id"] == "CPIAUCSL"].sort_values("date")
+    inflation_yoy = None
+    cpi_date = None
+    if len(cpi) >= 13:
+        latest = cpi.iloc[-1]
+        prior = cpi[cpi["date"] <= latest["date"] - pd.DateOffset(years=1)]
+        if not prior.empty and prior.iloc[-1]["value"] not in (0, None):
+            inflation_yoy = (_safe_float(latest["value"]) / _safe_float(prior.iloc[-1]["value"])) - 1
+            cpi_date = latest["date"]
+
+    yield_curve_spread = None
+    if ten_year_yield is not None and two_year_yield is not None:
+        yield_curve_spread = ten_year_yield - two_year_yield
+
+    regime_flags: list[str] = []
+    if fed_funds_rate is not None and fed_funds_rate >= 3.0:
+        regime_flags.append("rates still restrictive")
+    if inflation_yoy is not None and inflation_yoy >= 0.03:
+        regime_flags.append("inflation still sticky")
+    if unemployment_rate is not None and unemployment_rate <= 4.5:
+        regime_flags.append("labor market still stable")
+    if yield_curve_spread is not None and yield_curve_spread > 0:
+        regime_flags.append("yield curve positively sloped")
+    elif yield_curve_spread is not None:
+        regime_flags.append("yield curve still inverted")
+
+    as_of_date = max(
+        [
+            d for d in [fed_date, unrate_date, ten_year_date, two_year_date, cpi_date] if d is not None
+        ],
+        default=None,
+    )
+    summary = (
+        "Macro backdrop looks moderately restrictive but stable. "
+        f"Fed funds are around {fed_funds_rate:.2f}% "
+        f"with inflation near {inflation_yoy:.2%} year over year and unemployment around {unemployment_rate:.1f}%. "
+        f"The 10Y-2Y spread is about {yield_curve_spread:.2f}%."
+        if fed_funds_rate is not None and inflation_yoy is not None and unemployment_rate is not None and yield_curve_spread is not None
+        else "Macro backdrop is partially available, but not all core regime series were present."
+    )
+    return MacroRegimeSnapshot(
+        as_of_date=as_of_date.date().isoformat() if as_of_date is not None else None,
+        fed_funds_rate=fed_funds_rate,
+        inflation_yoy=inflation_yoy,
+        unemployment_rate=unemployment_rate,
+        ten_year_yield=ten_year_yield,
+        two_year_yield=two_year_yield,
+        yield_curve_spread=yield_curve_spread,
+        regime_flags=regime_flags,
+        summary=summary,
+    )
+
+
+def _build_holding_fundamentals(
+    bundle: dict[str, Any],
+    top_holding_drivers: list[HoldingRiskDriver],
+) -> list[CompanyFundamentalSnapshot]:
+    company_facts = bundle["company_facts"].copy()
+    profiles = bundle["company_profiles"].copy()
+    if company_facts.empty and profiles.empty:
+        return []
+
+    snapshots: list[CompanyFundamentalSnapshot] = []
+    for driver in top_holding_drivers:
+        ticker = driver.ticker
+        profile_row = profiles[profiles["symbol"] == ticker].head(1)
+        profile = profile_row.iloc[0].to_dict() if not profile_row.empty else {}
+
+        revenue, revenue_date = _latest_metric_value(company_facts, ticker, "revenue")
+        net_income, net_income_date = _latest_metric_value(company_facts, ticker, "net_income")
+        cash, cash_date = _latest_metric_value(company_facts, ticker, "cash_and_equivalents")
+        assets, assets_date = _latest_metric_value(company_facts, ticker, "total_assets")
+        liabilities, liabilities_date = _latest_metric_value(company_facts, ticker, "liability_related")
+        equity, equity_date = _latest_metric_value(company_facts, ticker, "stockholders_equity")
+        operating_cash_flow, operating_cash_flow_date = _latest_metric_value(
+            company_facts, ticker, "operating_cash_flow"
+        )
+
+        dates = [d for d in [revenue_date, net_income_date, cash_date, assets_date, liabilities_date, equity_date, operating_cash_flow_date] if d]
+        latest_filed_date = max(dates) if dates else None
+
+        signals: list[str] = []
+        beta = _safe_float(profile.get("beta"))
+        if beta is not None and beta > 1.2:
+            signals.append("above-market beta")
+        if net_income is not None and net_income > 0:
+            signals.append("latest net income positive")
+        elif net_income is not None:
+            signals.append("latest net income negative")
+        if operating_cash_flow is not None and operating_cash_flow > 0:
+            signals.append("operating cash flow positive")
+        if assets is not None and liabilities is not None and assets > 0:
+            if liabilities / assets > 0.75:
+                signals.append("liabilities are a large share of assets")
+            else:
+                signals.append("balance sheet coverage looks reasonable")
+
+        snapshots.append(
+            CompanyFundamentalSnapshot(
+                ticker=ticker,
+                company_name=profile.get("companyName"),
+                sector=profile.get("sector"),
+                industry=profile.get("industry"),
+                market_cap=_safe_float(profile.get("marketCap")),
+                beta=beta,
+                revenue=revenue,
+                net_income=net_income,
+                cash_and_equivalents=cash,
+                total_assets=assets,
+                total_liabilities=liabilities,
+                stockholders_equity=equity,
+                operating_cash_flow=operating_cash_flow,
+                latest_filed_date=latest_filed_date,
+                signals=signals,
+            )
+        )
+    return snapshots
+
+
+def _clean_snippet(text: Any, limit: int = 280) -> str:
+    snippet = str(text or "").replace("\n", " ").replace("\r", " ").strip()
+    snippet = " ".join(snippet.split())
+    return snippet[:limit]
+
+
+def _build_narrative_evidence(
+    bundle: dict[str, Any],
+    top_holding_drivers: list[HoldingRiskDriver],
+) -> list[NarrativeEvidence]:
+    corpus = bundle["document_corpus"].copy()
+    if corpus.empty:
+        return []
+    evidence: list[NarrativeEvidence] = []
+    tickers = [driver.ticker for driver in top_holding_drivers]
+    for ticker in tickers:
+        ticker_docs = corpus[corpus["ticker"] == ticker].copy()
+        if ticker_docs.empty:
+            continue
+        ticker_docs["document_date"] = pd.to_datetime(ticker_docs["document_date"], errors="coerce")
+        for source_type in ["sec_filing", "news_article"]:
+            subset = ticker_docs[ticker_docs["source_type"] == source_type].sort_values("document_date", ascending=False)
+            if subset.empty:
+                continue
+            row = subset.iloc[0]
+            evidence.append(
+                NarrativeEvidence(
+                    ticker=ticker,
+                    source_type=str(source_type),
+                    document_date=row["document_date"].date().isoformat() if pd.notna(row["document_date"]) else None,
+                    title=row.get("title"),
+                    url=row.get("url"),
+                    snippet=_clean_snippet(row.get("body_text")),
+                )
+            )
+    return evidence
 
 
 def _build_sector_drivers(bundle: dict[str, Any]) -> list[SectorRiskDriver]:
@@ -339,14 +589,18 @@ def _build_diagnostic_summary(bundle: dict[str, Any], top_concerns: list[Diagnos
     )
 
 
-def _build_evidence_gaps(bundle: dict[str, Any]) -> list[str]:
+def _build_evidence_gaps(bundle: dict[str, Any], macro_context: Optional[MacroRegimeSnapshot], narrative_evidence: list[NarrativeEvidence]) -> list[str]:
     gaps = [
         "User goals and constraints beyond the stated risk score are not yet modeled in the diagnosis object.",
-        "Filing and news text are available in the pipeline, but company-specific narrative risk is not yet linked into concern ranking.",
-        "Macro data exists, but there is not yet a dedicated macro regime summary object feeding the diagnosis.",
+        "Company-specific narrative evidence is available, but it is not yet weighted quantitatively into concern ranking.",
+        "Fundamental snapshots are based on broad canonical metrics and still need tighter metric selection for production use.",
     ]
     if bundle["volatility_drivers"].empty:
         gaps.append("No volatility driver table was available for holding-level variance attribution.")
+    if macro_context is None:
+        gaps.append("Macro regime summary could not be built from the processed macro dataset.")
+    if not narrative_evidence:
+        gaps.append("No usable narrative evidence was available for the main holding drivers.")
     return gaps
 
 
@@ -356,6 +610,9 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
     top_sector_drivers = _build_sector_drivers(bundle)
     top_concerns = _build_top_concerns(bundle, top_holding_drivers, top_sector_drivers)
     supporting_metrics = _build_metric_observations(bundle)
+    macro_context = _build_macro_context(bundle)
+    holding_fundamentals = _build_holding_fundamentals(bundle, top_holding_drivers)
+    narrative_evidence = _build_narrative_evidence(bundle, top_holding_drivers)
     manifest = bundle["manifest"]
     headline = bundle["headline"]
     risk = bundle["risk"]
@@ -378,12 +635,20 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         top_holding_drivers=top_holding_drivers,
         top_sector_drivers=top_sector_drivers,
         supporting_metrics=supporting_metrics,
+        macro_context=macro_context,
+        holding_fundamentals=holding_fundamentals,
+        narrative_evidence=narrative_evidence,
         data_coverage=DiagnosisSourceCoverage(
             risk_metrics_available=not bundle["risk_metrics"].empty,
             open_positions_available=not bundle["open_positions"].empty,
             sector_allocation_available=not bundle["sector_allocation"].empty,
             volatility_drivers_available=not bundle["volatility_drivers"].empty,
             performance_attribution_available=not bundle["performance_attribution"].empty,
+            filing_text_available=not bundle["document_corpus"][bundle["document_corpus"]["source_type"] == "sec_filing"].empty,
+            news_text_available=not bundle["document_corpus"][bundle["document_corpus"]["source_type"] == "news_article"].empty,
+            company_facts_available=not bundle["company_facts"].empty,
+            company_profiles_available=not bundle["company_profiles"].empty,
+            macro_series_available=not bundle["macro_series"].empty,
         ),
-        evidence_gaps=_build_evidence_gaps(bundle),
+        evidence_gaps=_build_evidence_gaps(bundle, macro_context, narrative_evidence),
     )
