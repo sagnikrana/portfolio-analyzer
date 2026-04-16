@@ -22,9 +22,12 @@ class RiskMetricObservation(BaseModel):
 class DiagnosisConcern(BaseModel):
     concern_key: str
     label: str
+    base_severity_score: float
+    external_adjustment_score: float = 0.0
     severity_score: float
     severity_band: str
     summary: str
+    adjustment_reasons: list[str] = Field(default_factory=list)
     evidence_metric_keys: list[str] = Field(default_factory=list)
     related_tickers: list[str] = Field(default_factory=list)
     related_sectors: list[str] = Field(default_factory=list)
@@ -96,6 +99,24 @@ class NarrativeEvidence(BaseModel):
     title: Optional[str] = None
     url: Optional[str] = None
     snippet: str
+
+
+NEGATIVE_NARRATIVE_KEYWORDS = {
+    "delay",
+    "concern",
+    "concerns",
+    "cybersecurity",
+    "downgrade",
+    "lower",
+    "litigation",
+    "regulation",
+    "antitrust",
+    "headwind",
+    "risk",
+    "risks",
+    "volatile",
+    "pressure",
+}
 
 
 class PortfolioRiskDiagnosis(BaseModel):
@@ -455,6 +476,16 @@ def _build_narrative_evidence(
     return evidence
 
 
+def _narrative_risk_map(narrative_evidence: list[NarrativeEvidence]) -> dict[str, int]:
+    risk_counts: dict[str, int] = {}
+    for item in narrative_evidence:
+        text = f"{item.title or ''} {item.snippet}".lower()
+        matches = sum(1 for keyword in NEGATIVE_NARRATIVE_KEYWORDS if keyword in text)
+        if matches > 0:
+            risk_counts[item.ticker] = risk_counts.get(item.ticker, 0) + matches
+    return risk_counts
+
+
 def _build_sector_drivers(bundle: dict[str, Any]) -> list[SectorRiskDriver]:
     sectors = bundle["sector_allocation"].copy()
     if sectors.empty:
@@ -513,10 +544,76 @@ def _concern_summary(concern_key: str, bundle: dict[str, Any]) -> str:
     )
 
 
+def _concern_adjustments(
+    concern_key: str,
+    bundle: dict[str, Any],
+    top_holding_drivers: list[HoldingRiskDriver],
+    top_sector_drivers: list[SectorRiskDriver],
+    macro_context: Optional[MacroRegimeSnapshot],
+    holding_fundamentals: list[CompanyFundamentalSnapshot],
+    narrative_evidence: list[NarrativeEvidence],
+) -> tuple[float, list[str]]:
+    adjustment = 0.0
+    reasons: list[str] = []
+    narrative_risk = _narrative_risk_map(narrative_evidence)
+    fundamentals_by_ticker = {item.ticker: item for item in holding_fundamentals}
+
+    if concern_key == "concentration":
+        top_driver = top_holding_drivers[0] if top_holding_drivers else None
+        if top_driver and (top_driver.current_weight or 0.0) >= 0.5:
+            adjustment += 8.0
+            reasons.append("largest holding still dominates after external review")
+            top_fundamental = fundamentals_by_ticker.get(top_driver.ticker)
+            if top_fundamental and top_fundamental.beta and top_fundamental.beta > 1.1:
+                adjustment += 3.0
+                reasons.append(f"{top_driver.ticker} also carries above-market beta")
+            if narrative_risk.get(top_driver.ticker, 0) > 0:
+                adjustment += 3.0
+                reasons.append(f"{top_driver.ticker} also has risk-labeled narrative evidence")
+        if top_sector_drivers and (top_sector_drivers[0].weight_pct or 0.0) >= 0.5:
+            adjustment += 4.0
+            reasons.append("one sector dominates the portfolio along with the top holding")
+
+    elif concern_key == "market":
+        if macro_context:
+            if "rates still restrictive" in macro_context.regime_flags:
+                adjustment += 3.0
+                reasons.append("macro backdrop still has restrictive rates")
+            if "inflation still sticky" in macro_context.regime_flags:
+                adjustment += 2.0
+                reasons.append("sticky inflation can pressure richly priced risk assets")
+        high_beta_count = sum(1 for item in holding_fundamentals if (item.beta or 0.0) > 1.2)
+        if high_beta_count >= 2:
+            adjustment += 4.0
+            reasons.append("multiple main drivers still have above-market beta")
+        risky_narrative_names = [ticker for ticker, count in narrative_risk.items() if count > 0]
+        if risky_narrative_names:
+            adjustment += 3.0
+            reasons.append("external narrative evidence reinforces market sensitivity concerns")
+
+    elif concern_key == "behavior":
+        lagging_driver_count = sum(
+            1
+            for driver in top_holding_drivers
+            if (driver.excess_return_vs_benchmark or 0.0) < 0
+        )
+        if lagging_driver_count >= 3:
+            adjustment += 1.5
+            reasons.append("several top drivers are lagging benchmark despite low trading churn")
+        if narrative_risk:
+            adjustment += 1.0
+            reasons.append("behavior should still be interpreted in light of evolving company news")
+
+    return adjustment, reasons
+
+
 def _build_top_concerns(
     bundle: dict[str, Any],
     top_holding_drivers: list[HoldingRiskDriver],
     top_sector_drivers: list[SectorRiskDriver],
+    macro_context: Optional[MacroRegimeSnapshot],
+    holding_fundamentals: list[CompanyFundamentalSnapshot],
+    narrative_evidence: list[NarrativeEvidence],
 ) -> list[DiagnosisConcern]:
     risk = bundle["risk"]
     dimension_scores = risk.get("dimension_scores", {})
@@ -557,16 +654,29 @@ def _build_top_concerns(
     concerns: list[DiagnosisConcern] = []
     related_tickers = [driver.ticker for driver in top_holding_drivers]
     related_sectors = [driver.sector for driver in top_sector_drivers if driver.sector]
-    for concern_key, label, severity_score, metric_keys in concern_configs:
-        if severity_score <= 0:
+    for concern_key, label, base_score, metric_keys in concern_configs:
+        if base_score <= 0:
             continue
+        external_adjustment_score, adjustment_reasons = _concern_adjustments(
+            concern_key,
+            bundle,
+            top_holding_drivers,
+            top_sector_drivers,
+            macro_context,
+            holding_fundamentals,
+            narrative_evidence,
+        )
+        severity_score = min(100.0, round(base_score + external_adjustment_score, 1))
         concerns.append(
             DiagnosisConcern(
                 concern_key=concern_key,
                 label=label,
-                severity_score=round(severity_score, 1),
+                base_severity_score=round(base_score, 1),
+                external_adjustment_score=round(external_adjustment_score, 1),
+                severity_score=severity_score,
                 severity_band=_severity_band(severity_score),
                 summary=_concern_summary(concern_key, bundle),
+                adjustment_reasons=adjustment_reasons,
                 evidence_metric_keys=metric_keys,
                 related_tickers=related_tickers[:3] if concern_key != "behavior" else [],
                 related_sectors=related_sectors[:2] if concern_key in {"concentration", "market"} else [],
@@ -580,19 +690,27 @@ def _build_diagnostic_summary(bundle: dict[str, Any], top_concerns: list[Diagnos
     risk = bundle["risk"]
     headline = bundle["headline"]
     concern_labels = ", ".join(concern.label.lower() for concern in top_concerns[:2]) or "overall portfolio risk"
+    adjustment_clause = ""
+    if top_concerns:
+        top_adjustments = [
+            reason
+            for concern in top_concerns[:2]
+            for reason in concern.adjustment_reasons[:2]
+        ]
+        if top_adjustments:
+            adjustment_clause = " External evidence reinforced this read through " + "; ".join(top_adjustments[:3]) + "."
     return (
         f"Observed portfolio risk is {risk['score']:.1f}/100 ({risk['band']}) versus a stated risk of "
         f"{risk['stated_score']:.1f}/100 ({risk['stated_band']}). The portfolio currently looks "
         f"{risk['alignment'].replace('Observed portfolio risk is ', '').lower()}. "
         f"The main diagnosis is driven by {concern_labels}, over the analysis window "
-        f"{headline['analysis_start']} to {headline['analysis_end']}."
+        f"{headline['analysis_start']} to {headline['analysis_end']}.{adjustment_clause}"
     )
 
 
 def _build_evidence_gaps(bundle: dict[str, Any], macro_context: Optional[MacroRegimeSnapshot], narrative_evidence: list[NarrativeEvidence]) -> list[str]:
     gaps = [
         "User goals and constraints beyond the stated risk score are not yet modeled in the diagnosis object.",
-        "Company-specific narrative evidence is available, but it is not yet weighted quantitatively into concern ranking.",
         "Fundamental snapshots are based on broad canonical metrics and still need tighter metric selection for production use.",
     ]
     if bundle["volatility_drivers"].empty:
@@ -608,11 +726,18 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
     bundle = load_diagnosis_bundle(base_dir)
     top_holding_drivers = _build_holding_drivers(bundle)
     top_sector_drivers = _build_sector_drivers(bundle)
-    top_concerns = _build_top_concerns(bundle, top_holding_drivers, top_sector_drivers)
     supporting_metrics = _build_metric_observations(bundle)
     macro_context = _build_macro_context(bundle)
     holding_fundamentals = _build_holding_fundamentals(bundle, top_holding_drivers)
     narrative_evidence = _build_narrative_evidence(bundle, top_holding_drivers)
+    top_concerns = _build_top_concerns(
+        bundle,
+        top_holding_drivers,
+        top_sector_drivers,
+        macro_context,
+        holding_fundamentals,
+        narrative_evidence,
+    )
     manifest = bundle["manifest"]
     headline = bundle["headline"]
     risk = bundle["risk"]
