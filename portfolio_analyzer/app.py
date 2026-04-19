@@ -2385,43 +2385,50 @@ def build_sector_driver_explanation(driver: Any) -> str:
 def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     holding_items = "".join(
         (
-            "<li style='margin-bottom:10px'>"
-            f"<strong>{driver.ticker}</strong>"
-            + (f" ({driver.sector})" if driver.sector else "")
+            "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.14);border-radius:16px;"
+            "background:rgba(15,23,42,.34);margin-bottom:12px'>"
+            "<div style='display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline'>"
+            f"<div style='font-size:18px;font-weight:700;color:#f8fafc'>{driver.ticker}</div>"
             + (
-                f" — current weight {percent_display(driver.current_weight)}, "
-                f"benchmark-relative return {percent_display(driver.excess_return_vs_benchmark)}, "
-                f"variance contribution {percent_display(driver.variance_contribution_pct)}"
+                f"<div style='font-size:15px;color:#cbd5e1'>({driver.sector})</div>"
+                if driver.sector
+                else ""
             )
-            + f"<br><span style='color:#cbd5e1'>{build_holding_driver_explanation(diagnosis, driver)}</span>"
-            "</li>"
+            + "</div>"
+            "<div style='display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:10px;font-size:14px;color:#93c5fd'>"
+            f"<span>Weight: <strong style='color:#f8fafc'>{percent_display(driver.current_weight)}</strong></span>"
+            f"<span>Vs benchmark: <strong style='color:#f8fafc'>{percent_display(driver.excess_return_vs_benchmark)}</strong></span>"
+            f"<span>Variance contribution: <strong style='color:#f8fafc'>{percent_display(driver.variance_contribution_pct)}</strong></span>"
+            "</div>"
+            f"<div style='margin-top:12px;font-size:15px;line-height:1.55;color:#dbe4f0'>{build_holding_driver_explanation(diagnosis, driver)}</div>"
+            "</div>"
         )
         for driver in diagnosis.top_holding_drivers
-    ) or "<li>No holding-level drivers were identified yet.</li>"
+    ) or "<div style='color:#cbd5e1'>No holding-level drivers were identified yet.</div>"
     sector_items = "".join(
         (
-            "<li style='margin-bottom:10px'>"
-            f"<strong>{driver.sector}</strong> — weight {percent_display(driver.weight_pct)}, "
-            f"excess return vs benchmark {percent_display(driver.excess_return_vs_benchmark)}"
-            f"<br><span style='color:#cbd5e1'>{build_sector_driver_explanation(driver)}</span>"
-            "</li>"
+            "<div style='padding:14px 16px;border:1px solid rgba(148,163,184,.14);border-radius:14px;"
+            "background:rgba(15,23,42,.28);margin-bottom:10px'>"
+            f"<div style='font-size:16px;font-weight:700;color:#f8fafc'>{driver.sector}</div>"
+            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Weight <strong style='color:#f8fafc'>{percent_display(driver.weight_pct)}</strong> · "
+            f"Vs benchmark <strong style='color:#f8fafc'>{percent_display(driver.excess_return_vs_benchmark)}</strong></div>"
+            f"<div style='margin-top:10px;font-size:14px;line-height:1.5;color:#cbd5e1'>{build_sector_driver_explanation(driver)}</div>"
+            "</div>"
         )
         for driver in diagnosis.top_sector_drivers
-    ) or "<li>No sector-level drivers were identified yet.</li>"
+    ) or "<div style='color:#cbd5e1'>No sector-level drivers were identified yet.</div>"
     return (
-        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px'>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Top Holding Drivers</div>"
         "<div style='font-size:13px;color:#93c5fd;margin-top:6px'>Named positions currently driving the diagnosis.</div>"
-        f"<ol style='margin-top:14px;color:#e2e8f0;padding-left:18px'>{holding_items}</ol>"
+        f"<div style='margin-top:14px'>{holding_items}</div>"
         "</div>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94));margin-top:16px'>"
         "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Sector Drivers</div>"
         "<div style='font-size:13px;color:#93c5fd;margin-top:6px'>Sector exposure patterns making the portfolio feel crowded or fragile.</div>"
-        f"<ol style='margin-top:14px;color:#e2e8f0;padding-left:18px'>{sector_items}</ol>"
-        "</div>"
+        f"<div style='margin-top:14px'>{sector_items}</div>"
         "</div>"
     )
 
@@ -4353,11 +4360,10 @@ def build_app() -> gr.Blocks:
                         risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
                         drawdown_plot = gr.Plot(label="Downside Depth vs S&P 500")
                     with gr.Tab("Risk Diagnosis", id="risk-diagnosis"):
+                        diagnosis_driver_md = gr.HTML()
                         with gr.Row(equal_height=True):
-                            with gr.Column(scale=6):
-                                diagnosis_driver_md = gr.HTML()
-                            with gr.Column(scale=5):
-                                diagnosis_concern_plot = gr.Plot(label="Top Risk Categories")
+                            diagnosis_concern_plot = gr.Plot(label="Top Risk Categories")
+                            diagnosis_sector_plot = gr.Plot(label="Sector Crowding View")
                         diagnosis_stock_filter = gr.Dropdown(
                             label="Risk Lens",
                             choices=["Portfolio"],
@@ -4366,11 +4372,10 @@ def build_app() -> gr.Blocks:
                             info="View these risk charts for the full portfolio or a single stock. Stocks are ordered by diagnosis risk.",
                         )
                         with gr.Row(equal_height=True):
-                            diagnosis_sector_plot = gr.Plot(label="Sector Crowding View")
                             diagnosis_recent_volatility_plot = gr.Plot(label="Volatility vs S&P 500")
+                            diagnosis_market_sensitivity_plot = gr.Plot(label="Market Sensitivity vs S&P 500")
                         with gr.Row(equal_height=True):
                             diagnosis_drawdown_plot = gr.Plot(label="Downside Depth vs S&P 500")
-                            diagnosis_market_sensitivity_plot = gr.Plot(label="Market Sensitivity vs S&P 500")
                         diagnosis_macro_md = gr.HTML()
                         with gr.Accordion("Detailed Evidence", open=False):
                             diagnosis_risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
