@@ -19,6 +19,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import yfinance as yf
 
+try:
+    from portfolio_analyzer.diagnosis import PortfolioRiskDiagnosis, portfolio_risk_diagnosis_from_saved_artifacts
+except ModuleNotFoundError:
+    from diagnosis import PortfolioRiskDiagnosis, portfolio_risk_diagnosis_from_saved_artifacts
+
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
@@ -2138,6 +2143,354 @@ def build_metric_card_values(risk: dict[str, Any]) -> list[str]:
     return values
 
 
+def metric_value_display(metric_key: str, raw_value: Any) -> str:
+    value = parse_display_number(raw_value)
+    if value is None:
+        return str(raw_value) if raw_value not in (None, "") else "N/A"
+    percent_metric_keys = {
+        "concentration::single_position_weight",
+        "concentration::top_5_weight",
+        "behavior::turnover",
+    }
+    if metric_key in percent_metric_keys:
+        return percent_display(value)
+    if metric_key == "behavior::short_holding_period":
+        return f"{value:.0f} days"
+    if metric_key.startswith("market::relative_"):
+        return f"{value:.2f}x"
+    if metric_key == "market::equity_exposure":
+        return percent_display(value)
+    if metric_key == "concentration::effective_holdings":
+        return number_text(value, 2)
+    return number_text(value, 2)
+
+
+def build_diagnosis_summary_html(diagnosis: PortfolioRiskDiagnosis) -> str:
+    top_concern_text = ", ".join(concern.label for concern in diagnosis.top_concerns[:3]) or "No major concerns yet"
+    summary_cards_inner = (
+        metric_card(
+            "Observed Risk",
+            f"{diagnosis.observed_risk_score:.1f}/100",
+            diagnosis.observed_risk_band,
+        )
+        + metric_card(
+            "Stated Risk",
+            f"{diagnosis.stated_risk_score:.1f}/100",
+            diagnosis.stated_risk_band,
+        )
+        + metric_card("Alignment", diagnosis.alignment, "Portfolio vs stated tolerance")
+        + metric_card("Confidence", diagnosis.confidence_band, "How complete and consistent the evidence looks")
+    )
+    return (
+        "<div style='display:grid;gap:16px'>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.96))'>"
+        "<div style='font-size:28px;font-weight:700;color:#f8fafc'>Risk Diagnosis</div>"
+        "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>"
+        f"{diagnosis.diagnostic_summary}"
+        "</div>"
+        "<div style='font-size:13px;color:#93c5fd;margin-top:12px'>"
+        f"Most important concerns right now: {top_concern_text}."
+        "</div>"
+        "</div>"
+        f"<div class='metric-strip'>{summary_cards_inner}</div>"
+        "</div>"
+    )
+
+
+def plot_diagnosis_concerns(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
+    concerns = diagnosis.top_concerns
+    if not concerns:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No ranked diagnosis concerns are available yet.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15, "color": "#e2e8f0"},
+        )
+        fig.update_layout(
+            title="Top Risk Categories",
+            height=320,
+            margin={"l": 24, "r": 24, "t": 56, "b": 24},
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(17,24,39,0.55)",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
+    labels = [concern.label for concern in concerns][::-1]
+    base_scores = [concern.base_severity_score for concern in concerns][::-1]
+    adjustment_scores = [concern.external_adjustment_score for concern in concerns][::-1]
+    total_scores = [concern.severity_score for concern in concerns][::-1]
+    adjustment_text = [
+        "<br>".join(concern.adjustment_reasons[:2]) if concern.adjustment_reasons else "No external adjustment"
+        for concern in concerns
+    ][::-1]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=base_scores,
+            y=labels,
+            orientation="h",
+            name="Base severity",
+            marker={"color": "#3B82F6"},
+            hovertemplate=(
+                "%{y}<br>Base severity: %{x:.1f}/100"
+                "<br>This comes from the measured portfolio risk layer."
+                "<extra></extra>"
+            ),
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=adjustment_scores,
+            y=labels,
+            orientation="h",
+            name="External reinforcement",
+            marker={"color": "#22C55E"},
+            customdata=adjustment_text,
+            hovertemplate=(
+                "%{y}<br>External adjustment: %{x:.1f}"
+                "<br>%{customdata}"
+                "<extra></extra>"
+            ),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=total_scores,
+            y=labels,
+            mode="text",
+            text=[f"{score:.1f}/100" for score in total_scores],
+            textposition="middle right",
+            textfont={"color": "#f8fafc", "size": 12},
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
+    fig.update_layout(
+        title="Top Risk Categories (Ranked)",
+        height=420,
+        margin={"l": 40, "r": 24, "t": 60, "b": 36},
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+        barmode="stack",
+        hoverlabel=dark_hoverlabel(),
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
+    )
+    fig.update_xaxes(title_text="Severity score", gridcolor="rgba(148,163,184,0.18)", range=[0, 110])
+    fig.update_yaxes(gridcolor="rgba(148,163,184,0.08)")
+    return fig
+
+
+def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
+    holding_items = "".join(
+        (
+            "<li style='margin-bottom:10px'>"
+            f"<strong>{driver.ticker}</strong>"
+            + (f" ({driver.sector})" if driver.sector else "")
+            + (
+                f" — current weight {percent_display(driver.current_weight)}, "
+                f"benchmark-relative return {percent_display(driver.excess_return_vs_benchmark)}, "
+                f"variance contribution {percent_display(driver.variance_contribution_pct)}"
+            )
+            + f"<br><span style='color:#cbd5e1'>{'; '.join(driver.driver_reasons)}</span>"
+            "</li>"
+        )
+        for driver in diagnosis.top_holding_drivers
+    ) or "<li>No holding-level drivers were identified yet.</li>"
+    sector_items = "".join(
+        (
+            "<li style='margin-bottom:10px'>"
+            f"<strong>{driver.sector}</strong> — weight {percent_display(driver.weight_pct)}, "
+            f"excess return vs benchmark {percent_display(driver.excess_return_vs_benchmark)}"
+            f"<br><span style='color:#cbd5e1'>{'; '.join(driver.driver_reasons)}</span>"
+            "</li>"
+        )
+        for driver in diagnosis.top_sector_drivers
+    ) or "<li>No sector-level drivers were identified yet.</li>"
+    return (
+        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px'>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Top Holding Drivers</div>"
+        "<div style='font-size:13px;color:#93c5fd;margin-top:6px'>Named positions currently driving the diagnosis.</div>"
+        f"<ol style='margin-top:14px;color:#e2e8f0;padding-left:18px'>{holding_items}</ol>"
+        "</div>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Sector Drivers</div>"
+        "<div style='font-size:13px;color:#93c5fd;margin-top:6px'>Sector exposure patterns making the portfolio feel crowded or fragile.</div>"
+        f"<ol style='margin-top:14px;color:#e2e8f0;padding-left:18px'>{sector_items}</ol>"
+        "</div>"
+        "</div>"
+    )
+
+
+def build_supporting_metrics_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
+    evidence_keys = {key for concern in diagnosis.top_concerns for key in concern.evidence_metric_keys}
+    rows = []
+    for metric in diagnosis.supporting_metrics:
+        if metric.metric_key not in evidence_keys:
+            continue
+        rows.append(
+            {
+                "Group": metric.group,
+                "Metric": metric.label,
+                "Raw value": metric_value_display(metric.metric_key, metric.raw_value),
+                "Score": f"{metric.score:.1f}/100" if metric.score is not None else "N/A",
+                "Readout": metric.score_readout or "Not available",
+                "Why it matters": metric.bigger_picture or metric.meaning or "",
+            }
+        )
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return pd.DataFrame(columns=["Group", "Metric", "Raw value", "Score", "Readout", "Why it matters"])
+    return frame.sort_values(["Group", "Score"], ascending=[True, False]).reset_index(drop=True)
+
+
+def build_holding_fundamentals_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
+    rows = [
+        {
+            "Ticker": item.ticker,
+            "Company": item.company_name,
+            "Sector": item.sector,
+            "Beta": number_text(item.beta, 2),
+            "Market cap": money_text(item.market_cap),
+            "Revenue": money_text(item.revenue),
+            "Net income": money_text(item.net_income),
+            "Cash": money_text(item.cash_and_equivalents),
+            "Operating cash flow": money_text(item.operating_cash_flow),
+            "Signals": "; ".join(item.signals),
+            "Latest filed date": item.latest_filed_date or "N/A",
+        }
+        for item in diagnosis.holding_fundamentals
+    ]
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "Ticker",
+                "Company",
+                "Sector",
+                "Beta",
+                "Market cap",
+                "Revenue",
+                "Net income",
+                "Cash",
+                "Operating cash flow",
+                "Signals",
+                "Latest filed date",
+            ]
+        )
+    return pd.DataFrame(rows)
+
+
+def build_narrative_evidence_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
+    rows = [
+        {
+            "Ticker": item.ticker,
+            "Source": "SEC filing" if item.source_type == "sec_filing" else "News article",
+            "Date": item.document_date or "N/A",
+            "Title": item.title or "Untitled",
+            "Snippet": item.snippet,
+            "URL": item.url or "",
+        }
+        for item in diagnosis.narrative_evidence
+    ]
+    if not rows:
+        return pd.DataFrame(columns=["Ticker", "Source", "Date", "Title", "Snippet", "URL"])
+    return pd.DataFrame(rows)
+
+
+def build_macro_context_html(diagnosis: PortfolioRiskDiagnosis) -> str:
+    macro = diagnosis.macro_context
+    if macro is None:
+        return (
+            "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Macro Context</div>"
+            "<div style='font-size:14px;color:#cbd5e1;margin-top:10px'>Macro regime data is not available yet.</div>"
+            "</div>"
+        )
+    regime_flags = "".join(
+        f"<li style='margin-bottom:8px'>{flag}</li>"
+        for flag in macro.regime_flags
+    ) or "<li>No regime flags were raised.</li>"
+    macro_cards = (
+        metric_card("Fed Funds", f"{macro.fed_funds_rate:.2f}%" if macro.fed_funds_rate is not None else "N/A", "Policy rate")
+        + metric_card("Inflation", percent_display(macro.inflation_yoy), "Year-over-year CPI")
+        + metric_card("Unemployment", f"{macro.unemployment_rate:.1f}%" if macro.unemployment_rate is not None else "N/A", "Labor market")
+        + metric_card("10Y-2Y Spread", f"{macro.yield_curve_spread:.2f}%" if macro.yield_curve_spread is not None else "N/A", "Yield curve slope")
+    )
+    return (
+        "<div style='display:grid;gap:16px'>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Macro Regime Context</div>"
+        f"<div style='font-size:14px;color:#cbd5e1;margin-top:10px'>{macro.summary}</div>"
+        f"<div style='font-size:12px;color:#93c5fd;margin-top:8px'>As of {macro.as_of_date or 'N/A'}</div>"
+        "<div style='margin-top:14px'>"
+        f"<ul style='color:#e2e8f0;padding-left:18px'>{regime_flags}</ul>"
+        "</div>"
+        "</div>"
+        f"<div class='metric-strip'>{macro_cards}</div>"
+        "</div>"
+    )
+
+
+def build_data_coverage_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
+    coverage = (
+        diagnosis.data_coverage.model_dump()
+        if hasattr(diagnosis.data_coverage, "model_dump")
+        else diagnosis.data_coverage.dict()
+    )
+    rows = [
+        {
+            "Source": key.replace("_", " ").replace(" available", "").title(),
+            "Available": "Yes" if value else "No",
+        }
+        for key, value in coverage.items()
+    ]
+    return pd.DataFrame(rows)
+
+
+def build_confidence_completeness_html(diagnosis: PortfolioRiskDiagnosis) -> str:
+    gaps = "".join(
+        f"<li style='margin-bottom:8px'>{gap}</li>"
+        for gap in diagnosis.evidence_gaps
+    ) or "<li>No major evidence gaps were recorded.</li>"
+    coverage = (
+        diagnosis.data_coverage.model_dump()
+        if hasattr(diagnosis.data_coverage, "model_dump")
+        else diagnosis.data_coverage.dict()
+    )
+    coverage_count = sum(1 for value in coverage.values() if value)
+    total_count = len(coverage)
+    return (
+        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px'>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Confidence and Completeness</div>"
+        f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>Overall diagnosis confidence is <strong>{diagnosis.confidence_band}</strong>.</div>"
+        f"<div style='font-size:14px;color:#93c5fd;margin-top:10px'>Coverage check: {coverage_count}/{total_count} evidence sources are currently available.</div>"
+        "<div style='font-size:14px;color:#cbd5e1;margin-top:12px'>The system should stay explicit about uncertainty, especially when external evidence is thin or incomplete.</div>"
+        "</div>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Evidence Gaps</div>"
+        f"<ul style='margin-top:14px;color:#e2e8f0;padding-left:18px'>{gaps}</ul>"
+        "</div>"
+        "</div>"
+    )
+
+
 def open_metric_guide(metric_key: str, risk: dict[str, Any] | None) -> tuple[dict[str, Any], str]:
     if risk is None:
         raise gr.Error("Run the analysis first so the guide can open the right metric.")
@@ -3489,7 +3842,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         projection_years=PROJECTION_YEARS,
         stated_risk_score=risk_profile,
     )
-    save_diagnosis_artifacts(
+    diagnosis_paths = save_diagnosis_artifacts(
         csv_path=csv_path,
         dataset_source=dataset_source,
         risk_profile=risk_profile,
@@ -3497,12 +3850,22 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         portfolio_summary=portfolio_summary,
         market_metrics=market_metrics,
     )
+    diagnosis = portfolio_risk_diagnosis_from_saved_artifacts(Path(diagnosis_paths["latest_dir"]))
     tables = format_display_tables(market_metrics)
     sector_overview_md = build_sector_overview_markdown(market_metrics)
     headline = market_metrics["headline_metrics"]
     risk = market_metrics["risk_score"]
     risk_guide_html = build_risk_guide_html(risk)
     metric_card_values = build_metric_card_values(risk)
+    diagnosis_summary_html = build_diagnosis_summary_html(diagnosis)
+    diagnosis_concern_fig = plot_diagnosis_concerns(diagnosis)
+    diagnosis_driver_html = build_diagnosis_driver_html(diagnosis)
+    diagnosis_supporting_metrics_df = build_supporting_metrics_frame(diagnosis)
+    diagnosis_holding_fundamentals_df = build_holding_fundamentals_frame(diagnosis)
+    diagnosis_narrative_evidence_df = build_narrative_evidence_frame(diagnosis)
+    diagnosis_macro_html = build_macro_context_html(diagnosis)
+    diagnosis_coverage_df = build_data_coverage_frame(diagnosis)
+    diagnosis_confidence_html = build_confidence_completeness_html(diagnosis)
     eq_fig = plot_equity_curves(market_metrics["timeseries"])
     sector_fig = plot_sector_allocation(market_metrics.get("sector_allocation", []))
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
@@ -3538,6 +3901,18 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         sector_fig,
         dd_fig,
         recent_volatility_fig,
+        risk_evidence_fig,
+        diagnosis_summary_html,
+        diagnosis_concern_fig,
+        diagnosis_driver_html,
+        diagnosis_supporting_metrics_df,
+        diagnosis_holding_fundamentals_df,
+        diagnosis_narrative_evidence_df,
+        diagnosis_macro_html,
+        diagnosis_coverage_df,
+        diagnosis_confidence_html,
+        sector_fig,
+        dd_fig,
         risk_evidence_fig,
         *metric_card_values,
     )
@@ -3687,6 +4062,36 @@ def build_app() -> gr.Blocks:
                         recent_volatility_plot = gr.Plot(label="Volatility vs S&P 500")
                         risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
                         drawdown_plot = gr.Plot(label="Downside Depth vs S&P 500")
+                    with gr.Tab("Risk Diagnosis", id="risk-diagnosis"):
+                        diagnosis_summary_md = gr.HTML()
+                        with gr.Row():
+                            diagnosis_concern_plot = gr.Plot(label="Top Risk Categories")
+                            diagnosis_risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
+                        with gr.Row():
+                            diagnosis_sector_plot = gr.Plot(label="Sector Crowding View")
+                            diagnosis_drawdown_plot = gr.Plot(label="Downside Depth vs S&P 500")
+                        diagnosis_driver_md = gr.HTML()
+                        diagnosis_supporting_metrics_df = gr.Dataframe(
+                            label="Supporting Evidence",
+                            interactive=False,
+                            wrap=True,
+                        )
+                        diagnosis_holding_fundamentals_df = gr.Dataframe(
+                            label="Holding Fundamentals",
+                            interactive=False,
+                            wrap=True,
+                        )
+                        diagnosis_narrative_evidence_df = gr.Dataframe(
+                            label="Filing and News Evidence",
+                            interactive=False,
+                            wrap=True,
+                        )
+                        diagnosis_macro_md = gr.HTML()
+                        diagnosis_coverage_df = gr.Dataframe(
+                            label="Source Coverage",
+                            interactive=False,
+                        )
+                        diagnosis_confidence_md = gr.HTML()
                     with gr.Tab("Risk Guide", id="risk-guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
@@ -3710,6 +4115,18 @@ def build_app() -> gr.Blocks:
                 drawdown_plot,
                 recent_volatility_plot,
                 risk_evidence_plot,
+                diagnosis_summary_md,
+                diagnosis_concern_plot,
+                diagnosis_driver_md,
+                diagnosis_supporting_metrics_df,
+                diagnosis_holding_fundamentals_df,
+                diagnosis_narrative_evidence_df,
+                diagnosis_macro_md,
+                diagnosis_coverage_df,
+                diagnosis_confidence_md,
+                diagnosis_sector_plot,
+                diagnosis_drawdown_plot,
+                diagnosis_risk_evidence_plot,
                 *metric_card_components,
             ],
         )
