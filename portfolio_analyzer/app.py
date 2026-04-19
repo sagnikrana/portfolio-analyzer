@@ -2431,6 +2431,15 @@ def build_driver_secondary_labels(driver: Any) -> list[str]:
     return labels
 
 
+def build_contribution_spillover_labels(contribution: Any) -> list[str]:
+    labels: list[str] = []
+    for item in getattr(contribution, "concern_contributions", [])[1:3]:
+        label = getattr(item, "concern_label", None)
+        if label:
+            labels.append(str(label))
+    return labels
+
+
 def build_driver_evidence_points(diagnosis: PortfolioRiskDiagnosis, driver: Any) -> list[str]:
     fundamentals_by_ticker = {item.ticker: item for item in diagnosis.holding_fundamentals}
     narrative_by_ticker: dict[str, list[Any]] = {}
@@ -2540,15 +2549,20 @@ def build_sector_driver_explanation(driver: Any) -> str:
 
 
 def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
+    driver_lookup = {driver.ticker: driver for driver in diagnosis.top_holding_drivers}
     holding_items = ""
-    for driver in diagnosis.top_holding_drivers:
-        secondary_labels = build_driver_secondary_labels(driver)
+    contribution_items = diagnosis.holding_risk_contributions or []
+    for contribution in contribution_items:
+        driver = driver_lookup.get(contribution.ticker)
+        if driver is None:
+            continue
+        spillover_labels = build_contribution_spillover_labels(contribution)
         evidence_points = build_driver_evidence_points(diagnosis, driver)
         evidence_html = "".join(
             f"<li style='margin-bottom:6px'>{point}</li>"
             for point in evidence_points
         ) or "<li>No extra evidence attached yet.</li>"
-        secondary_html = "".join(
+        spillover_html = "".join(
             (
                 "<span style='padding:6px 10px;border-radius:999px;"
                 "background:rgba(59,130,246,.10);border:1px solid rgba(96,165,250,.18);"
@@ -2556,18 +2570,20 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
                 f"{label}"
                 "</span>"
             )
-            for label in secondary_labels
+            for label in spillover_labels
         ) or (
             "<span style='padding:6px 10px;border-radius:999px;background:rgba(148,163,184,.08);"
-            "border:1px solid rgba(148,163,184,.14);color:#cbd5e1;font-size:12px'>No secondary reasons</span>"
+            "border:1px solid rgba(148,163,184,.14);color:#cbd5e1;font-size:12px'>No major spillover concerns</span>"
         )
-        confidence_tone = "#34d399" if driver.driver_confidence_band == "High" else "#fbbf24" if driver.driver_confidence_band == "Medium" else "#f87171"
+        confidence_band = contribution.contribution_confidence_band
+        confidence_tone = "#34d399" if confidence_band == "High" else "#fbbf24" if confidence_band == "Medium" else "#f87171"
+        score_tone = "#60a5fa" if contribution.overall_contribution_score < 40 else "#fbbf24" if contribution.overall_contribution_score < 70 else "#f87171"
         holding_items += (
             "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
             "background:rgba(15,23,42,.34);margin-bottom:14px'>"
             "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
             "<div>"
-            f"<div style='font-size:20px;font-weight:800;color:#f8fafc'>{driver.ticker}"
+            f"<div style='font-size:20px;font-weight:800;color:#f8fafc'>{contribution.ticker}"
             + (f"<span style='font-size:15px;font-weight:500;color:#cbd5e1;margin-left:10px'>({driver.sector})</span>" if driver.sector else "")
             + "</div>"
             "<div style='display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:10px;font-size:14px;color:#93c5fd'>"
@@ -2576,17 +2592,22 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             f"<span>Variance contribution <strong style='color:#f8fafc'>{percent_display(driver.variance_contribution_pct)}</strong></span>"
             "</div>"
             "</div>"
+            "<div style='display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end'>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:{score_tone};font-size:12px;font-weight:700'>"
+            f"Contribution {contribution.overall_contribution_score:.1f}/100"
+            "</div>"
             f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:{confidence_tone};font-size:12px;font-weight:700'>"
-            f"{driver.driver_confidence_band} confidence"
+            f"{confidence_band} confidence"
+            "</div>"
             "</div>"
             "</div>"
             "<div style='display:grid;grid-template-columns:minmax(280px,1.3fr) minmax(260px,1fr);gap:16px;margin-top:16px'>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.46);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Main reason this holding is driving diagnosis</div>"
-            f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:8px'>{humanize_reason_label(driver.primary_reason_label or 'Primary driver not set')}</div>"
-            f"<div style='font-size:15px;line-height:1.6;color:#dbe4f0;margin-top:10px'>{driver.primary_reason_summary or build_holding_driver_explanation(diagnosis, driver)}</div>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Supporting reasons</div>"
-            f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:10px'>{secondary_html}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Main portfolio risk this holding is feeding</div>"
+            f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:8px'>{contribution.primary_concern_label}</div>"
+            f"<div style='font-size:15px;line-height:1.6;color:#dbe4f0;margin-top:10px'>{contribution.primary_concern_summary}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Other risks this holding also spills into</div>"
+            f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:10px'>{spillover_html}</div>"
             "</div>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What changed in the portfolio that led to this</div>"
@@ -2621,7 +2642,7 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:20px;font-weight:800;color:#f8fafc'>Top Holding Drivers</div>"
-        "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>For each holding, start with the main reason it is risky, then check the supporting reasons and the evidence that made the diagnosis pick it up.</div>"
+        "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>For each holding, start with the main portfolio risk it is feeding, then look at spillover concerns and the evidence that made the diagnosis flag it.</div>"
         f"<div style='margin-top:14px'>{holding_items}</div>"
         "</div>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
