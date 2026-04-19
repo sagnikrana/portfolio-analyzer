@@ -2562,6 +2562,185 @@ def build_confidence_completeness_html(diagnosis: PortfolioRiskDiagnosis) -> str
     )
 
 
+def build_single_ticker_timeseries_records(
+    ticker: str,
+    ticker_close: pd.DataFrame,
+    benchmark_close: pd.Series,
+) -> list[dict[str, Any]]:
+    if ticker_close.empty or ticker not in ticker_close.columns or benchmark_close.empty:
+        return []
+    frame = pd.concat(
+        [
+            pd.to_numeric(ticker_close[ticker], errors="coerce").rename("ticker_value"),
+            pd.to_numeric(benchmark_close, errors="coerce").rename("benchmark_raw_value"),
+        ],
+        axis=1,
+        join="inner",
+    ).dropna()
+    if frame.empty:
+        return []
+    base_ticker = float(frame["ticker_value"].iloc[0])
+    base_benchmark = float(frame["benchmark_raw_value"].iloc[0])
+    if base_ticker <= 0 or base_benchmark <= 0:
+        return []
+    frame.index.name = "date"
+    scale = 10000.0
+    frame["portfolio_invested_value"] = (frame["ticker_value"] / base_ticker) * scale
+    frame["benchmark_value"] = (frame["benchmark_raw_value"] / base_benchmark) * scale
+    frame["trade_flow"] = 0.0
+    frame["account_value"] = frame["portfolio_invested_value"]
+    frame["portfolio_performance_index"] = frame["portfolio_invested_value"] / scale
+    frame["benchmark_performance_index"] = frame["benchmark_value"] / scale
+    return (
+        frame.reset_index()
+        [
+            [
+                "date",
+                "portfolio_invested_value",
+                "account_value",
+                "benchmark_value",
+                "trade_flow",
+                "portfolio_performance_index",
+                "benchmark_performance_index",
+            ]
+        ]
+        .round(6)
+        .to_dict(orient="records")
+    )
+
+
+def build_diagnosis_risk_chart_payload(
+    diagnosis: PortfolioRiskDiagnosis,
+    market_metrics: dict[str, Any],
+    market_data: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    payload: dict[str, Any] = {"Portfolio": market_metrics["timeseries"]}
+    ticker_close = market_data.get("ticker_close", pd.DataFrame())
+    benchmark_close = market_data.get("benchmark_close", pd.Series(dtype=float))
+    ranked_tickers = [driver.ticker for driver in diagnosis.top_holding_drivers]
+    remaining_tickers = [
+        row["ticker"]
+        for row in sorted(
+            market_metrics.get("open_positions", []),
+            key=lambda item: float(item.get("current_weight") or 0.0),
+            reverse=True,
+        )
+        if row["ticker"] not in ranked_tickers
+    ]
+    ordered_tickers = ranked_tickers + remaining_tickers
+    available_choices = ["Portfolio"]
+    for ticker in ordered_tickers:
+        if ticker in payload:
+            continue
+        records = build_single_ticker_timeseries_records(ticker, ticker_close, benchmark_close)
+        if not records:
+            continue
+        payload[ticker] = records
+        available_choices.append(ticker)
+    return payload, available_choices
+
+
+def plot_diagnosis_volatility_lens(timeseries_records: list[dict[str, Any]], subject_label: str) -> go.Figure:
+    fig = plot_recent_volatility_comparison(timeseries_records)
+    fig.update_layout(title=f"Volatility of {subject_label} vs S&P 500")
+    return fig
+
+
+def plot_diagnosis_drawdown_lens(timeseries_records: list[dict[str, Any]], subject_label: str) -> go.Figure:
+    fig = plot_drawdowns(timeseries_records)
+    fig.update_layout(title=f"Downside Depth of {subject_label} vs S&P 500")
+    return fig
+
+
+def plot_diagnosis_market_sensitivity_lens(timeseries_records: list[dict[str, Any]], subject_label: str) -> go.Figure:
+    frame = rolling_relative_market_sensitivity_frame(timeseries_records)
+    if frame.empty:
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"Recent market sensitivity evidence is unavailable for {subject_label}.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15, "color": "#e2e8f0"},
+        )
+        fig.update_layout(
+            title=f"Market Sensitivity of {subject_label} vs S&P 500",
+            height=520,
+            margin={"l": 24, "r": 24, "t": 56, "b": 24},
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(17,24,39,0.55)",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
+    frame = frame.copy()
+    frame["date"] = pd.to_datetime(frame["date"])
+    x_values = frame["date"].dt.strftime("%Y-%m-%d").tolist()
+    y_values = frame["ratio"].tolist()
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=y_values,
+            mode="lines",
+            line={"width": 3, "color": "#A855F7"},
+            hovertemplate=(
+                "%{x}<br>Market sensitivity ratio: %{y:.2f}x"
+                "<br>What this means: how strongly this holding moves when the S&P 500 moves"
+                "<extra></extra>"
+            ),
+            showlegend=False,
+        )
+    )
+    fig.add_hline(y=1.0, line_dash="dash", line_color="#10B981")
+    fig.add_hline(y=RELATIVE_MARKET_SENSITIVITY_MAX_RATIO, line_dash="dot", line_color="#F59E0B")
+    if x_values:
+        fig.add_annotation(
+            x=x_values[-1],
+            y=float(y_values[-1]),
+            text=f"Latest: {y_values[-1]:.2f}x",
+            showarrow=True,
+            arrowhead=2,
+            ax=42,
+            ay=-26,
+            bgcolor="rgba(15,23,42,0.92)",
+            bordercolor="#A855F7",
+            font={"color": "#f8fafc", "size": 11},
+        )
+    fig.update_layout(
+        title=f"Market Sensitivity of {subject_label} vs S&P 500",
+        height=520,
+        margin={"l": 24, "r": 24, "t": 56, "b": 24},
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+        hovermode="x unified",
+        hoverlabel=dark_hoverlabel(),
+    )
+    fig.update_xaxes(gridcolor="rgba(148,163,184,0.18)")
+    fig.update_yaxes(
+        title_text="x Benchmark",
+        gridcolor="rgba(148,163,184,0.18)",
+        range=padded_axis_range(y_values, baseline_values=[1.0, RELATIVE_MARKET_SENSITIVITY_MAX_RATIO], min_padding=0.08),
+    )
+    return fig
+
+
+def update_diagnosis_stock_plots(selection: str, chart_payload: dict[str, Any]) -> tuple[go.Figure, go.Figure, go.Figure]:
+    key = selection if selection in chart_payload else "Portfolio"
+    subject_label = "Portfolio" if key == "Portfolio" else key
+    timeseries_records = chart_payload.get(key, chart_payload.get("Portfolio", []))
+    return (
+        plot_diagnosis_volatility_lens(timeseries_records, subject_label),
+        plot_diagnosis_drawdown_lens(timeseries_records, subject_label),
+        plot_diagnosis_market_sensitivity_lens(timeseries_records, subject_label),
+    )
+
+
 def open_metric_guide(metric_key: str, risk: dict[str, Any] | None) -> tuple[dict[str, Any], str]:
     if risk is None:
         raise gr.Error("Run the analysis first so the guide can open the right metric.")
@@ -3937,10 +4116,16 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
     diagnosis_macro_html = build_macro_context_html(diagnosis)
     diagnosis_coverage_df = build_data_coverage_frame(diagnosis)
     diagnosis_confidence_html = build_confidence_completeness_html(diagnosis)
+    diagnosis_chart_payload, diagnosis_stock_choices = build_diagnosis_risk_chart_payload(
+        diagnosis,
+        market_metrics,
+        market_data,
+    )
     eq_fig = plot_equity_curves(market_metrics["timeseries"])
     sector_fig = plot_sector_allocation(market_metrics.get("sector_allocation", []))
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
     recent_volatility_fig = plot_recent_volatility_comparison(market_metrics["timeseries"])
+    market_sensitivity_fig = plot_diagnosis_market_sensitivity_lens(market_metrics["timeseries"], "Portfolio")
     risk_evidence_fig = plot_risk_evidence(market_metrics, portfolio_summary)
     elapsed_seconds = time.perf_counter() - started_at
 
@@ -3976,6 +4161,8 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         diagnosis_summary_html,
         diagnosis_concern_fig,
         diagnosis_driver_html,
+        diagnosis_chart_payload,
+        gr.Dropdown.update(choices=diagnosis_stock_choices, value="Portfolio"),
         diagnosis_supporting_metrics_df,
         diagnosis_holding_fundamentals_df,
         diagnosis_narrative_evidence_df,
@@ -3985,6 +4172,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         diagnosis_confidence_html,
         sector_fig,
         dd_fig,
+        market_sensitivity_fig,
         risk_evidence_fig,
         *metric_card_values,
     )
@@ -4114,6 +4302,7 @@ def build_app() -> gr.Blocks:
 
             with gr.Column(scale=3, elem_classes=["content-rail"]):
                 risk_state = gr.State(value=None)
+                diagnosis_chart_state = gr.State(value={})
                 cards = gr.HTML(label="Summary Cards", elem_classes=["summary-cards-wrap"])
                 with gr.Tabs(selected="overview") as main_tabs:
                     with gr.Tab("Overview", id="overview"):
@@ -4148,12 +4337,20 @@ def build_app() -> gr.Blocks:
                                 diagnosis_driver_md = gr.HTML()
                             with gr.Column(scale=5):
                                 diagnosis_concern_plot = gr.Plot(label="Top Risk Categories")
+                        diagnosis_stock_filter = gr.Dropdown(
+                            label="Risk Lens",
+                            choices=["Portfolio"],
+                            value="Portfolio",
+                            interactive=True,
+                            info="View these risk charts for the full portfolio or a single stock. Stocks are ordered by diagnosis risk.",
+                        )
                         with gr.Row(equal_height=True):
                             diagnosis_sector_plot = gr.Plot(label="Sector Crowding View")
                             diagnosis_recent_volatility_plot = gr.Plot(label="Volatility vs S&P 500")
                         with gr.Row(equal_height=True):
                             diagnosis_drawdown_plot = gr.Plot(label="Downside Depth vs S&P 500")
-                            diagnosis_macro_md = gr.HTML()
+                            diagnosis_market_sensitivity_plot = gr.Plot(label="Market Sensitivity vs S&P 500")
+                        diagnosis_macro_md = gr.HTML()
                         with gr.Accordion("Detailed Evidence", open=False):
                             diagnosis_risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
                             diagnosis_supporting_metrics_df = gr.Dataframe(
@@ -4204,6 +4401,8 @@ def build_app() -> gr.Blocks:
                 diagnosis_summary_md,
                 diagnosis_concern_plot,
                 diagnosis_driver_md,
+                diagnosis_chart_state,
+                diagnosis_stock_filter,
                 diagnosis_supporting_metrics_df,
                 diagnosis_holding_fundamentals_df,
                 diagnosis_narrative_evidence_df,
@@ -4213,8 +4412,19 @@ def build_app() -> gr.Blocks:
                 diagnosis_confidence_md,
                 diagnosis_sector_plot,
                 diagnosis_drawdown_plot,
+                diagnosis_market_sensitivity_plot,
                 diagnosis_risk_evidence_plot,
                 *metric_card_components,
+            ],
+        )
+
+        diagnosis_stock_filter.change(
+            fn=update_diagnosis_stock_plots,
+            inputs=[diagnosis_stock_filter, diagnosis_chart_state],
+            outputs=[
+                diagnosis_recent_volatility_plot,
+                diagnosis_drawdown_plot,
+                diagnosis_market_sensitivity_plot,
             ],
         )
 
