@@ -3928,8 +3928,11 @@ def build_app() -> gr.Blocks:
                 radial-gradient(circle at top left, rgba(59,130,246,.12), transparent 28%),
                 radial-gradient(circle at top right, rgba(14,165,233,.10), transparent 26%),
                 linear-gradient(180deg, #0b1220 0%, #111827 100%);
+            max-width: 100vw !important;
+            padding-left: 18px !important;
+            padding-right: 18px !important;
         }
-        .app-shell {max-width: 1440px; margin: 0 auto; align-items: start;}
+        .app-shell {width: 100%; max-width: 100% !important; margin: 0; align-items: start;}
         .control-rail {
             padding: 18px;
             border: 1px solid rgba(148,163,184,.16);
@@ -3939,6 +3942,7 @@ def build_app() -> gr.Blocks:
             backdrop-filter: blur(14px);
         }
         .content-rail {
+            width: 100%;
             padding: 8px 0 0;
         }
         .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 14px; width: 100%; align-items: stretch;}
@@ -3994,6 +3998,10 @@ def build_app() -> gr.Blocks:
         @media (max-width: 820px) {
             .metric-strip {grid-template-columns: 1fr;}
             .control-rail {padding: 14px;}
+            .gradio-container {
+                padding-left: 10px !important;
+                padding-right: 10px !important;
+            }
         }
         """,
     ) as demo:
@@ -4145,7 +4153,7 @@ def launch_app() -> None:
     app = build_app()
     # Default to local launch so the dashboard reliably binds to 7861 without
     # depending on Gradio's share tunnel port allocation.
-    app.launch(server_name="127.0.0.1", server_port=7861, share=False)
+    app.launch(server_name="127.0.0.1", server_port=7862, share=False)
 
 
 if __name__ == "__main__":
