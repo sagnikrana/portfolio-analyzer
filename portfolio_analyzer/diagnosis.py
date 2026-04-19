@@ -9,6 +9,13 @@ from pydantic import BaseModel, Field
 
 
 class RiskMetricObservation(BaseModel):
+    """One scored risk metric carried forward into the diagnosis layer.
+
+    These objects preserve the original metric identity, numeric value, score,
+    and plain-English explanation from the app bundle so later diagnosis objects
+    can cite evidence without having to re-derive or rename everything.
+    """
+
     metric_key: str
     group: Optional[str] = None
     label: Optional[str] = None
@@ -20,6 +27,12 @@ class RiskMetricObservation(BaseModel):
 
 
 class DiagnosisConcern(BaseModel):
+    """A ranked portfolio-level concern such as concentration or market risk.
+
+    A concern sits above holding-level reasoning. It tells us *what kind* of risk
+    is dominating the account before we ask which holdings are causing that risk.
+    """
+
     concern_key: str
     label: str
     base_severity_score: float
@@ -34,22 +47,49 @@ class DiagnosisConcern(BaseModel):
 
 
 class HoldingRiskDriver(BaseModel):
+    """A holding that materially contributes to the diagnosis.
+
+    This model is intentionally richer than the original version. It now keeps:
+    - the raw measurements that made the holding relevant
+    - explicit reason codes describing *why* it is risky
+    - primary vs secondary reasons for prioritization
+    - driver-level confidence so the UI can stay honest
+    """
+
     ticker: str
     sector: Optional[str] = None
     current_weight: Optional[float] = None
     excess_return_vs_benchmark: Optional[float] = None
     variance_contribution_pct: Optional[float] = None
     driver_reasons: list[str] = Field(default_factory=list)
+    primary_reason_code: Optional[str] = None
+    primary_reason_label: Optional[str] = None
+    primary_reason_summary: Optional[str] = None
+    secondary_reason_codes: list[str] = Field(default_factory=list)
+    driver_confidence_score: float = 0.0
+    driver_confidence_band: str = "Low"
+    evidence_summary: list[str] = Field(default_factory=list)
+    reason_codes: list["ReasonCode"] = Field(default_factory=list)
 
 
 class SectorRiskDriver(BaseModel):
+    """A sector exposure that materially contributes to the diagnosis."""
+
     sector: str
     weight_pct: Optional[float] = None
     excess_return_vs_benchmark: Optional[float] = None
     driver_reasons: list[str] = Field(default_factory=list)
+    primary_reason_code: Optional[str] = None
+    primary_reason_label: Optional[str] = None
+    primary_reason_summary: Optional[str] = None
+    driver_confidence_score: float = 0.0
+    driver_confidence_band: str = "Low"
+    reason_codes: list["ReasonCode"] = Field(default_factory=list)
 
 
 class DiagnosisSourceCoverage(BaseModel):
+    """Coverage flags for the data sources feeding the diagnosis."""
+
     risk_metrics_available: bool
     open_positions_available: bool
     sector_allocation_available: bool
@@ -63,6 +103,8 @@ class DiagnosisSourceCoverage(BaseModel):
 
 
 class MacroRegimeSnapshot(BaseModel):
+    """A compact macro regime summary derived from processed FRED series."""
+
     as_of_date: Optional[str] = None
     fed_funds_rate: Optional[float] = None
     inflation_yoy: Optional[float] = None
@@ -75,6 +117,8 @@ class MacroRegimeSnapshot(BaseModel):
 
 
 class CompanyFundamentalSnapshot(BaseModel):
+    """A narrow fundamental view for holdings already identified as important."""
+
     ticker: str
     company_name: Optional[str] = None
     sector: Optional[str] = None
@@ -93,6 +137,8 @@ class CompanyFundamentalSnapshot(BaseModel):
 
 
 class NarrativeEvidence(BaseModel):
+    """One recent filing or news artifact attached to a diagnosis driver."""
+
     ticker: str
     source_type: str
     document_date: Optional[str] = None
@@ -119,7 +165,44 @@ NEGATIVE_NARRATIVE_KEYWORDS = {
 }
 
 
+class ReasonCode(BaseModel):
+    """A structured explanation token for why something is risky.
+
+    The reason-code framework is the bridge between raw evidence and later UI or
+    LLM explanation. Each code captures:
+    - a stable machine-readable key
+    - a user-facing label
+    - the category of evidence it came from
+    - a severity score used for prioritization
+    - a short explanation and supporting evidence
+
+    This makes the diagnosis layer easier to audit, test, and redesign because
+    we can talk about *reason codes* directly instead of inferring intent from
+    free-form strings.
+    """
+
+    code: str
+    label: str
+    category: str
+    severity_score: float
+    summary: str
+    evidence: list[str] = Field(default_factory=list)
+
+
 class PortfolioRiskDiagnosis(BaseModel):
+    """Top-level typed diagnosis object for one analyzed portfolio snapshot.
+
+    This is the main object the notebook and dashboard should consume. It keeps
+    the diagnosis layered and inspectable:
+    - top-level portfolio conclusion
+    - ranked concern categories
+    - holding and sector drivers
+    - supporting evidence from metrics, fundamentals, macro, and narrative
+    - explicit coverage and evidence gaps
+
+    The model is intentionally richer than a reporting dataframe so later stages
+    can build relationships between concerns, drivers, and actions cleanly.
+    """
     run_id: str
     generated_at: Optional[str] = None
     dataset_source: Optional[str] = None
@@ -142,6 +225,10 @@ class PortfolioRiskDiagnosis(BaseModel):
     narrative_evidence: list[NarrativeEvidence] = Field(default_factory=list)
     data_coverage: DiagnosisSourceCoverage
     evidence_gaps: list[str] = Field(default_factory=list)
+
+
+HoldingRiskDriver.model_rebuild()
+SectorRiskDriver.model_rebuild()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -202,6 +289,29 @@ def _safe_float(value: Any) -> Optional[float]:
     if pd.isna(numeric):
         return None
     return numeric
+
+
+def _driver_confidence_band(score: float) -> str:
+    """Translate a driver-level confidence score into a human-readable band.
+
+    Driver confidence is intentionally separate from the top-level diagnosis
+    confidence. A portfolio diagnosis may be strong overall while one specific
+    holding driver is only weakly supported.
+    """
+    if score < 0.35:
+        return "Low"
+    if score < 0.7:
+        return "Medium"
+    return "High"
+
+
+def _sort_reason_codes(reason_codes: list[ReasonCode]) -> list[ReasonCode]:
+    """Sort reason codes from strongest to weakest.
+
+    We rank primarily by severity score and secondarily by label so downstream
+    UI and notebook review produce stable ordering.
+    """
+    return sorted(reason_codes, key=lambda item: (-item.severity_score, item.label))
 
 
 def load_diagnosis_bundle(base_dir: Path) -> dict[str, Any]:
@@ -277,13 +387,186 @@ def _build_metric_observations(bundle: dict[str, Any]) -> list[RiskMetricObserva
     return observations
 
 
-def _build_holding_drivers(bundle: dict[str, Any]) -> list[HoldingRiskDriver]:
-    """Identify the holdings most responsible for current portfolio fragility.
+def _narrative_evidence_by_ticker(narrative_evidence: list["NarrativeEvidence"]) -> dict[str, list["NarrativeEvidence"]]:
+    """Group narrative evidence by ticker for easier driver-level reasoning."""
+    grouped: dict[str, list[NarrativeEvidence]] = {}
+    for item in narrative_evidence:
+        grouped.setdefault(item.ticker, []).append(item)
+    return grouped
 
-    The first pass relies on the app-generated position weights, benchmark lag,
-    and 2025 volatility attribution table. This is still a heuristic stage, but
-    it gives the diagnosis object concrete names to point at rather than staying
-    at the abstract score level.
+
+def _build_holding_reason_codes(
+    *,
+    row: dict[str, Any],
+    macro_context: Optional["MacroRegimeSnapshot"],
+    fundamentals: Optional["CompanyFundamentalSnapshot"],
+    narrative_items: list["NarrativeEvidence"],
+) -> list[ReasonCode]:
+    """Build structured reason codes for one holding driver.
+
+    This is the core of the holding-level reason-code framework. It translates
+    raw holding measurements plus external evidence into explicit reasons that
+    later layers can rank, display, and explain.
+    """
+    reason_codes: list[ReasonCode] = []
+    ticker = str(row.get("ticker"))
+    current_weight = _safe_float(row.get("current_weight")) or 0.0
+    variance_contribution_pct = _safe_float(row.get("variance_contribution_pct")) or 0.0
+    excess_return_vs_benchmark = _safe_float(row.get("excess_return_vs_benchmark"))
+
+    if current_weight >= 0.15:
+        reason_codes.append(
+            ReasonCode(
+                code="concentration_pressure",
+                label="Concentration pressure",
+                category="positioning",
+                severity_score=round(min(100.0, current_weight * 350), 1),
+                summary=f"{ticker} is large enough to materially influence the whole account on its own.",
+                evidence=[f"Current weight: {current_weight:.1%}"],
+            )
+        )
+    elif current_weight >= 0.05:
+        reason_codes.append(
+            ReasonCode(
+                code="meaningful_position",
+                label="Meaningful position size",
+                category="positioning",
+                severity_score=round(min(100.0, current_weight * 220), 1),
+                summary=f"{ticker} still carries enough capital to matter for portfolio outcomes.",
+                evidence=[f"Current weight: {current_weight:.1%}"],
+            )
+        )
+
+    if variance_contribution_pct >= 0.08:
+        reason_codes.append(
+            ReasonCode(
+                code="volatility_contributor",
+                label="Volatility contributor",
+                category="market_behavior",
+                severity_score=round(min(100.0, variance_contribution_pct * 300), 1),
+                summary=f"{ticker} has been one of the biggest contributors to recent portfolio swings.",
+                evidence=[f"Variance contribution: {variance_contribution_pct:.1%}"],
+            )
+        )
+    elif variance_contribution_pct >= 0.03:
+        reason_codes.append(
+            ReasonCode(
+                code="volatility_supporting_driver",
+                label="Noticeable volatility contributor",
+                category="market_behavior",
+                severity_score=round(min(100.0, variance_contribution_pct * 220), 1),
+                summary=f"{ticker} has contributed meaningfully to recent volatility even if it is not the top source of it.",
+                evidence=[f"Variance contribution: {variance_contribution_pct:.1%}"],
+            )
+        )
+
+    if excess_return_vs_benchmark is not None and excess_return_vs_benchmark < 0:
+        reason_codes.append(
+            ReasonCode(
+                code="benchmark_lag",
+                label="Lagging benchmark",
+                category="performance",
+                severity_score=round(min(100.0, abs(excess_return_vs_benchmark) * 100), 1),
+                summary=f"{ticker} has underperformed the trade-matched S&P 500 since it entered the portfolio.",
+                evidence=[f"Excess return vs benchmark: {excess_return_vs_benchmark:.1%}"],
+            )
+        )
+
+    if fundamentals:
+        if fundamentals.beta is not None and fundamentals.beta > 1.2:
+            reason_codes.append(
+                ReasonCode(
+                    code="high_beta",
+                    label="High beta",
+                    category="fundamentals",
+                    severity_score=round(min(100.0, (fundamentals.beta - 1.0) * 45), 1),
+                    summary=f"{ticker} tends to move more than the market, which can amplify portfolio swings.",
+                    evidence=[f"Beta: {fundamentals.beta:.2f}"],
+                )
+            )
+        if "latest net income negative" in fundamentals.signals:
+            reason_codes.append(
+                ReasonCode(
+                    code="negative_earnings",
+                    label="Negative earnings",
+                    category="fundamentals",
+                    severity_score=62.0,
+                    summary=f"{ticker}'s latest fundamental snapshot shows negative net income.",
+                    evidence=["Latest net income was below zero"],
+                )
+            )
+        if "liabilities are a large share of assets" in fundamentals.signals:
+            reason_codes.append(
+                ReasonCode(
+                    code="balance_sheet_stretch",
+                    label="Balance-sheet stretch",
+                    category="fundamentals",
+                    severity_score=58.0,
+                    summary=f"{ticker}'s balance sheet looks more stretched than steadier holdings in the portfolio.",
+                    evidence=["Liabilities are a large share of assets"],
+                )
+            )
+
+    if narrative_items:
+        narrative_titles = [item.title for item in narrative_items if item.title]
+        reason_codes.append(
+            ReasonCode(
+                code="narrative_risk",
+                label="Narrative or event risk",
+                category="external_evidence",
+                severity_score=float(min(80, 35 + (len(narrative_items) * 10))),
+                summary=f"Recent filings or news around {ticker} contain risk-relevant language worth monitoring.",
+                evidence=narrative_titles[:2] or ["Recent filing/news evidence available"],
+            )
+        )
+
+    if macro_context and "rates still restrictive" in macro_context.regime_flags:
+        sector = str(row.get("sector") or "")
+        if sector in {"Technology", "Consumer Cyclical", "Communication Services"}:
+            reason_codes.append(
+                ReasonCode(
+                    code="restrictive_rates_sensitivity",
+                    label="Restrictive-rate sensitivity",
+                    category="macro",
+                    severity_score=42.0,
+                    summary=f"{ticker} sits in a part of the market that can be more sensitive when rates stay restrictive.",
+                    evidence=[f"Macro flag: {macro_context.regime_flags[0]}"],
+                )
+            )
+
+    return _sort_reason_codes(reason_codes)
+
+
+def _driver_confidence_from_reason_codes(reason_codes: list[ReasonCode]) -> tuple[float, str]:
+    """Estimate holding/sector-driver confidence from independent evidence types."""
+    if not reason_codes:
+        return 0.0, "Low"
+    categories = {item.category for item in reason_codes}
+    evidence_bonus = 1 if any(item.evidence for item in reason_codes) else 0
+    score = min(1.0, 0.2 + len(categories) * 0.22 + evidence_bonus * 0.12)
+    return round(score, 2), _driver_confidence_band(score)
+
+
+def _candidate_driver_rows(bundle: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
+    """Build a small candidate set of holding rows for downstream diagnosis work.
+
+    The diagnosis engine should not depend on fully materialized dataframes in
+    later layers. This helper gives us a stable object-friendly intermediate:
+    one merged record per holding with a rough priority score based on position
+    size, volatility contribution, and benchmark lag.
+
+    Parameters
+    ----------
+    bundle:
+        Full saved diagnosis bundle from the app and processed datasets.
+    limit:
+        Maximum number of candidate holding rows to return.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        Ranked holding records ready to feed fundamental enrichment, narrative
+        enrichment, and the final `HoldingRiskDriver` objects.
     """
     positions = bundle["open_positions"].copy()
     volatility = bundle["volatility_drivers"].copy()
@@ -294,46 +577,125 @@ def _build_holding_drivers(bundle: dict[str, Any]) -> list[HoldingRiskDriver]:
         volatility = volatility.rename(columns={"avg_weight_pct": "avg_weight_pct_2025"})
     merged = positions.merge(volatility, on="ticker", how="left")
 
+    merged["current_weight"] = pd.to_numeric(merged.get("current_weight"), errors="coerce").fillna(0.0)
+    merged["variance_contribution_pct"] = pd.to_numeric(
+        merged.get("variance_contribution_pct"), errors="coerce"
+    ).fillna(0.0)
+    merged["excess_return_vs_benchmark"] = pd.to_numeric(
+        merged.get("excess_return_vs_benchmark"), errors="coerce"
+    ).fillna(0.0)
+
+    # A light-weight preselection score. This is not the final diagnosis score;
+    # it simply helps us decide which holdings deserve deeper enrichment first.
+    merged["candidate_driver_score"] = (
+        merged["current_weight"] * 140.0
+        + merged["variance_contribution_pct"] * 110.0
+        + (-merged["excess_return_vs_benchmark"]).clip(lower=0.0) * 22.0
+    )
+    merged = merged.sort_values(
+        ["candidate_driver_score", "current_weight", "variance_contribution_pct"],
+        ascending=False,
+    )
+    return merged.head(limit).to_dict(orient="records")
+
+
+def _build_holding_drivers(
+    bundle: dict[str, Any],
+    macro_context: Optional["MacroRegimeSnapshot"],
+    holding_fundamentals: list["CompanyFundamentalSnapshot"],
+    narrative_evidence: list["NarrativeEvidence"],
+) -> list[HoldingRiskDriver]:
+    """Identify and explain the holdings most responsible for portfolio fragility.
+
+    This upgraded version moves from raw strings toward a true reason-code
+    framework. Each holding driver now has:
+    - explicit reason codes
+    - a primary reason
+    - secondary reasons
+    - driver-level confidence
+    - evidence summaries
+    """
+    candidate_rows = _candidate_driver_rows(bundle, limit=10)
+    if not candidate_rows:
+        return []
+    fundamentals_by_ticker = {item.ticker: item for item in holding_fundamentals}
+    narrative_by_ticker = _narrative_evidence_by_ticker(narrative_evidence)
+
     driver_rows: list[HoldingRiskDriver] = []
-    for row in merged.sort_values("current_weight", ascending=False).to_dict(orient="records"):
-        reasons: list[str] = []
-        current_weight = _safe_float(row.get("current_weight"))
-        variance_contribution_pct = _safe_float(row.get("variance_contribution_pct"))
-        excess_return_vs_benchmark = _safe_float(row.get("excess_return_vs_benchmark"))
-
-        if current_weight is not None and current_weight >= 0.15:
-            reasons.append("large position size")
-        if variance_contribution_pct is not None and variance_contribution_pct >= 0.08:
-            reasons.append("meaningful 2025 volatility contributor")
-        if excess_return_vs_benchmark is not None and excess_return_vs_benchmark < 0:
-            reasons.append("lagging benchmark since buy")
-
-        if reasons:
-            driver_rows.append(
-                HoldingRiskDriver(
-                    ticker=str(row.get("ticker")),
-                    sector=row.get("sector"),
-                    current_weight=current_weight,
-                    excess_return_vs_benchmark=excess_return_vs_benchmark,
-                    variance_contribution_pct=variance_contribution_pct,
-                    driver_reasons=reasons,
-                )
+    for row in candidate_rows:
+        ticker = str(row.get("ticker"))
+        reason_codes = _build_holding_reason_codes(
+            row=row,
+            macro_context=macro_context,
+            fundamentals=fundamentals_by_ticker.get(ticker),
+            narrative_items=narrative_by_ticker.get(ticker, []),
+        )
+        if not reason_codes:
+            continue
+        primary = reason_codes[0]
+        secondary = reason_codes[1:3]
+        confidence_score, confidence_band = _driver_confidence_from_reason_codes(reason_codes)
+        evidence_summary = [evidence for code in reason_codes[:3] for evidence in code.evidence[:2]]
+        driver_importance_score = round(
+            sum(code.severity_score for code in reason_codes[:3]) + ((confidence_score or 0.0) * 20.0),
+            1,
+        )
+        driver_rows.append(
+            HoldingRiskDriver(
+                ticker=ticker,
+                sector=row.get("sector"),
+                current_weight=_safe_float(row.get("current_weight")),
+                excess_return_vs_benchmark=_safe_float(row.get("excess_return_vs_benchmark")),
+                variance_contribution_pct=_safe_float(row.get("variance_contribution_pct")),
+                driver_reasons=[code.label for code in reason_codes],
+                primary_reason_code=primary.code,
+                primary_reason_label=primary.label,
+                primary_reason_summary=primary.summary,
+                secondary_reason_codes=[code.code for code in secondary],
+                driver_confidence_score=confidence_score,
+                driver_confidence_band=confidence_band,
+                evidence_summary=evidence_summary,
+                reason_codes=[code.model_dump() for code in reason_codes],
             )
+        )
 
     if not driver_rows:
-        top_rows = merged.sort_values("current_weight", ascending=False).head(5).to_dict(orient="records")
-        for row in top_rows:
+        for row in candidate_rows[:5]:
+            ticker = str(row.get("ticker"))
+            fallback_code = ReasonCode(
+                code="largest_remaining_position",
+                label="Largest remaining position",
+                category="positioning",
+                severity_score=50.0,
+                summary=f"{ticker} is one of the portfolio's largest remaining positions.",
+                evidence=[f"Current weight: {(_safe_float(row.get('current_weight')) or 0.0):.1%}"],
+            )
             driver_rows.append(
                 HoldingRiskDriver(
-                    ticker=str(row.get("ticker")),
+                    ticker=ticker,
                     sector=row.get("sector"),
                     current_weight=_safe_float(row.get("current_weight")),
                     excess_return_vs_benchmark=_safe_float(row.get("excess_return_vs_benchmark")),
                     variance_contribution_pct=_safe_float(row.get("variance_contribution_pct")),
-                    driver_reasons=["largest current positions"],
+                    driver_reasons=[fallback_code.label],
+                    primary_reason_code=fallback_code.code,
+                    primary_reason_label=fallback_code.label,
+                    primary_reason_summary=fallback_code.summary,
+                    secondary_reason_codes=[],
+                    driver_confidence_score=0.3,
+                    driver_confidence_band="Low",
+                    evidence_summary=fallback_code.evidence,
+                    reason_codes=[fallback_code.model_dump()],
                 )
             )
 
+    driver_rows.sort(
+        key=lambda item: (
+            -(sum(code.severity_score for code in item.reason_codes[:3]) + item.driver_confidence_score * 20.0),
+            -(item.current_weight or 0.0),
+            item.ticker,
+        )
+    )
     return driver_rows[:5]
 
 
@@ -473,7 +835,7 @@ def _build_macro_context(bundle: dict[str, Any]) -> Optional[MacroRegimeSnapshot
 
 def _build_holding_fundamentals(
     bundle: dict[str, Any],
-    top_holding_drivers: list[HoldingRiskDriver],
+    tickers: list[str],
 ) -> list[CompanyFundamentalSnapshot]:
     """Build fundamental snapshots for the holdings driving the diagnosis.
 
@@ -490,8 +852,7 @@ def _build_holding_fundamentals(
         return []
 
     snapshots: list[CompanyFundamentalSnapshot] = []
-    for driver in top_holding_drivers:
-        ticker = driver.ticker
+    for ticker in tickers:
         profile_row = profiles[profiles["symbol"] == ticker].head(1)
         profile = profile_row.iloc[0].to_dict() if not profile_row.empty else {}
 
@@ -560,7 +921,7 @@ def _clean_snippet(text: Any, limit: int = 280) -> str:
 
 def _build_narrative_evidence(
     bundle: dict[str, Any],
-    top_holding_drivers: list[HoldingRiskDriver],
+    tickers: list[str],
 ) -> list[NarrativeEvidence]:
     """Attach recent filing/news evidence for the main holding drivers.
 
@@ -573,7 +934,6 @@ def _build_narrative_evidence(
     if corpus.empty:
         return []
     evidence: list[NarrativeEvidence] = []
-    tickers = [driver.ticker for driver in top_holding_drivers]
     for ticker in tickers:
         ticker_docs = corpus[corpus["ticker"] == ticker].copy()
         if ticker_docs.empty:
@@ -617,10 +977,12 @@ def _narrative_risk_map(narrative_evidence: list[NarrativeEvidence]) -> dict[str
 def _build_sector_drivers(bundle: dict[str, Any]) -> list[SectorRiskDriver]:
     """Identify sectors that appear to be amplifying portfolio risk.
 
-    This helper translates the saved sector allocation table into a smaller list
-    of sector-level driver objects. Right now it focuses on:
-    - outsized sector weight
-    - sector underperformance versus the trade-matched benchmark
+    Sector drivers use the same reason-code pattern as holding drivers, just at a
+    higher level of abstraction. The goal is to make sector crowding explainable
+    with the same primitives:
+    - explicit reason codes
+    - one primary reason
+    - driver-level confidence
     """
     sectors = bundle["sector_allocation"].copy()
     if sectors.empty:
@@ -628,20 +990,47 @@ def _build_sector_drivers(bundle: dict[str, Any]) -> list[SectorRiskDriver]:
 
     drivers: list[SectorRiskDriver] = []
     for row in sectors.sort_values("weight_pct", ascending=False).to_dict(orient="records"):
-        reasons: list[str] = []
+        reason_codes: list[ReasonCode] = []
         weight_pct = _safe_float(row.get("weight_pct"))
         excess_return_vs_benchmark = _safe_float(row.get("excess_return_vs_benchmark"))
         if weight_pct is not None and weight_pct >= 0.25:
-            reasons.append("large sector concentration")
+            reason_codes.append(
+                ReasonCode(
+                    code="sector_crowding",
+                    label="Sector crowding",
+                    category="positioning",
+                    severity_score=round(min(100.0, weight_pct * 220), 1),
+                    summary=f"{row.get('sector')} represents a large enough share of capital to shape portfolio behavior.",
+                    evidence=[f"Sector weight: {weight_pct:.1%}"],
+                )
+            )
         if excess_return_vs_benchmark is not None and excess_return_vs_benchmark < 0:
-            reasons.append("sector is lagging trade-matched benchmark")
-        if reasons:
+            reason_codes.append(
+                ReasonCode(
+                    code="sector_benchmark_lag",
+                    label="Sector benchmark lag",
+                    category="performance",
+                    severity_score=round(min(100.0, abs(excess_return_vs_benchmark) * 100), 1),
+                    summary=f"{row.get('sector')} has lagged the trade-matched benchmark inside this portfolio.",
+                    evidence=[f"Excess return vs benchmark: {excess_return_vs_benchmark:.1%}"],
+                )
+            )
+        if reason_codes:
+            reason_codes = _sort_reason_codes(reason_codes)
+            confidence_score, confidence_band = _driver_confidence_from_reason_codes(reason_codes)
+            primary = reason_codes[0]
             drivers.append(
                 SectorRiskDriver(
                     sector=str(row.get("sector")),
                     weight_pct=weight_pct,
                     excess_return_vs_benchmark=excess_return_vs_benchmark,
-                    driver_reasons=reasons,
+                    driver_reasons=[code.label for code in reason_codes],
+                    primary_reason_code=primary.code,
+                    primary_reason_label=primary.label,
+                    primary_reason_summary=primary.summary,
+                    driver_confidence_score=confidence_score,
+                    driver_confidence_band=confidence_band,
+                    reason_codes=[code.model_dump() for code in reason_codes],
                 )
             )
     return drivers[:3]
@@ -945,12 +1334,19 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
     structured diagnosis object instead of raw dataframes.
     """
     bundle = load_diagnosis_bundle(base_dir)
-    top_holding_drivers = _build_holding_drivers(bundle)
-    top_sector_drivers = _build_sector_drivers(bundle)
     supporting_metrics = _build_metric_observations(bundle)
     macro_context = _build_macro_context(bundle)
-    holding_fundamentals = _build_holding_fundamentals(bundle, top_holding_drivers)
-    narrative_evidence = _build_narrative_evidence(bundle, top_holding_drivers)
+    candidate_rows = _candidate_driver_rows(bundle, limit=10)
+    candidate_tickers = [str(row.get("ticker")) for row in candidate_rows if row.get("ticker")]
+    holding_fundamentals = _build_holding_fundamentals(bundle, candidate_tickers)
+    narrative_evidence = _build_narrative_evidence(bundle, candidate_tickers)
+    top_holding_drivers = _build_holding_drivers(
+        bundle,
+        macro_context,
+        holding_fundamentals,
+        narrative_evidence,
+    )
+    top_sector_drivers = _build_sector_drivers(bundle)
     top_concerns = _build_top_concerns(
         bundle,
         top_holding_drivers,
