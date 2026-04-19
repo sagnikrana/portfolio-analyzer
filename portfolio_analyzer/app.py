@@ -2167,33 +2167,22 @@ def metric_value_display(metric_key: str, raw_value: Any) -> str:
 
 def build_diagnosis_summary_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     top_concern_text = ", ".join(concern.label for concern in diagnosis.top_concerns[:3]) or "No major concerns yet"
-    summary_cards_inner = (
-        metric_card(
-            "Observed Risk",
-            f"{diagnosis.observed_risk_score:.1f}/100",
-            diagnosis.observed_risk_band,
-        )
-        + metric_card(
-            "Stated Risk",
-            f"{diagnosis.stated_risk_score:.1f}/100",
-            diagnosis.stated_risk_band,
-        )
-        + metric_card("Alignment", diagnosis.alignment, "Portfolio vs stated tolerance")
-        + metric_card("Confidence", diagnosis.confidence_band, "How complete and consistent the evidence looks")
-    )
     return (
-        "<div style='display:grid;gap:16px'>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.96))'>"
-        "<div style='font-size:28px;font-weight:700;color:#f8fafc'>Risk Diagnosis</div>"
+        "<div style='font-size:22px;font-weight:700;color:#f8fafc'>Diagnosis Snapshot and Alignment</div>"
         "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>"
         f"{diagnosis.diagnostic_summary}"
         "</div>"
+        "<div style='font-size:14px;color:#e2e8f0;margin-top:14px'>"
+        f"After looking at the holding drivers and sector pressure above, the portfolio currently reads as "
+        f"<strong>{diagnosis.alignment.lower()}</strong>. Observed risk is <strong>{diagnosis.observed_risk_score:.1f}/100</strong> "
+        f"({diagnosis.observed_risk_band}) versus a stated risk of <strong>{diagnosis.stated_risk_score:.1f}/100</strong> "
+        f"({diagnosis.stated_risk_band})."
+        "</div>"
         "<div style='font-size:13px;color:#93c5fd;margin-top:12px'>"
-        f"Most important concerns right now: {top_concern_text}."
+        f"Most important concerns right now: {top_concern_text}. Confidence in this diagnosis is <strong>{diagnosis.confidence_band}</strong>."
         "</div>"
-        "</div>"
-        f"<div class='metric-strip'>{summary_cards_inner}</div>"
         "</div>"
     )
 
@@ -4165,7 +4154,6 @@ def build_app() -> gr.Blocks:
                         with gr.Row(equal_height=True):
                             diagnosis_drawdown_plot = gr.Plot(label="Downside Depth vs S&P 500")
                             diagnosis_macro_md = gr.HTML()
-                        diagnosis_summary_md = gr.HTML()
                         with gr.Accordion("Detailed Evidence", open=False):
                             diagnosis_risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
                             diagnosis_supporting_metrics_df = gr.Dataframe(
@@ -4188,6 +4176,8 @@ def build_app() -> gr.Blocks:
                                 interactive=False,
                             )
                             diagnosis_confidence_md = gr.HTML()
+                        with gr.Accordion("Diagnosis Snapshot and Alignment", open=False):
+                            diagnosis_summary_md = gr.HTML()
                     with gr.Tab("Risk Guide", id="risk-guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
