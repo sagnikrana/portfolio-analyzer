@@ -2354,6 +2354,18 @@ def humanize_reason_label(label: str | None) -> str:
     return mapping.get(str(label or "").strip(), str(label or ""))
 
 
+def humanize_concern_label(label: str | None) -> str:
+    mapping = {
+        "Concentration risk": "This position is large enough to noticeably move the whole portfolio",
+        "Market-relative risk": "This holding has been moving more sharply than a steadier market-like portfolio",
+        "Behavioral risk": "Trading behavior around this holding may be adding extra risk",
+        "Sector crowding": "A large share of the portfolio is stacked into the same sector",
+        "Company-specific risk": "There are company-specific issues that deserve closer attention",
+        "Macro sensitivity": "This holding can be more exposed when rates stay high or the economy tightens",
+    }
+    return mapping.get(str(label or "").strip(), str(label or ""))
+
+
 def humanize_macro_flag(flag: str) -> str:
     mapping = {
         "rates still restrictive": "interest rates are still relatively high",
@@ -2363,6 +2375,38 @@ def humanize_macro_flag(flag: str) -> str:
         "yield curve still inverted": "short-term yields are still above long-term yields",
     }
     return mapping.get(str(flag or "").strip(), str(flag or ""))
+
+
+def build_action_summary_for_users(action_need: Any, contribution: Any) -> str:
+    """Rewrite the action-layer summary into plain user language for the dashboard.
+
+    The diagnosis objects keep precise internal labels because they are useful
+    for debugging and notebook review. The dashboard needs a friendlier bridge
+    from those labels to plain-English portfolio meaning.
+    """
+    action_label = getattr(action_need, "action_label", "Needs review")
+    ticker = getattr(action_need, "ticker", "This holding")
+    concern_label = getattr(action_need, "linked_primary_concern", None)
+    concern_explanation = humanize_concern_label(concern_label)
+    score = getattr(contribution, "overall_contribution_score", None)
+    pressure = getattr(action_need, "action_pressure_score", None)
+
+    if action_label == "Reduce exposure":
+        prefix = f"{ticker} looks large or influential enough that cutting it back would directly lower portfolio risk."
+    elif action_label == "Trim and monitor":
+        prefix = f"{ticker} is strong enough as a risk driver that trimming it is worth considering, even if this is not an urgent sell call."
+    elif action_label == "Monitor closely":
+        prefix = f"{ticker} does not yet look like a clear trim, but it is important enough to keep on the watchlist."
+    else:
+        prefix = f"{ticker} shows up in the diagnosis, but it does not yet look like a holding that needs action."
+
+    score_clause = ""
+    if score is not None and pressure is not None:
+        score_clause = (
+            f" It contributes meaningfully to the current diagnosis ({float(score):.1f}/100 contribution score) "
+            f"and is currently at {float(pressure):.1f}/100 action pressure."
+        )
+    return prefix + " The main reason is simple: " + concern_explanation.lower() + "." + score_clause
 
 
 def humanize_evidence_point(evidence: Any, ticker: str | None = None) -> str:
@@ -2583,9 +2627,16 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         action_label = getattr(action_need, "action_label", "No action read yet")
         action_urgency = getattr(action_need, "action_urgency", "Needs review")
         action_pressure_score = getattr(action_need, "action_pressure_score", None)
-        action_summary = getattr(action_need, "action_summary", None) or "The action layer has not produced a stable read for this holding yet."
+        action_summary = (
+            build_action_summary_for_users(action_need, contribution)
+            if action_need is not None
+            else "The action layer has not produced a stable read for this holding yet."
+        )
         action_reason = getattr(action_need, "primary_action_reason", None) or "The system has not identified a dominant action reason yet."
-        action_support = ", ".join(getattr(action_need, "supporting_concerns", [])[:2]) or "No major secondary pressure noted"
+        action_support = ", ".join(
+            humanize_concern_label(label)
+            for label in getattr(action_need, "supporting_concerns", [])[:2]
+        ) or "No major secondary pressure noted"
         if action_label == "Reduce exposure":
             action_tone = "#f87171"
             action_bg = "rgba(127,29,29,.22)"
@@ -2635,6 +2686,7 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.46);border:1px solid rgba(148,163,184,.10)'>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Main portfolio risk this holding is feeding</div>"
             f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:8px'>{contribution.primary_concern_label}</div>"
+            f"<div style='font-size:13px;line-height:1.5;color:#cbd5e1;margin-top:8px'>{humanize_concern_label(contribution.primary_concern_label)}</div>"
             f"<div style='font-size:15px;line-height:1.6;color:#dbe4f0;margin-top:10px'>{contribution.primary_concern_summary}</div>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Other risks this holding also spills into</div>"
             f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:10px'>{spillover_html}</div>"
