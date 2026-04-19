@@ -189,6 +189,58 @@ class ReasonCode(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+class HoldingConcernContribution(BaseModel):
+    """One holding's contribution to one specific diagnosis concern.
+
+    This object lets the system answer a more precise question than
+    `HoldingRiskDriver` alone can answer:
+
+    "How much is this holding contributing to *this specific concern*?"
+
+    The contribution object keeps the concern link explicit, preserves the
+    supporting reason codes that led to the contribution score, and carries its
+    own confidence so later action logic can stay honest about uncertainty.
+    """
+
+    concern_key: str
+    concern_label: str
+    contribution_score: float
+    contribution_band: str
+    contribution_summary: str
+    supporting_reason_codes: list[str] = Field(default_factory=list)
+    supporting_evidence: list[str] = Field(default_factory=list)
+    confidence_score: float = 0.0
+    confidence_band: str = "Low"
+
+
+class HoldingRiskContribution(BaseModel):
+    """A holding-centric view of how one position feeds portfolio diagnosis.
+
+    `PortfolioRiskDiagnosis` tells us what is wrong overall. `HoldingRiskDriver`
+    tells us which positions show up as important. This object is the bridge
+    between those layers and later action logic:
+
+    - one object per important holding
+    - a ranked set of concern-specific contributions
+    - a primary concern and overall contribution strength
+    - concise evidence and confidence we can later surface in UI or actions
+    """
+
+    ticker: str
+    sector: Optional[str] = None
+    current_weight: Optional[float] = None
+    overall_contribution_score: float
+    overall_contribution_band: str
+    primary_concern_key: str
+    primary_concern_label: str
+    primary_concern_summary: str
+    contribution_confidence_score: float = 0.0
+    contribution_confidence_band: str = "Low"
+    contribution_summary: str
+    concern_contributions: list["HoldingConcernContribution"] = Field(default_factory=list)
+    evidence_summary: list[str] = Field(default_factory=list)
+
+
 class PortfolioRiskDiagnosis(BaseModel):
     """Top-level typed diagnosis object for one analyzed portfolio snapshot.
 
@@ -219,6 +271,7 @@ class PortfolioRiskDiagnosis(BaseModel):
     top_concerns: list[DiagnosisConcern] = Field(default_factory=list)
     top_holding_drivers: list[HoldingRiskDriver] = Field(default_factory=list)
     top_sector_drivers: list[SectorRiskDriver] = Field(default_factory=list)
+    holding_risk_contributions: list[HoldingRiskContribution] = Field(default_factory=list)
     supporting_metrics: list[RiskMetricObservation] = Field(default_factory=list)
     macro_context: Optional[MacroRegimeSnapshot] = None
     holding_fundamentals: list[CompanyFundamentalSnapshot] = Field(default_factory=list)
@@ -229,6 +282,8 @@ class PortfolioRiskDiagnosis(BaseModel):
 
 HoldingRiskDriver.model_rebuild()
 SectorRiskDriver.model_rebuild()
+HoldingConcernContribution.model_rebuild()
+HoldingRiskContribution.model_rebuild()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -545,6 +600,53 @@ def _driver_confidence_from_reason_codes(reason_codes: list[ReasonCode]) -> tupl
     evidence_bonus = 1 if any(item.evidence for item in reason_codes) else 0
     score = min(1.0, 0.2 + len(categories) * 0.22 + evidence_bonus * 0.12)
     return round(score, 2), _driver_confidence_band(score)
+
+
+def _concern_contribution_band(score: float) -> str:
+    """Translate a holding-level contribution score into a readable band."""
+    if score < 20:
+        return "Low contribution"
+    if score < 40:
+        return "Moderate contribution"
+    if score < 60:
+        return "Meaningful contribution"
+    if score < 80:
+        return "High contribution"
+    return "Very high contribution"
+
+
+def _holding_concern_label(concern_key: str) -> str:
+    """Map internal concern keys to stable human-readable labels."""
+    labels = {
+        "concentration": "Concentration risk",
+        "market": "Market-relative risk",
+        "behavior": "Behavioral risk",
+        "company_specific": "Company-specific risk",
+        "macro": "Macro sensitivity",
+    }
+    return labels.get(concern_key, concern_key.replace("_", " ").title())
+
+
+def _reason_code_concern_weights(reason_code: ReasonCode) -> list[tuple[str, float]]:
+    """Map one reason code onto the concern families it most naturally supports.
+
+    The contribution layer needs to know which concern(s) each reason code
+    should strengthen. These mappings are intentionally explicit and heuristic:
+    they keep the system inspectable while we are still learning the domain.
+    """
+    mapping = {
+        "concentration_pressure": [("concentration", 1.0)],
+        "meaningful_position": [("concentration", 0.65)],
+        "volatility_contributor": [("market", 1.0)],
+        "volatility_supporting_driver": [("market", 0.7)],
+        "benchmark_lag": [("company_specific", 0.7), ("market", 0.3)],
+        "high_beta": [("market", 0.8), ("macro", 0.2)],
+        "negative_earnings": [("company_specific", 1.0)],
+        "balance_sheet_stretch": [("company_specific", 1.0)],
+        "narrative_risk": [("company_specific", 0.75), ("market", 0.25)],
+        "restrictive_rates_sensitivity": [("macro", 1.0)],
+    }
+    return mapping.get(reason_code.code, [("company_specific", 0.5)])
 
 
 def _candidate_driver_rows(bundle: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
@@ -1259,6 +1361,117 @@ def _build_top_concerns(
     return concerns
 
 
+def _build_holding_risk_contributions(
+    top_holding_drivers: list[HoldingRiskDriver],
+    top_concerns: list[DiagnosisConcern],
+) -> list[HoldingRiskContribution]:
+    """Convert holding drivers into concern-specific contribution objects.
+
+    This function is the next layer after `HoldingRiskDriver`. It answers:
+
+    - which concern(s) a holding contributes to
+    - how strongly it contributes to each one
+    - which reason codes support that read
+    - how confident we are in the contribution view
+
+    The output is designed to feed both notebook review and later action logic.
+    """
+    concern_score_lookup = {
+        concern.concern_key: concern.severity_score for concern in top_concerns
+    }
+    contribution_objects: list[HoldingRiskContribution] = []
+
+    for driver in top_holding_drivers:
+        contribution_rows: list[HoldingConcernContribution] = []
+        reason_codes = list(driver.reason_codes or [])
+        grouped_codes: dict[str, list[ReasonCode]] = {}
+        weighted_scores: dict[str, float] = {}
+
+        for reason_code in reason_codes:
+            for concern_key, weight in _reason_code_concern_weights(reason_code):
+                grouped_codes.setdefault(concern_key, []).append(reason_code)
+                weighted_scores[concern_key] = weighted_scores.get(concern_key, 0.0) + (reason_code.severity_score * weight)
+
+        if not weighted_scores:
+            continue
+
+        for concern_key, raw_score in weighted_scores.items():
+            concern_multiplier = (concern_score_lookup.get(concern_key, 55.0)) / 100.0
+            contribution_score = min(100.0, round(raw_score * concern_multiplier, 1))
+            supporting_codes = _sort_reason_codes(grouped_codes.get(concern_key, []))
+            supporting_code_keys = [item.code for item in supporting_codes]
+            supporting_evidence = [
+                evidence
+                for item in supporting_codes[:3]
+                for evidence in item.evidence[:2]
+                if evidence
+            ]
+            confidence_score = min(
+                1.0,
+                round(driver.driver_confidence_score * (0.72 + 0.08 * len(set(supporting_code_keys))), 2),
+            )
+            confidence_band = _driver_confidence_band(confidence_score)
+            lead_label = supporting_codes[0].label if supporting_codes else "supporting evidence"
+            contribution_rows.append(
+                HoldingConcernContribution(
+                    concern_key=concern_key,
+                    concern_label=_holding_concern_label(concern_key),
+                    contribution_score=contribution_score,
+                    contribution_band=_concern_contribution_band(contribution_score),
+                    contribution_summary=(
+                        f"{driver.ticker} mainly contributes to {_holding_concern_label(concern_key).lower()} "
+                        f"through {lead_label.lower()}."
+                    ),
+                    supporting_reason_codes=supporting_code_keys,
+                    supporting_evidence=supporting_evidence[:4],
+                    confidence_score=confidence_score,
+                    confidence_band=confidence_band,
+                )
+            )
+
+        contribution_rows.sort(key=lambda item: item.contribution_score, reverse=True)
+        primary_contribution = contribution_rows[0]
+        overall_contribution_score = min(
+            100.0,
+            round(
+                primary_contribution.contribution_score
+                + max(0.0, sum(item.contribution_score for item in contribution_rows[1:3]) * 0.2),
+                1,
+            ),
+        )
+        overall_confidence = min(
+            1.0,
+            round(sum(item.confidence_score for item in contribution_rows[:2]) / max(1, len(contribution_rows[:2])), 2),
+        )
+        contribution_objects.append(
+            HoldingRiskContribution(
+                ticker=driver.ticker,
+                sector=driver.sector,
+                current_weight=driver.current_weight,
+                overall_contribution_score=overall_contribution_score,
+                overall_contribution_band=_concern_contribution_band(overall_contribution_score),
+                primary_concern_key=primary_contribution.concern_key,
+                primary_concern_label=primary_contribution.concern_label,
+                primary_concern_summary=primary_contribution.contribution_summary,
+                contribution_confidence_score=overall_confidence,
+                contribution_confidence_band=_driver_confidence_band(overall_confidence),
+                contribution_summary=(
+                    f"{driver.ticker} is primarily a {_holding_concern_label(primary_contribution.concern_key).lower()} "
+                    f"driver, with secondary spillover into "
+                    + ", ".join(item.concern_label.lower() for item in contribution_rows[1:3])
+                    + "."
+                    if len(contribution_rows) > 1
+                    else f"{driver.ticker} is primarily a {_holding_concern_label(primary_contribution.concern_key).lower()} driver."
+                ),
+                concern_contributions=contribution_rows,
+                evidence_summary=driver.evidence_summary[:4],
+            )
+        )
+
+    contribution_objects.sort(key=lambda item: item.overall_contribution_score, reverse=True)
+    return contribution_objects
+
+
 def _build_diagnostic_summary(bundle: dict[str, Any], top_concerns: list[DiagnosisConcern]) -> str:
     """Create the top-level diagnosis narrative for the portfolio.
 
@@ -1355,6 +1568,10 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         holding_fundamentals,
         narrative_evidence,
     )
+    holding_risk_contributions = _build_holding_risk_contributions(
+        top_holding_drivers,
+        top_concerns,
+    )
     manifest = bundle["manifest"]
     headline = bundle["headline"]
     risk = bundle["risk"]
@@ -1376,6 +1593,7 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         top_concerns=top_concerns,
         top_holding_drivers=top_holding_drivers,
         top_sector_drivers=top_sector_drivers,
+        holding_risk_contributions=holding_risk_contributions,
         supporting_metrics=supporting_metrics,
         macro_context=macro_context,
         holding_fundamentals=holding_fundamentals,
