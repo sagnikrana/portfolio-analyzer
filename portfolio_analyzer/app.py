@@ -4143,7 +4143,9 @@ def build_app() -> gr.Blocks:
 
 def launch_app() -> None:
     app = build_app()
-    app.launch(server_name="127.0.0.1", server_port=7861, share=True)
+    # Default to local launch so the dashboard reliably binds to 7861 without
+    # depending on Gradio's share tunnel port allocation.
+    app.launch(server_name="127.0.0.1", server_port=7861, share=False)
 
 
 if __name__ == "__main__":
