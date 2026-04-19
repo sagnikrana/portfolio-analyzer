@@ -2290,6 +2290,88 @@ def plot_diagnosis_concerns(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
     return fig
 
 
+def build_holding_driver_explanation(diagnosis: PortfolioRiskDiagnosis, driver: Any) -> str:
+    fundamentals_by_ticker = {item.ticker: item for item in diagnosis.holding_fundamentals}
+    narrative_by_ticker: dict[str, list[Any]] = {}
+    for item in diagnosis.narrative_evidence:
+        narrative_by_ticker.setdefault(item.ticker, []).append(item)
+
+    explanation_parts: list[str] = []
+    current_weight = driver.current_weight or 0.0
+    variance_contribution_pct = driver.variance_contribution_pct or 0.0
+    excess_return = driver.excess_return_vs_benchmark
+    top_weight = max((item.current_weight or 0.0) for item in diagnosis.top_holding_drivers) if diagnosis.top_holding_drivers else 0.0
+
+    if current_weight >= 0.15:
+        explanation_parts.append(
+            f"it is a large enough position to materially move the whole portfolio on its own ({percent_display(current_weight)} of capital)"
+        )
+    elif current_weight >= 0.05:
+        explanation_parts.append(
+            f"it is still a meaningful position size at {percent_display(current_weight)} of capital"
+        )
+
+    if variance_contribution_pct >= 0.08:
+        explanation_parts.append(
+            f"it contributed heavily to recent portfolio swings ({percent_display(variance_contribution_pct)} of tracked variance)"
+        )
+    elif variance_contribution_pct >= 0.03:
+        explanation_parts.append(
+            f"it was a noticeable contributor to recent volatility ({percent_display(variance_contribution_pct)} of tracked variance)"
+        )
+
+    if excess_return is not None and excess_return < 0:
+        explanation_parts.append(
+            f"it has lagged the trade-matched S&P 500 since purchase by {percent_display(excess_return)}"
+        )
+
+    fundamentals = fundamentals_by_ticker.get(driver.ticker)
+    if fundamentals:
+        if fundamentals.beta is not None and fundamentals.beta > 1.2:
+            explanation_parts.append(f"its beta is elevated at {number_text(fundamentals.beta, 2)}, which can amplify market moves")
+        if "latest net income negative" in fundamentals.signals:
+            explanation_parts.append("its latest fundamental snapshot shows negative net income")
+        if "liabilities are a large share of assets" in fundamentals.signals:
+            explanation_parts.append("its balance sheet looks more stretched than the portfolio’s steadier names")
+
+    narrative_items = narrative_by_ticker.get(driver.ticker, [])
+    if narrative_items:
+        narrative_labels = sorted(
+            {
+                "recent filing language"
+                if item.source_type == "sec_filing"
+                else "recent news flow"
+                for item in narrative_items
+            }
+        )
+        explanation_parts.append(
+            f"there is also risk-relevant external evidence coming from {' and '.join(narrative_labels)}"
+        )
+
+    if not explanation_parts:
+        if current_weight >= top_weight * 0.75 and top_weight > 0:
+            explanation_parts.append("it matters because it is one of the portfolio’s largest remaining positions")
+        else:
+            explanation_parts.append("it currently matters because it shows up in the portfolio’s most influential holding set")
+
+    return "This holding is notable because " + "; ".join(explanation_parts) + "."
+
+
+def build_sector_driver_explanation(driver: Any) -> str:
+    explanation_parts: list[str] = []
+    if (driver.weight_pct or 0.0) >= 0.25:
+        explanation_parts.append(
+            f"the sector is carrying a large share of capital at {percent_display(driver.weight_pct)}"
+        )
+    if driver.excess_return_vs_benchmark is not None and driver.excess_return_vs_benchmark < 0:
+        explanation_parts.append(
+            f"the sector has lagged the trade-matched S&P 500 by {percent_display(driver.excess_return_vs_benchmark)}"
+        )
+    if not explanation_parts:
+        explanation_parts.append("the sector is one of the bigger exposures in the current portfolio")
+    return "This sector matters because " + "; ".join(explanation_parts) + "."
+
+
 def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     holding_items = "".join(
         (
@@ -2301,7 +2383,7 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
                 f"benchmark-relative return {percent_display(driver.excess_return_vs_benchmark)}, "
                 f"variance contribution {percent_display(driver.variance_contribution_pct)}"
             )
-            + f"<br><span style='color:#cbd5e1'>{'; '.join(driver.driver_reasons)}</span>"
+            + f"<br><span style='color:#cbd5e1'>{build_holding_driver_explanation(diagnosis, driver)}</span>"
             "</li>"
         )
         for driver in diagnosis.top_holding_drivers
@@ -2311,7 +2393,7 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             "<li style='margin-bottom:10px'>"
             f"<strong>{driver.sector}</strong> — weight {percent_display(driver.weight_pct)}, "
             f"excess return vs benchmark {percent_display(driver.excess_return_vs_benchmark)}"
-            f"<br><span style='color:#cbd5e1'>{'; '.join(driver.driver_reasons)}</span>"
+            f"<br><span style='color:#cbd5e1'>{build_sector_driver_explanation(driver)}</span>"
             "</li>"
         )
         for driver in diagnosis.top_sector_drivers
