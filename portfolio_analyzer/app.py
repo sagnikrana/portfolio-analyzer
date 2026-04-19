@@ -2281,6 +2281,33 @@ def plot_diagnosis_concerns(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
     return fig
 
 
+def compact_text_snippet(text: Any, limit: int = 120) -> str:
+    snippet = str(text or "").replace("\n", " ").replace("\r", " ").strip()
+    snippet = " ".join(snippet.split())
+    return snippet[:limit]
+
+
+def build_narrative_driver_detail(narrative_items: list[Any]) -> str | None:
+    filing_item = next((item for item in narrative_items if item.source_type == "sec_filing"), None)
+    news_item = next((item for item in narrative_items if item.source_type == "news_article"), None)
+    details: list[str] = []
+    if filing_item:
+        filing_title = filing_item.title or "recent SEC filing"
+        filing_snippet = compact_text_snippet(filing_item.snippet, 120)
+        details.append(f"the latest SEC filing signal came from “{filing_title}”")
+        if filing_snippet:
+            details.append(f"filing cue: {filing_snippet}")
+    if news_item:
+        news_title = news_item.title or "recent news coverage"
+        news_snippet = compact_text_snippet(news_item.snippet, 120)
+        details.append(f"recent news signal came from “{news_title}”")
+        if news_snippet:
+            details.append(f"news cue: {news_snippet}")
+    if not details:
+        return None
+    return "; ".join(details)
+
+
 def build_holding_driver_explanation(diagnosis: PortfolioRiskDiagnosis, driver: Any) -> str:
     fundamentals_by_ticker = {item.ticker: item for item in diagnosis.holding_fundamentals}
     narrative_by_ticker: dict[str, list[Any]] = {}
@@ -2327,17 +2354,9 @@ def build_holding_driver_explanation(diagnosis: PortfolioRiskDiagnosis, driver: 
 
     narrative_items = narrative_by_ticker.get(driver.ticker, [])
     if narrative_items:
-        narrative_labels = sorted(
-            {
-                "recent filing language"
-                if item.source_type == "sec_filing"
-                else "recent news flow"
-                for item in narrative_items
-            }
-        )
-        explanation_parts.append(
-            f"there is also risk-relevant external evidence coming from {' and '.join(narrative_labels)}"
-        )
+        narrative_detail = build_narrative_driver_detail(narrative_items)
+        if narrative_detail:
+            explanation_parts.append(narrative_detail)
 
     if not explanation_parts:
         if current_weight >= top_weight * 0.75 and top_weight > 0:
