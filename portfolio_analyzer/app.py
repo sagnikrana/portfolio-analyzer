@@ -2287,6 +2287,55 @@ def compact_text_snippet(text: Any, limit: int = 120) -> str:
     return snippet[:limit]
 
 
+def html_entity_clean(text: Any) -> str:
+    return (
+        str(text or "")
+        .replace("&#160;", " ")
+        .replace("&nbsp;", " ")
+        .replace("  ", " ")
+        .strip()
+    )
+
+
+def summarize_filing_signal(title: str | None, snippet: Any) -> str:
+    """Translate raw filing cues into plain-English findings for the dashboard.
+
+    The SEC snippets we currently store are often section headers rather than
+    prose. Instead of showing users `Item 1A. Risk Factors`, we convert those
+    markers into an explanation of what that means for the diagnosis.
+    """
+    cleaned = compact_text_snippet(html_entity_clean(snippet), 220).lower()
+    report_kind = "quarterly report" if str(title or "").strip() == "10-Q filing" else "annual report"
+
+    has_risk_factors = "risk factors" in cleaned or "item 1a" in cleaned
+    has_cybersecurity = "cybersecurity" in cleaned or "item 1c" in cleaned
+    has_unresolved_comments = "unresolved staff comments" in cleaned or "item 1b" in cleaned
+
+    findings: list[str] = []
+    if has_risk_factors:
+        findings.append(
+            f"the latest {report_kind} still points investors to material business risks"
+        )
+    if has_cybersecurity:
+        findings.append(
+            f"the latest {report_kind} also explicitly calls out cybersecurity disclosures"
+        )
+    if has_unresolved_comments:
+        findings.append(
+            f"the latest {report_kind} still includes a section on unresolved regulator questions or comments"
+        )
+
+    if findings:
+        sentence = "; ".join(findings)
+        return sentence[0].upper() + sentence[1:] + "."
+
+    if cleaned:
+        readable = compact_text_snippet(html_entity_clean(snippet), 160)
+        return f"The latest {report_kind} contained sections highlighted as: {readable}."
+
+    return f"The latest {report_kind} was reviewed as part of the diagnosis."
+
+
 def humanize_reason_label(label: str | None) -> str:
     mapping = {
         "Concentration pressure": "Big position size",
@@ -2322,9 +2371,9 @@ def humanize_evidence_point(evidence: Any, ticker: str | None = None) -> str:
     if not text:
         return ""
     if text == "10-Q filing":
-        return "The latest quarterly company report was part of the diagnosis."
+        return ""
     if text == "10-K filing":
-        return "The latest annual company report was part of the diagnosis."
+        return ""
     if text.startswith("Macro flag: "):
         return humanize_macro_flag(text.replace("Macro flag: ", "", 1)).capitalize() + "."
     if text.startswith("Beta: "):
@@ -2351,10 +2400,8 @@ def build_narrative_driver_detail(narrative_items: list[Any]) -> str | None:
     details: list[str] = []
     if filing_item:
         filing_title = filing_item.title or "latest company filing"
-        filing_snippet = compact_text_snippet(filing_item.snippet, 120)
-        details.append(f"the latest company filing reviewed was “{filing_title}”")
-        if filing_snippet:
-            details.append(f"what stood out in that filing: {filing_snippet}")
+        filing_finding = summarize_filing_signal(filing_title, filing_item.snippet)
+        details.append(filing_finding)
     if news_item:
         news_title = news_item.title or "recent company news"
         news_snippet = compact_text_snippet(news_item.snippet, 120)
@@ -2394,8 +2441,9 @@ def build_driver_evidence_points(diagnosis: PortfolioRiskDiagnosis, driver: Any)
     reason_codes = list(getattr(driver, "reason_codes", []) or [])
     for reason_code in reason_codes[:3]:
         for evidence in getattr(reason_code, "evidence", [])[:2]:
-            if evidence and evidence not in evidence_points:
-                evidence_points.append(humanize_evidence_point(evidence, driver.ticker))
+            humanized = humanize_evidence_point(evidence, driver.ticker)
+            if humanized and humanized not in evidence_points:
+                evidence_points.append(humanized)
 
     fundamentals = fundamentals_by_ticker.get(driver.ticker)
     if fundamentals:
