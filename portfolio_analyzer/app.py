@@ -2287,22 +2287,80 @@ def compact_text_snippet(text: Any, limit: int = 120) -> str:
     return snippet[:limit]
 
 
+def humanize_reason_label(label: str | None) -> str:
+    mapping = {
+        "Concentration pressure": "Big position size",
+        "Meaningful position size": "Still a meaningful position",
+        "Volatility contributor": "Large contributor to portfolio swings",
+        "Noticeable volatility contributor": "Adds to portfolio swings",
+        "Lagging benchmark": "Trailing the market",
+        "High beta": "Moves more than the market",
+        "Negative earnings": "Profits are under pressure",
+        "Balance-sheet stretch": "Balance sheet looks stretched",
+        "Narrative or event risk": "Recent company developments to watch",
+        "Restrictive-rate sensitivity": "Can be more sensitive when rates stay high",
+        "Sector crowding": "A big share of the portfolio is in this sector",
+        "Sector benchmark lag": "This sector has trailed the market",
+    }
+    return mapping.get(str(label or "").strip(), str(label or ""))
+
+
+def humanize_macro_flag(flag: str) -> str:
+    mapping = {
+        "rates still restrictive": "interest rates are still relatively high",
+        "inflation still sticky": "inflation is still proving hard to bring down",
+        "labor market still stable": "the job market still looks fairly stable",
+        "yield curve positively sloped": "long-term yields are back above short-term yields",
+        "yield curve still inverted": "short-term yields are still above long-term yields",
+    }
+    return mapping.get(str(flag or "").strip(), str(flag or ""))
+
+
+def humanize_evidence_point(evidence: Any, ticker: str | None = None) -> str:
+    text = str(evidence or "").strip()
+    ticker_label = ticker or "This holding"
+    if not text:
+        return ""
+    if text == "10-Q filing":
+        return "The latest quarterly company report was part of the diagnosis."
+    if text == "10-K filing":
+        return "The latest annual company report was part of the diagnosis."
+    if text.startswith("Macro flag: "):
+        return humanize_macro_flag(text.replace("Macro flag: ", "", 1)).capitalize() + "."
+    if text.startswith("Beta: "):
+        value = text.replace("Beta: ", "", 1)
+        return f"{ticker_label} has been moving about {value}x as much as the market."
+    if text.startswith("Current weight: "):
+        value = text.replace("Current weight: ", "", 1)
+        return f"{ticker_label} currently makes up {value} of the portfolio."
+    if text.startswith("Variance contribution: "):
+        value = text.replace("Variance contribution: ", "", 1)
+        return f"{ticker_label} drove about {value} of recent portfolio swings."
+    if text.startswith("Excess return vs benchmark: "):
+        value = text.replace("Excess return vs benchmark: ", "", 1)
+        return f"Since purchase, {ticker_label} has trailed the trade-matched S&P 500 by {value}."
+    if text.startswith("Latest filed fundamentals: "):
+        value = text.replace("Latest filed fundamentals: ", "", 1)
+        return f"The latest filed financial snapshot used here is dated {value}."
+    return text
+
+
 def build_narrative_driver_detail(narrative_items: list[Any]) -> str | None:
     filing_item = next((item for item in narrative_items if item.source_type == "sec_filing"), None)
     news_item = next((item for item in narrative_items if item.source_type == "news_article"), None)
     details: list[str] = []
     if filing_item:
-        filing_title = filing_item.title or "recent SEC filing"
+        filing_title = filing_item.title or "latest company filing"
         filing_snippet = compact_text_snippet(filing_item.snippet, 120)
-        details.append(f"the latest SEC filing signal came from “{filing_title}”")
+        details.append(f"the latest company filing reviewed was “{filing_title}”")
         if filing_snippet:
-            details.append(f"filing cue: {filing_snippet}")
+            details.append(f"what stood out in that filing: {filing_snippet}")
     if news_item:
-        news_title = news_item.title or "recent news coverage"
+        news_title = news_item.title or "recent company news"
         news_snippet = compact_text_snippet(news_item.snippet, 120)
-        details.append(f"recent news signal came from “{news_title}”")
+        details.append(f"recent company news also included “{news_title}”")
         if news_snippet:
-            details.append(f"news cue: {news_snippet}")
+            details.append(f"what stood out in that news: {news_snippet}")
     if not details:
         return None
     return "; ".join(details)
@@ -2321,7 +2379,8 @@ def build_driver_secondary_labels(driver: Any) -> list[str]:
     labels: list[str] = []
     for code in getattr(driver, "secondary_reason_codes", []) or []:
         reason_code = code_lookup.get(code)
-        labels.append(reason_code.label if reason_code else str(code).replace("_", " ").title())
+        label = reason_code.label if reason_code else str(code).replace("_", " ").title()
+        labels.append(humanize_reason_label(label))
     return labels
 
 
@@ -2336,14 +2395,15 @@ def build_driver_evidence_points(diagnosis: PortfolioRiskDiagnosis, driver: Any)
     for reason_code in reason_codes[:3]:
         for evidence in getattr(reason_code, "evidence", [])[:2]:
             if evidence and evidence not in evidence_points:
-                evidence_points.append(str(evidence))
+                evidence_points.append(humanize_evidence_point(evidence, driver.ticker))
 
     fundamentals = fundamentals_by_ticker.get(driver.ticker)
     if fundamentals:
-        if fundamentals.beta is not None and f"Beta: {fundamentals.beta:.2f}" not in evidence_points:
-            evidence_points.append(f"Beta: {fundamentals.beta:.2f}")
+        beta_evidence = humanize_evidence_point(f"Beta: {fundamentals.beta:.2f}", driver.ticker) if fundamentals.beta is not None else None
+        if beta_evidence and beta_evidence not in evidence_points:
+            evidence_points.append(beta_evidence)
         if fundamentals.latest_filed_date:
-            evidence_points.append(f"Latest filed fundamentals: {fundamentals.latest_filed_date}")
+            evidence_points.append(humanize_evidence_point(f"Latest filed fundamentals: {fundamentals.latest_filed_date}", driver.ticker))
 
     narrative_items = narrative_by_ticker.get(driver.ticker, [])
     narrative_detail = build_narrative_driver_detail(narrative_items)
@@ -2351,8 +2411,9 @@ def build_driver_evidence_points(diagnosis: PortfolioRiskDiagnosis, driver: Any)
         evidence_points.append(narrative_detail)
 
     for evidence in getattr(driver, "evidence_summary", [])[:3]:
-        if evidence and evidence not in evidence_points:
-            evidence_points.append(str(evidence))
+        humanized = humanize_evidence_point(evidence, driver.ticker)
+        if humanized and humanized not in evidence_points:
+            evidence_points.append(humanized)
     return evidence_points[:4]
 
 
@@ -2394,11 +2455,11 @@ def build_holding_driver_explanation(diagnosis: PortfolioRiskDiagnosis, driver: 
     fundamentals = fundamentals_by_ticker.get(driver.ticker)
     if fundamentals:
         if fundamentals.beta is not None and fundamentals.beta > 1.2:
-            explanation_parts.append(f"its beta is elevated at {number_text(fundamentals.beta, 2)}, which can amplify market moves")
+            explanation_parts.append(f"it has been moving more than the market lately ({number_text(fundamentals.beta, 2)}x market sensitivity)")
         if "latest net income negative" in fundamentals.signals:
-            explanation_parts.append("its latest fundamental snapshot shows negative net income")
+            explanation_parts.append("its latest financial snapshot shows profits under pressure")
         if "liabilities are a large share of assets" in fundamentals.signals:
-            explanation_parts.append("its balance sheet looks more stretched than the portfolio’s steadier names")
+            explanation_parts.append("its balance sheet looks more stretched than the steadier names in the portfolio")
 
     narrative_items = narrative_by_ticker.get(driver.ticker, [])
     if narrative_items:
@@ -2474,13 +2535,13 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             "<div style='display:grid;grid-template-columns:minmax(280px,1.3fr) minmax(260px,1fr);gap:16px;margin-top:16px'>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.46);border:1px solid rgba(148,163,184,.10)'>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Main reason this holding is driving diagnosis</div>"
-            f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:8px'>{driver.primary_reason_label or 'Primary driver not set'}</div>"
+            f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:8px'>{humanize_reason_label(driver.primary_reason_label or 'Primary driver not set')}</div>"
             f"<div style='font-size:15px;line-height:1.6;color:#dbe4f0;margin-top:10px'>{driver.primary_reason_summary or build_holding_driver_explanation(diagnosis, driver)}</div>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Supporting reasons</div>"
             f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:10px'>{secondary_html}</div>"
             "</div>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Simple evidence behind this read</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What changed in the portfolio that led to this</div>"
             "<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>"
             f"{evidence_html}"
             "</ul>"
@@ -2502,7 +2563,7 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             "</div>"
             f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Weight <strong style='color:#f8fafc'>{percent_display(driver.weight_pct)}</strong> · "
             f"Vs benchmark <strong style='color:#f8fafc'>{percent_display(driver.excess_return_vs_benchmark)}</strong></div>"
-            f"<div style='margin-top:10px;font-size:14px;line-height:1.5;color:#e2e8f0'><strong>{driver.primary_reason_label or 'Main sector reason'}:</strong> {driver.primary_reason_summary or build_sector_driver_explanation(driver)}</div>"
+            f"<div style='margin-top:10px;font-size:14px;line-height:1.5;color:#e2e8f0'><strong>{humanize_reason_label(driver.primary_reason_label or 'Main sector reason')}:</strong> {driver.primary_reason_summary or build_sector_driver_explanation(driver)}</div>"
             "</div>"
         )
         for driver in diagnosis.top_sector_drivers
@@ -2611,7 +2672,7 @@ def build_macro_context_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             "</div>"
         )
     regime_flags = "".join(
-        f"<li style='margin-bottom:8px'>{flag}</li>"
+        f"<li style='margin-bottom:8px'>{humanize_macro_flag(flag).capitalize()}</li>"
         for flag in macro.regime_flags
     ) or "<li>No regime flags were raised.</li>"
     macro_cards = (
