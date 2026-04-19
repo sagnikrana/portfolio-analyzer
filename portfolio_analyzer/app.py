@@ -2550,12 +2550,14 @@ def build_sector_driver_explanation(driver: Any) -> str:
 
 def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     driver_lookup = {driver.ticker: driver for driver in diagnosis.top_holding_drivers}
+    action_lookup = {item.ticker: item for item in getattr(diagnosis, "holding_action_needs", []) or []}
     holding_items = ""
     contribution_items = diagnosis.holding_risk_contributions or []
     for contribution in contribution_items:
         driver = driver_lookup.get(contribution.ticker)
         if driver is None:
             continue
+        action_need = action_lookup.get(contribution.ticker)
         spillover_labels = build_contribution_spillover_labels(contribution)
         evidence_points = build_driver_evidence_points(diagnosis, driver)
         evidence_html = "".join(
@@ -2578,6 +2580,31 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         confidence_band = contribution.contribution_confidence_band
         confidence_tone = "#34d399" if confidence_band == "High" else "#fbbf24" if confidence_band == "Medium" else "#f87171"
         score_tone = "#60a5fa" if contribution.overall_contribution_score < 40 else "#fbbf24" if contribution.overall_contribution_score < 70 else "#f87171"
+        action_label = getattr(action_need, "action_label", "No action read yet")
+        action_urgency = getattr(action_need, "action_urgency", "Needs review")
+        action_pressure_score = getattr(action_need, "action_pressure_score", None)
+        action_summary = getattr(action_need, "action_summary", None) or "The action layer has not produced a stable read for this holding yet."
+        action_reason = getattr(action_need, "primary_action_reason", None) or "The system has not identified a dominant action reason yet."
+        action_support = ", ".join(getattr(action_need, "supporting_concerns", [])[:2]) or "No major secondary pressure noted"
+        if action_label == "Reduce exposure":
+            action_tone = "#f87171"
+            action_bg = "rgba(127,29,29,.22)"
+        elif action_label == "Trim and monitor":
+            action_tone = "#fb923c"
+            action_bg = "rgba(124,45,18,.22)"
+        elif action_label == "Monitor closely":
+            action_tone = "#fbbf24"
+            action_bg = "rgba(120,53,15,.18)"
+        else:
+            action_tone = "#34d399"
+            action_bg = "rgba(6,78,59,.18)"
+        action_pressure_html = (
+            f"<div style='font-size:13px;color:#cbd5e1;margin-top:10px'>"
+            f"Action pressure <strong style='color:{action_tone}'>{action_pressure_score:.1f}/100</strong> · {action_urgency}"
+            "</div>"
+            if action_pressure_score is not None
+            else ""
+        )
         holding_items += (
             "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
             "background:rgba(15,23,42,.34);margin-bottom:14px'>"
@@ -2596,18 +2623,30 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:{score_tone};font-size:12px;font-weight:700'>"
             f"Contribution {contribution.overall_contribution_score:.1f}/100"
             "</div>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:{action_bg};border:1px solid rgba(148,163,184,.16);color:{action_tone};font-size:12px;font-weight:700'>"
+            f"{action_label}"
+            "</div>"
             f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:{confidence_tone};font-size:12px;font-weight:700'>"
             f"{confidence_band} confidence"
             "</div>"
             "</div>"
             "</div>"
-            "<div style='display:grid;grid-template-columns:minmax(280px,1.3fr) minmax(260px,1fr);gap:16px;margin-top:16px'>"
+            "<div style='display:grid;grid-template-columns:minmax(260px,1.2fr) minmax(240px,.95fr) minmax(240px,1fr);gap:16px;margin-top:16px'>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.46);border:1px solid rgba(148,163,184,.10)'>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Main portfolio risk this holding is feeding</div>"
             f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:8px'>{contribution.primary_concern_label}</div>"
             f"<div style='font-size:15px;line-height:1.6;color:#dbe4f0;margin-top:10px'>{contribution.primary_concern_summary}</div>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Other risks this holding also spills into</div>"
             f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:10px'>{spillover_html}</div>"
+            "</div>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.40);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What level of action this currently deserves</div>"
+            f"<div style='font-size:18px;font-weight:800;color:{action_tone};margin-top:8px'>{action_label}</div>"
+            f"{action_pressure_html}"
+            f"<div style='font-size:15px;line-height:1.6;color:#dbe4f0;margin-top:10px'>{action_summary}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Why this action label was chosen</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:8px'>{action_reason.capitalize()}.</div>"
+            f"<div style='font-size:13px;line-height:1.5;color:#cbd5e1;margin-top:10px'>Secondary pressure still comes from: <strong style='color:#f8fafc'>{action_support}</strong>.</div>"
             "</div>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What changed in the portfolio that led to this</div>"
@@ -2642,7 +2681,7 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:20px;font-weight:800;color:#f8fafc'>Top Holding Drivers</div>"
-        "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>For each holding, start with the main portfolio risk it is feeding, then look at spillover concerns and the evidence that made the diagnosis flag it.</div>"
+        "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>For each holding, start with the main portfolio risk it is feeding, then look at the current action read and the evidence that made the diagnosis flag it.</div>"
         f"<div style='margin-top:14px'>{holding_items}</div>"
         "</div>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
