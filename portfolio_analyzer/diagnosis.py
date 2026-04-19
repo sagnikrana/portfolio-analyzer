@@ -271,6 +271,51 @@ class HoldingActionNeed(BaseModel):
     confidence_band: str = "Low"
 
 
+class HoldingActionRecommendation(BaseModel):
+    """Portfolio action recommendation grounded in relative underperformance.
+
+    This layer is intentionally narrower than a full portfolio optimizer. It is
+    designed to answer:
+
+    - should this holding actually be trimmed or sold, rather than merely watched?
+    - how much of the position should be reduced right now?
+    - what specific evidence made that recommendation reasonable?
+
+    The core rule is conservative by design: underperformance versus the
+    trade-matched S&P 500 over a clearly stated holding period must be present
+    before a sell-style recommendation appears. Diagnosis pressure and
+    contribution evidence can strengthen the case, but they do not replace the
+    relative-performance requirement.
+    """
+
+    ticker: str
+    sector: Optional[str] = None
+    current_weight: Optional[float] = None
+    current_value: Optional[float] = None
+    quantity: Optional[float] = None
+    recommendation_label: str
+    recommendation_code: str
+    position_reduction_pct: float = 0.0
+    shares_to_sell: Optional[float] = None
+    value_to_sell: Optional[float] = None
+    target_weight_after_action: Optional[float] = None
+    performance_window_start: Optional[str] = None
+    performance_window_end: Optional[str] = None
+    performance_window_label: str
+    holding_return_pct: Optional[float] = None
+    benchmark_return_pct: Optional[float] = None
+    relative_performance_vs_benchmark: Optional[float] = None
+    linked_action_need_label: Optional[str] = None
+    linked_primary_concern: Optional[str] = None
+    diagnosis_pressure_score: float = 0.0
+    recommendation_summary: str
+    reasoning_points: list[str] = Field(default_factory=list)
+    supporting_evidence: list[str] = Field(default_factory=list)
+    confidence_score: float = 0.0
+    confidence_band: str = "Low"
+    is_actionable: bool = False
+
+
 class PortfolioRiskDiagnosis(BaseModel):
     """Top-level typed diagnosis object for one analyzed portfolio snapshot.
 
@@ -303,6 +348,7 @@ class PortfolioRiskDiagnosis(BaseModel):
     top_sector_drivers: list[SectorRiskDriver] = Field(default_factory=list)
     holding_risk_contributions: list[HoldingRiskContribution] = Field(default_factory=list)
     holding_action_needs: list[HoldingActionNeed] = Field(default_factory=list)
+    holding_action_recommendations: list[HoldingActionRecommendation] = Field(default_factory=list)
     supporting_metrics: list[RiskMetricObservation] = Field(default_factory=list)
     macro_context: Optional[MacroRegimeSnapshot] = None
     holding_fundamentals: list[CompanyFundamentalSnapshot] = Field(default_factory=list)
@@ -316,6 +362,7 @@ SectorRiskDriver.model_rebuild()
 HoldingConcernContribution.model_rebuild()
 HoldingRiskContribution.model_rebuild()
 HoldingActionNeed.model_rebuild()
+HoldingActionRecommendation.model_rebuild()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -1663,6 +1710,317 @@ def _build_holding_action_needs(
     return action_needs
 
 
+def _recommendation_confidence(
+    *,
+    holding_days: Optional[int],
+    diagnosis_pressure_score: float,
+    variance_contribution_pct: float,
+    is_actionable: bool,
+) -> tuple[float, str]:
+    """Estimate confidence for a trim/sell recommendation.
+
+    Recommendation confidence is intentionally tied to evidence quality rather
+    than confidence theater. Longer holding periods, stronger diagnosis pressure,
+    and measurable volatility contribution all make the recommendation easier to
+    defend.
+    """
+    score = 0.35 if is_actionable else 0.25
+    if holding_days is not None and holding_days >= 365:
+        score += 0.2
+    elif holding_days is not None and holding_days >= 180:
+        score += 0.1
+    if diagnosis_pressure_score >= 70:
+        score += 0.2
+    elif diagnosis_pressure_score >= 40:
+        score += 0.12
+    if variance_contribution_pct >= 0.03:
+        score += 0.15
+    elif variance_contribution_pct >= 0.01:
+        score += 0.08
+    score = min(0.95, round(score, 2))
+    return score, _driver_confidence_band(score)
+
+
+def _recommendation_reduction_from_underperformance(
+    *,
+    excess_return_vs_benchmark: float,
+    current_weight: float,
+    diagnosis_pressure_score: float,
+    variance_contribution_pct: float,
+) -> tuple[str, str, float]:
+    """Choose a trim/sell action from benchmark underperformance.
+
+    This function intentionally requires underperformance versus the S&P 500.
+    Risk pressure can increase the trim size, but poor relative performance is
+    the gating signal that makes a sell-style recommendation appropriate.
+    """
+    underperformance = abs(excess_return_vs_benchmark)
+
+    if underperformance >= 1.0 and current_weight <= 0.015:
+        return (
+            "Sell entire position",
+            "sell_all",
+            1.0,
+        )
+    if underperformance >= 0.9:
+        reduction = 0.5 if current_weight >= 0.02 or diagnosis_pressure_score >= 45 else 0.35
+        return ("Reduce by 50%" if reduction == 0.5 else "Trim 35%", "deep_underperformance_trim", reduction)
+    if underperformance >= 0.7:
+        reduction = 0.35 if diagnosis_pressure_score >= 55 or variance_contribution_pct >= 0.02 else 0.25
+        return ("Trim 35%" if reduction == 0.35 else "Trim 25%", "heavy_underperformance_trim", reduction)
+    if underperformance >= 0.5:
+        reduction = 0.2 if diagnosis_pressure_score >= 30 else 0.15
+        return ("Trim 20%" if reduction == 0.2 else "Trim 15%", "meaningful_underperformance_trim", reduction)
+    if underperformance >= 0.25 and diagnosis_pressure_score >= 40:
+        return ("Trim 10%", "watchlist_trim", 0.10)
+    return ("Hold for now", "hold_for_now", 0.0)
+
+
+def _build_recommendation_summary(
+    *,
+    ticker: str,
+    recommendation_label: str,
+    reduction_pct: float,
+    weighted_avg_buy_date: Optional[str],
+    unrealized_return_pct: Optional[float],
+    benchmark_return_since_buy: Optional[float],
+    excess_return_vs_benchmark: Optional[float],
+    diagnosis_pressure_score: float,
+    linked_primary_concern: Optional[str],
+    is_actionable: bool,
+) -> str:
+    """Write the plain-English recommendation summary shown in review surfaces."""
+    period_text = (
+        f"since the weighted-average buy date of {weighted_avg_buy_date}"
+        if weighted_avg_buy_date
+        else "over the tracked holding period"
+    )
+    if not is_actionable:
+        return (
+            f"{ticker} is **not** a sell recommendation right now. Even though it still appears in the diagnosis, "
+            f"this rule set only recommends trimming when a holding has clearly lagged the S&P 500, and that case is not strong enough here {period_text}."
+        )
+
+    action_clause = (
+        "selling the full position is the current recommendation."
+        if reduction_pct >= 0.999
+        else f"trimming about {reduction_pct:.0%} of the position is the current recommendation."
+    )
+    pressure_clause = (
+        f" Because it also carries {diagnosis_pressure_score:.1f}/100 diagnosis pressure"
+        + (f" through {linked_primary_concern.lower()}" if linked_primary_concern else "")
+        + ","
+        if diagnosis_pressure_score > 0
+        else " Even without strong diagnosis pressure, the size of the benchmark lag alone is enough to justify action,"
+    )
+    return (
+        f"{ticker} is currently a **{recommendation_label.lower()}** candidate. "
+        f"{ticker} has underperformed the trade-matched S&P 500 {period_text}: the holding return is "
+        f"{(unrealized_return_pct or 0.0):.1%} versus benchmark return {(benchmark_return_since_buy or 0.0):.1%}, "
+        f"which is a lag of {(excess_return_vs_benchmark or 0.0):.1%}."
+        + pressure_clause
+        + " "
+        + action_clause
+    )
+
+
+def _build_holding_action_recommendations(
+    bundle: dict[str, Any],
+    holding_action_needs: list[HoldingActionNeed],
+    holding_risk_contributions: list[HoldingRiskContribution],
+    analysis_end: str,
+) -> list[HoldingActionRecommendation]:
+    """Turn diagnosis pressure into actual sell/trim guidance.
+
+    This layer is stricter than `HoldingActionNeed`. A holding only becomes a
+    sell-style recommendation when it has actually lagged the trade-matched
+    S&P 500 over a clearly stated period. Diagnosis pressure and contribution
+    evidence help size the trim, but they do not create a sell call on their own.
+    """
+    positions = bundle["open_positions"].copy()
+    volatility = bundle["volatility_drivers"].copy()
+    if positions.empty:
+        return []
+
+    positions["current_weight"] = pd.to_numeric(positions.get("current_weight"), errors="coerce").fillna(0.0)
+    positions["current_value"] = pd.to_numeric(positions.get("current_value"), errors="coerce")
+    positions["quantity"] = pd.to_numeric(positions.get("quantity"), errors="coerce")
+    positions["unrealized_return_pct"] = pd.to_numeric(positions.get("unrealized_return_pct"), errors="coerce")
+    positions["benchmark_return_since_buy"] = pd.to_numeric(positions.get("benchmark_return_since_buy"), errors="coerce")
+    positions["excess_return_vs_benchmark"] = pd.to_numeric(
+        positions.get("excess_return_vs_benchmark"), errors="coerce"
+    )
+    if not volatility.empty:
+        volatility = volatility[["ticker", "variance_contribution_pct"]].copy()
+        volatility["variance_contribution_pct"] = pd.to_numeric(
+            volatility.get("variance_contribution_pct"), errors="coerce"
+        ).fillna(0.0)
+        positions = positions.merge(volatility, on="ticker", how="left")
+    positions["variance_contribution_pct"] = pd.to_numeric(
+        positions.get("variance_contribution_pct"), errors="coerce"
+    ).fillna(0.0)
+
+    action_need_lookup = {item.ticker: item for item in holding_action_needs}
+    contribution_lookup = {item.ticker: item for item in holding_risk_contributions}
+    analysis_end_ts = pd.to_datetime(analysis_end, errors="coerce")
+
+    recommendations: list[HoldingActionRecommendation] = []
+    for row in positions.to_dict(orient="records"):
+        ticker = str(row.get("ticker"))
+        sector = row.get("sector")
+        is_fund = str(sector or "").strip() == "ETF / Fund"
+        action_need = action_need_lookup.get(ticker)
+        contribution = contribution_lookup.get(ticker)
+        weighted_avg_buy_date = row.get("weighted_avg_buy_date")
+        buy_date_ts = pd.to_datetime(weighted_avg_buy_date, errors="coerce")
+        holding_days = None
+        if pd.notna(analysis_end_ts) and pd.notna(buy_date_ts):
+            holding_days = int((analysis_end_ts - buy_date_ts).days)
+
+        current_weight = _safe_float(row.get("current_weight")) or 0.0
+        current_value = _safe_float(row.get("current_value"))
+        quantity = _safe_float(row.get("quantity"))
+        unrealized_return_pct = _safe_float(row.get("unrealized_return_pct"))
+        benchmark_return_since_buy = _safe_float(row.get("benchmark_return_since_buy"))
+        excess_return_vs_benchmark = _safe_float(row.get("excess_return_vs_benchmark"))
+        variance_contribution_pct = _safe_float(row.get("variance_contribution_pct")) or 0.0
+        diagnosis_pressure_score = (
+            action_need.action_pressure_score if action_need is not None else 0.0
+        )
+        linked_primary_concern = (
+            action_need.linked_primary_concern
+            if action_need is not None
+            else contribution.primary_concern_label if contribution is not None else None
+        )
+
+        if is_fund:
+            recommendation_label = "Hold for now"
+            recommendation_code = "fund_hold_for_now"
+            reduction_pct = 0.0
+            reasoning_points = [
+                "This is an ETF/fund position, so the stock-specific underperformance rule is not being used to force a sell recommendation here.",
+                "Broad fund positions usually need portfolio-construction review rather than single-stock sell logic.",
+            ]
+        elif excess_return_vs_benchmark is None:
+            recommendation_label = "Hold for now"
+            recommendation_code = "missing_relative_performance"
+            reduction_pct = 0.0
+            reasoning_points = [
+                "Relative performance versus the S&P 500 was not available, so the system is not making a sell-style recommendation.",
+            ]
+        elif holding_days is not None and holding_days < 120:
+            recommendation_label = "Hold for now"
+            recommendation_code = "holding_period_too_short"
+            reduction_pct = 0.0
+            reasoning_points = [
+                f"The weighted-average holding period is only about {holding_days} days, which is too short for this sell rule to treat as durable underperformance.",
+            ]
+        elif excess_return_vs_benchmark >= -0.25:
+            recommendation_label = "Hold for now"
+            recommendation_code = "not_enough_underperformance"
+            reduction_pct = 0.0
+            reasoning_points = [
+                "The holding has not lagged the trade-matched S&P 500 by enough to justify trimming under the current rule set.",
+            ]
+        else:
+            recommendation_label, recommendation_code, reduction_pct = _recommendation_reduction_from_underperformance(
+                excess_return_vs_benchmark=excess_return_vs_benchmark,
+                current_weight=current_weight,
+                diagnosis_pressure_score=diagnosis_pressure_score,
+                variance_contribution_pct=variance_contribution_pct,
+            )
+            reasoning_points = [
+                f"Since {weighted_avg_buy_date or 'the weighted-average buy date'}, the holding has lagged the trade-matched S&P 500 by {(excess_return_vs_benchmark or 0.0):.1%}.",
+            ]
+            if diagnosis_pressure_score > 0:
+                reasoning_points.append(
+                    f"It also carries {diagnosis_pressure_score:.1f}/100 diagnosis pressure, which makes trimming easier to defend."
+                )
+            if variance_contribution_pct >= 0.02:
+                reasoning_points.append(
+                    f"It contributed {variance_contribution_pct:.1%} of the tracked 2025 portfolio variance, so it is not just a weak performer in isolation."
+                )
+
+        shares_to_sell = round((quantity or 0.0) * reduction_pct, 4) if quantity is not None else None
+        value_to_sell = round((current_value or 0.0) * reduction_pct, 2) if current_value is not None else None
+        target_weight_after_action = round(current_weight * (1.0 - reduction_pct), 4) if current_weight is not None else None
+        is_actionable = reduction_pct > 0
+        confidence_score, confidence_band = _recommendation_confidence(
+            holding_days=holding_days,
+            diagnosis_pressure_score=diagnosis_pressure_score,
+            variance_contribution_pct=variance_contribution_pct,
+            is_actionable=is_actionable,
+        )
+
+        supporting_evidence = _unique_nonempty(
+            [
+                f"Holding return since weighted-average buy date: {(unrealized_return_pct or 0.0):.1%}",
+                f"Benchmark return over the same period: {(benchmark_return_since_buy or 0.0):.1%}",
+                f"Relative performance vs benchmark: {(excess_return_vs_benchmark or 0.0):.1%}",
+                f"Diagnosis pressure: {diagnosis_pressure_score:.1f}/100" if diagnosis_pressure_score else None,
+                f"Variance contribution (2025): {variance_contribution_pct:.1%}" if variance_contribution_pct else None,
+            ]
+            + (list(getattr(action_need, "supporting_evidence", [])[:2]) if action_need is not None else [])
+        )
+
+        recommendations.append(
+            HoldingActionRecommendation(
+                ticker=ticker,
+                sector=sector,
+                current_weight=current_weight,
+                current_value=current_value,
+                quantity=quantity,
+                recommendation_label=recommendation_label,
+                recommendation_code=recommendation_code,
+                position_reduction_pct=reduction_pct,
+                shares_to_sell=shares_to_sell,
+                value_to_sell=value_to_sell,
+                target_weight_after_action=target_weight_after_action,
+                performance_window_start=weighted_avg_buy_date,
+                performance_window_end=analysis_end,
+                performance_window_label=(
+                    f"Since weighted-average buy date ({weighted_avg_buy_date}) through {analysis_end}"
+                    if weighted_avg_buy_date
+                    else f"Through {analysis_end}"
+                ),
+                holding_return_pct=unrealized_return_pct,
+                benchmark_return_pct=benchmark_return_since_buy,
+                relative_performance_vs_benchmark=excess_return_vs_benchmark,
+                linked_action_need_label=action_need.action_label if action_need is not None else None,
+                linked_primary_concern=linked_primary_concern,
+                diagnosis_pressure_score=diagnosis_pressure_score,
+                recommendation_summary=_build_recommendation_summary(
+                    ticker=ticker,
+                    recommendation_label=recommendation_label,
+                    reduction_pct=reduction_pct,
+                    weighted_avg_buy_date=weighted_avg_buy_date,
+                    unrealized_return_pct=unrealized_return_pct,
+                    benchmark_return_since_buy=benchmark_return_since_buy,
+                    excess_return_vs_benchmark=excess_return_vs_benchmark,
+                    diagnosis_pressure_score=diagnosis_pressure_score,
+                    linked_primary_concern=linked_primary_concern,
+                    is_actionable=is_actionable,
+                ),
+                reasoning_points=reasoning_points,
+                supporting_evidence=supporting_evidence[:6],
+                confidence_score=confidence_score,
+                confidence_band=confidence_band,
+                is_actionable=is_actionable,
+            )
+        )
+
+    recommendations.sort(
+        key=lambda item: (
+            not item.is_actionable,
+            -(item.position_reduction_pct or 0.0),
+            -(abs(item.relative_performance_vs_benchmark) if item.relative_performance_vs_benchmark is not None else 0.0),
+            -(item.current_weight or 0.0),
+            item.ticker,
+        )
+    )
+    return recommendations
+
+
 def _build_diagnostic_summary(bundle: dict[str, Any], top_concerns: list[DiagnosisConcern]) -> str:
     """Create the top-level diagnosis narrative for the portfolio.
 
@@ -1769,6 +2127,12 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
     manifest = bundle["manifest"]
     headline = bundle["headline"]
     risk = bundle["risk"]
+    holding_action_recommendations = _build_holding_action_recommendations(
+        bundle,
+        holding_action_needs,
+        holding_risk_contributions,
+        analysis_end=str(headline.get("analysis_end")),
+    )
 
     return PortfolioRiskDiagnosis(
         run_id=str(manifest.get("run_id")),
@@ -1789,6 +2153,7 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         top_sector_drivers=top_sector_drivers,
         holding_risk_contributions=holding_risk_contributions,
         holding_action_needs=holding_action_needs,
+        holding_action_recommendations=holding_action_recommendations,
         supporting_metrics=supporting_metrics,
         macro_context=macro_context,
         holding_fundamentals=holding_fundamentals,
