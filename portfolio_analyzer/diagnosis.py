@@ -145,16 +145,35 @@ class PortfolioRiskDiagnosis(BaseModel):
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    """Read a UTF-8 JSON file from disk and return the parsed dictionary.
+
+    The diagnosis pipeline is intentionally file-backed right now. The app writes
+    analysis artifacts to disk, and this module reconstructs typed diagnosis
+    objects from those persisted snapshots. This helper keeps that boundary
+    explicit and centralized.
+    """
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _load_csv(path: Path) -> pd.DataFrame:
+    """Read a CSV into a DataFrame, returning an empty frame when absent.
+
+    Missing files should not crash the diagnosis build immediately because some
+    enrichment layers are optional. Returning an empty frame allows the object
+    builder to degrade gracefully and describe coverage gaps explicitly.
+    """
     if not path.exists():
         return pd.DataFrame()
     return pd.read_csv(path)
 
 
 def _severity_band(score: Optional[float]) -> str:
+    """Map a numeric concern score onto a human-readable severity label.
+
+    The diagnosis layer uses the same broad score language throughout the object
+    model so that concern ranking, summaries, and later UI presentation all speak
+    in a consistent vocabulary.
+    """
     value = float(score or 0.0)
     if value < 20:
         return "Low concern"
@@ -168,6 +187,12 @@ def _severity_band(score: Optional[float]) -> str:
 
 
 def _safe_float(value: Any) -> Optional[float]:
+    """Coerce loosely typed source values into floats when possible.
+
+    The diagnosis object reads from JSON, CSV, and dataframe-derived values, so a
+    single metric may arrive as a string, number, NaN, or missing value. This
+    helper standardizes those cases before they are used in scoring logic.
+    """
     if value is None:
         return None
     try:
@@ -180,6 +205,28 @@ def _safe_float(value: Any) -> Optional[float]:
 
 
 def load_diagnosis_bundle(base_dir: Path) -> dict[str, Any]:
+    """Load the full diagnosis input bundle from processed app and pipeline data.
+
+    Parameters
+    ----------
+    base_dir:
+        Directory containing the app-generated diagnosis artifacts such as
+        `risk_score.json`, `headline_metrics.json`, and the saved CSV tables.
+
+    Returns
+    -------
+    dict[str, Any]
+        A dictionary containing both:
+        - app-side analysis outputs used for the initial diagnosis
+        - external structured and unstructured datasets used for enrichment
+
+    Notes
+    -----
+    This is the bridge between the app layer and the external data pipeline.
+    The app contributes the portfolio-specific measurement layer, while the
+    processed external datasets contribute macro, fundamental, and narrative
+    context.
+    """
     processed_dir = base_dir.parent
     return {
         "manifest": _load_json(base_dir / "diagnosis_manifest.json"),
@@ -201,6 +248,12 @@ def load_diagnosis_bundle(base_dir: Path) -> dict[str, Any]:
 
 
 def _build_metric_observations(bundle: dict[str, Any]) -> list[RiskMetricObservation]:
+    """Convert saved risk metric tables into typed metric observation objects.
+
+    These observations are the lowest-level diagnostic evidence items. They keep
+    the original metric identity, score, raw value, and plain-English meaning so
+    later layers can explain *why* a concern exists rather than just ranking it.
+    """
     risk_metrics = bundle["risk_metrics"].copy()
     raw_value_map = bundle["risk"].get("component_raw_values", {})
     observations: list[RiskMetricObservation] = []
@@ -225,6 +278,13 @@ def _build_metric_observations(bundle: dict[str, Any]) -> list[RiskMetricObserva
 
 
 def _build_holding_drivers(bundle: dict[str, Any]) -> list[HoldingRiskDriver]:
+    """Identify the holdings most responsible for current portfolio fragility.
+
+    The first pass relies on the app-generated position weights, benchmark lag,
+    and 2025 volatility attribution table. This is still a heuristic stage, but
+    it gives the diagnosis object concrete names to point at rather than staying
+    at the abstract score level.
+    """
     positions = bundle["open_positions"].copy()
     volatility = bundle["volatility_drivers"].copy()
     if positions.empty:
@@ -282,6 +342,30 @@ def _latest_metric_value(
     ticker: str,
     canonical_metric: str,
 ) -> tuple[Optional[float], Optional[str]]:
+    """Fetch the latest available SEC company-facts value for one canonical metric.
+
+    Parameters
+    ----------
+    company_facts:
+        Flattened SEC company facts dataset.
+    ticker:
+        The security whose fundamental series should be queried.
+    canonical_metric:
+        Normalized metric name from the fact-tag mapping layer, such as
+        `revenue`, `net_income`, or `operating_cash_flow`.
+
+    Returns
+    -------
+    tuple[Optional[float], Optional[str]]
+        The latest numeric value and its filed date, if a usable observation
+        exists.
+
+    Notes
+    -----
+    This helper intentionally works on the canonical metric layer rather than raw
+    SEC tags. That keeps the diagnosis object aligned with the business-friendly
+    taxonomy we created in the data review notebook.
+    """
     subset = company_facts[
         (company_facts["ticker"] == ticker)
         & (company_facts["canonical_metric"] == canonical_metric)
@@ -298,6 +382,21 @@ def _latest_metric_value(
 
 
 def _build_macro_context(bundle: dict[str, Any]) -> Optional[MacroRegimeSnapshot]:
+    """Summarize the macro environment into a typed regime snapshot.
+
+    This is the diagnosis layer's first answer to the question:
+    "What does the broader economic weather look like right now?"
+
+    The logic currently uses a compact set of macro series:
+    - Fed funds rate
+    - CPI inflation
+    - unemployment
+    - 10Y Treasury
+    - 2Y Treasury
+
+    From those series it derives a short regime summary and lightweight flags
+    that can influence risk interpretation.
+    """
     macro = bundle["macro_series"].copy()
     if macro.empty:
         return None
@@ -376,6 +475,15 @@ def _build_holding_fundamentals(
     bundle: dict[str, Any],
     top_holding_drivers: list[HoldingRiskDriver],
 ) -> list[CompanyFundamentalSnapshot]:
+    """Build fundamental snapshots for the holdings driving the diagnosis.
+
+    The diagnosis engine does not need the full company-facts universe on every
+    object. Instead, it narrows the fundamental layer to the holdings already
+    identified as important drivers, then assembles a compact snapshot with:
+    - identity data from company profiles
+    - core fundamentals from SEC company facts
+    - a few descriptive signals for quick interpretation
+    """
     company_facts = bundle["company_facts"].copy()
     profiles = bundle["company_profiles"].copy()
     if company_facts.empty and profiles.empty:
@@ -439,6 +547,12 @@ def _build_holding_fundamentals(
 
 
 def _clean_snippet(text: Any, limit: int = 280) -> str:
+    """Normalize raw text into a short review-friendly evidence snippet.
+
+    Diagnosis objects should carry compact evidence, not huge unbounded text
+    blobs. This helper strips whitespace clutter and trims text to a length that
+    is realistic for debugging, review, and later UI display.
+    """
     snippet = str(text or "").replace("\n", " ").replace("\r", " ").strip()
     snippet = " ".join(snippet.split())
     return snippet[:limit]
@@ -448,6 +562,13 @@ def _build_narrative_evidence(
     bundle: dict[str, Any],
     top_holding_drivers: list[HoldingRiskDriver],
 ) -> list[NarrativeEvidence]:
+    """Attach recent filing/news evidence for the main holding drivers.
+
+    For each important holding, the diagnosis engine tries to keep one recent SEC
+    filing artifact and one recent news artifact. This does not yet score the
+    text deeply, but it gives the diagnosis object concrete external evidence that
+    can be surfaced in later reasoning and UI layers.
+    """
     corpus = bundle["document_corpus"].copy()
     if corpus.empty:
         return []
@@ -477,6 +598,13 @@ def _build_narrative_evidence(
 
 
 def _narrative_risk_map(narrative_evidence: list[NarrativeEvidence]) -> dict[str, int]:
+    """Create a simple ticker-level narrative risk count from attached evidence.
+
+    The current version uses a keyword-based heuristic as a bridge toward a more
+    sophisticated narrative scoring system. The goal is not to produce a final
+    NLP judgment yet, but to let external text influence the diagnosis ranking in
+    a transparent, reviewable way.
+    """
     risk_counts: dict[str, int] = {}
     for item in narrative_evidence:
         text = f"{item.title or ''} {item.snippet}".lower()
@@ -487,6 +615,13 @@ def _narrative_risk_map(narrative_evidence: list[NarrativeEvidence]) -> dict[str
 
 
 def _build_sector_drivers(bundle: dict[str, Any]) -> list[SectorRiskDriver]:
+    """Identify sectors that appear to be amplifying portfolio risk.
+
+    This helper translates the saved sector allocation table into a smaller list
+    of sector-level driver objects. Right now it focuses on:
+    - outsized sector weight
+    - sector underperformance versus the trade-matched benchmark
+    """
     sectors = bundle["sector_allocation"].copy()
     if sectors.empty:
         return []
@@ -513,6 +648,13 @@ def _build_sector_drivers(bundle: dict[str, Any]) -> list[SectorRiskDriver]:
 
 
 def _concern_summary(concern_key: str, bundle: dict[str, Any]) -> str:
+    """Generate the base plain-English explanation for a diagnosis concern.
+
+    This summary is intentionally tied to the app-side measurement layer first.
+    External evidence can then *adjust* and *reinforce* the concern, but the
+    summary starts from the concrete portfolio metrics already computed by the
+    dashboard.
+    """
     risk = bundle["risk"]
     raw = risk.get("component_raw_values", {})
     headline = bundle["headline"]
@@ -553,6 +695,37 @@ def _concern_adjustments(
     holding_fundamentals: list[CompanyFundamentalSnapshot],
     narrative_evidence: list[NarrativeEvidence],
 ) -> tuple[float, list[str]]:
+    """Adjust concern severity using external macro, fundamental, and narrative evidence.
+
+    Parameters
+    ----------
+    concern_key:
+        Concern currently being evaluated, such as `concentration` or `market`.
+    bundle:
+        Complete diagnosis input bundle.
+    top_holding_drivers:
+        Holdings already identified as central portfolio drivers.
+    top_sector_drivers:
+        Sector-level drivers identified from the app bundle.
+    macro_context:
+        Macro regime snapshot built from FRED series.
+    holding_fundamentals:
+        Fundamental snapshots for the key holdings.
+    narrative_evidence:
+        Filing and news evidence attached to the key holdings.
+
+    Returns
+    -------
+    tuple[float, list[str]]
+        A numeric adjustment and a list of human-readable reasons explaining why
+        the adjustment was applied.
+
+    Notes
+    -----
+    This is the heart of the "enriched diagnosis" idea. The app risk score gives
+    us the base portfolio measurement. This function lets the outside world push
+    that diagnosis up or down in a reviewable way.
+    """
     adjustment = 0.0
     reasons: list[str] = []
     narrative_risk = _narrative_risk_map(narrative_evidence)
@@ -615,6 +788,17 @@ def _build_top_concerns(
     holding_fundamentals: list[CompanyFundamentalSnapshot],
     narrative_evidence: list[NarrativeEvidence],
 ) -> list[DiagnosisConcern]:
+    """Construct and rank the portfolio's top diagnosis concerns.
+
+    This function combines:
+    - base dimension scores from the app bundle
+    - metric keys supporting each concern
+    - external evidence adjustments
+    - related holdings and sectors
+
+    The output is the first real ranked diagnosis layer, which is why this
+    function matters so much for the overall architecture.
+    """
     risk = bundle["risk"]
     dimension_scores = risk.get("dimension_scores", {})
     concern_configs = [
@@ -687,6 +871,12 @@ def _build_top_concerns(
 
 
 def _build_diagnostic_summary(bundle: dict[str, Any], top_concerns: list[DiagnosisConcern]) -> str:
+    """Create the top-level diagnosis narrative for the portfolio.
+
+    This summary is intended to read like the opening paragraph of a trustworthy
+    explanation: observed risk, stated risk, top diagnosis categories, analysis
+    window, and the main external reasons that reinforced the read.
+    """
     risk = bundle["risk"]
     headline = bundle["headline"]
     concern_labels = ", ".join(concern.label.lower() for concern in top_concerns[:2]) or "overall portfolio risk"
@@ -709,6 +899,12 @@ def _build_diagnostic_summary(bundle: dict[str, Any], top_concerns: list[Diagnos
 
 
 def _build_evidence_gaps(bundle: dict[str, Any], macro_context: Optional[MacroRegimeSnapshot], narrative_evidence: list[NarrativeEvidence]) -> list[str]:
+    """Describe what the diagnosis still cannot claim confidently.
+
+    A financial diagnosis object should be honest about its limits. These gaps
+    are not errors; they are explicit reminders of what the current system still
+    does not model deeply enough for production-grade recommendations.
+    """
     gaps = [
         "User goals and constraints beyond the stated risk score are not yet modeled in the diagnosis object.",
         "Fundamental snapshots are based on broad canonical metrics and still need tighter metric selection for production use.",
@@ -723,6 +919,31 @@ def _build_evidence_gaps(bundle: dict[str, Any], macro_context: Optional[MacroRe
 
 
 def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRiskDiagnosis:
+    """Build the full `PortfolioRiskDiagnosis` object from saved pipeline artifacts.
+
+    Parameters
+    ----------
+    base_dir:
+        Directory containing the app-generated diagnosis bundle written during a
+        dashboard analysis run.
+
+    Returns
+    -------
+    PortfolioRiskDiagnosis
+        A typed diagnosis object that combines:
+        - portfolio risk measurements from the app
+        - holding and sector driver attribution
+        - macro regime context
+        - fundamental snapshots
+        - narrative evidence
+        - source coverage and known evidence gaps
+
+    Notes
+    -----
+    This is the current public entrypoint for the diagnosis engine. It is the
+    function notebooks and later application layers should call when they want a
+    structured diagnosis object instead of raw dataframes.
+    """
     bundle = load_diagnosis_bundle(base_dir)
     top_holding_drivers = _build_holding_drivers(bundle)
     top_sector_drivers = _build_sector_drivers(bundle)
