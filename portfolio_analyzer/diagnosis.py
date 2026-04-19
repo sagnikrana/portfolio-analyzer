@@ -241,6 +241,36 @@ class HoldingRiskContribution(BaseModel):
     evidence_summary: list[str] = Field(default_factory=list)
 
 
+class HoldingActionNeed(BaseModel):
+    """First action-layer object built on top of diagnosis contributions.
+
+    This object does not yet recommend replacements or full rebalancing. Its
+    job is narrower and safer: decide whether an important holding currently
+    looks like something to hold steady, monitor closely, trim, or reduce.
+
+    The design is intentionally conservative because we want the first action
+    layer to be auditable and grounded in diagnosis evidence rather than overly
+    eager portfolio advice.
+    """
+
+    ticker: str
+    sector: Optional[str] = None
+    current_weight: Optional[float] = None
+    action_label: str
+    action_code: str
+    action_pressure_score: float
+    action_pressure_band: str
+    action_urgency: str
+    primary_action_reason: str
+    action_summary: str
+    linked_primary_concern: str
+    supporting_concerns: list[str] = Field(default_factory=list)
+    supporting_reason_codes: list[str] = Field(default_factory=list)
+    supporting_evidence: list[str] = Field(default_factory=list)
+    confidence_score: float = 0.0
+    confidence_band: str = "Low"
+
+
 class PortfolioRiskDiagnosis(BaseModel):
     """Top-level typed diagnosis object for one analyzed portfolio snapshot.
 
@@ -272,6 +302,7 @@ class PortfolioRiskDiagnosis(BaseModel):
     top_holding_drivers: list[HoldingRiskDriver] = Field(default_factory=list)
     top_sector_drivers: list[SectorRiskDriver] = Field(default_factory=list)
     holding_risk_contributions: list[HoldingRiskContribution] = Field(default_factory=list)
+    holding_action_needs: list[HoldingActionNeed] = Field(default_factory=list)
     supporting_metrics: list[RiskMetricObservation] = Field(default_factory=list)
     macro_context: Optional[MacroRegimeSnapshot] = None
     holding_fundamentals: list[CompanyFundamentalSnapshot] = Field(default_factory=list)
@@ -284,6 +315,7 @@ HoldingRiskDriver.model_rebuild()
 SectorRiskDriver.model_rebuild()
 HoldingConcernContribution.model_rebuild()
 HoldingRiskContribution.model_rebuild()
+HoldingActionNeed.model_rebuild()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -627,6 +659,19 @@ def _holding_concern_label(concern_key: str) -> str:
     return labels.get(concern_key, concern_key.replace("_", " ").title())
 
 
+def _action_pressure_band(score: float) -> str:
+    """Translate an action-pressure score into a user-reviewable band."""
+    if score < 20:
+        return "Low action pressure"
+    if score < 40:
+        return "Watchlist pressure"
+    if score < 60:
+        return "Moderate action pressure"
+    if score < 80:
+        return "High action pressure"
+    return "Very high action pressure"
+
+
 def _reason_code_concern_weights(reason_code: ReasonCode) -> list[tuple[str, float]]:
     """Map one reason code onto the concern families it most naturally supports.
 
@@ -647,6 +692,38 @@ def _reason_code_concern_weights(reason_code: ReasonCode) -> list[tuple[str, flo
         "restrictive_rates_sensitivity": [("macro", 1.0)],
     }
     return mapping.get(reason_code.code, [("company_specific", 0.5)])
+
+
+def _action_urgency_label(score: float) -> str:
+    """Map an action-pressure score to an urgency phrase."""
+    if score < 30:
+        return "No immediate action"
+    if score < 55:
+        return "Monitor next"
+    if score < 75:
+        return "Action worth considering soon"
+    return "Action likely warranted soon"
+
+
+def _unique_nonempty(values: Iterable[Any]) -> list[str]:
+    """Return non-empty values once, preserving their original order.
+
+    The review notebook and the dashboard read much more clearly when repeated
+    reasons or evidence cues are collapsed. We keep this helper local to the
+    diagnosis module so later action-layer objects can stay concise without
+    losing the original ordering of signals.
+    """
+    seen: set[str] = set()
+    unique_values: list[str] = []
+    for value in values:
+        if value in {None, ""}:
+            continue
+        text = str(value)
+        if text in seen:
+            continue
+        seen.add(text)
+        unique_values.append(text)
+    return unique_values
 
 
 def _candidate_driver_rows(bundle: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
@@ -1472,6 +1549,120 @@ def _build_holding_risk_contributions(
     return contribution_objects
 
 
+def _determine_action_label(
+    contribution: HoldingRiskContribution,
+) -> tuple[str, str, str]:
+    """Choose the first action label from current contribution evidence.
+
+    The output is:
+    - user-facing action label
+    - stable machine code
+    - short explanation of why that action family was chosen
+    """
+    primary = contribution.primary_concern_key
+    score = contribution.overall_contribution_score
+    weight = contribution.current_weight or 0.0
+
+    if primary == "concentration" and (weight >= 0.25 or score >= 80):
+        return (
+            "Reduce exposure",
+            "reduce_exposure",
+            "the holding is large enough that reducing size would directly lower portfolio concentration",
+        )
+    if primary in {"market", "macro"} and score >= 60:
+        return (
+            "Trim and monitor",
+            "trim_and_monitor",
+            "the holding is feeding market-sensitive risk strongly enough that trimming is worth considering",
+        )
+    if primary == "company_specific" and score >= 35:
+        return (
+            "Monitor closely",
+            "monitor_closely",
+            "the holding carries company-specific pressure, but the evidence is not yet strong enough to force a reduction call",
+        )
+    if score >= 35:
+        return (
+            "Monitor closely",
+            "monitor_closely",
+            "the holding contributes enough risk to stay on the watchlist even if no immediate trade is required",
+        )
+    return (
+        "Hold steady",
+        "hold_steady",
+        "the holding is part of the diagnosis, but current contribution pressure does not yet justify an action call",
+    )
+
+
+def _build_holding_action_needs(
+    holding_risk_contributions: list[HoldingRiskContribution],
+) -> list[HoldingActionNeed]:
+    """Turn contribution objects into the first concrete action layer.
+
+    `HoldingActionNeed` is intentionally more conservative than a full sell
+    engine. It answers:
+
+    - does this holding merely need monitoring?
+    - is trimming reasonable to consider?
+    - is reduction pressure already high?
+
+    It does *not* yet choose replacements or compute rebalance budgets.
+    """
+    action_needs: list[HoldingActionNeed] = []
+    for contribution in holding_risk_contributions:
+        pressure_score = min(
+            100.0,
+            round(
+                contribution.overall_contribution_score * 0.82
+                + ((contribution.current_weight or 0.0) * 100.0 * 0.35),
+                1,
+            ),
+        )
+        action_label, action_code, primary_reason = _determine_action_label(contribution)
+        urgency = _action_urgency_label(pressure_score)
+        supporting_concerns = _unique_nonempty(
+            item.concern_label for item in contribution.concern_contributions[1:3]
+        )
+        supporting_reason_codes = _unique_nonempty(
+            code
+            for item in contribution.concern_contributions[:3]
+            for code in item.supporting_reason_codes[:2]
+        )
+        supporting_evidence = _unique_nonempty(
+            evidence
+            for item in contribution.concern_contributions[:3]
+            for evidence in item.supporting_evidence[:2]
+        )
+        action_needs.append(
+            HoldingActionNeed(
+                ticker=contribution.ticker,
+                sector=contribution.sector,
+                current_weight=contribution.current_weight,
+                action_label=action_label,
+                action_code=action_code,
+                action_pressure_score=pressure_score,
+                action_pressure_band=_action_pressure_band(pressure_score),
+                action_urgency=urgency,
+                primary_action_reason=primary_reason,
+                action_summary=(
+                    f"{contribution.ticker} currently looks like a **{action_label.lower()}** name because "
+                    f"its strongest contribution is to {contribution.primary_concern_label.lower()} and its "
+                    f"overall contribution score is {contribution.overall_contribution_score:.1f}/100. "
+                    f"Its current action pressure is {pressure_score:.1f}/100, which falls into "
+                    f"**{_action_pressure_band(pressure_score).lower()}**."
+                ),
+                linked_primary_concern=contribution.primary_concern_label,
+                supporting_concerns=supporting_concerns,
+                supporting_reason_codes=supporting_reason_codes,
+                supporting_evidence=supporting_evidence[:5],
+                confidence_score=contribution.contribution_confidence_score,
+                confidence_band=contribution.contribution_confidence_band,
+            )
+        )
+    action_needs.sort(key=lambda item: item.action_pressure_score, reverse=True)
+    return action_needs
+
+
 def _build_diagnostic_summary(bundle: dict[str, Any], top_concerns: list[DiagnosisConcern]) -> str:
     """Create the top-level diagnosis narrative for the portfolio.
 
@@ -1572,6 +1763,9 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         top_holding_drivers,
         top_concerns,
     )
+    holding_action_needs = _build_holding_action_needs(
+        holding_risk_contributions,
+    )
     manifest = bundle["manifest"]
     headline = bundle["headline"]
     risk = bundle["risk"]
@@ -1594,6 +1788,7 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         top_holding_drivers=top_holding_drivers,
         top_sector_drivers=top_sector_drivers,
         holding_risk_contributions=holding_risk_contributions,
+        holding_action_needs=holding_action_needs,
         supporting_metrics=supporting_metrics,
         macro_context=macro_context,
         holding_fundamentals=holding_fundamentals,
