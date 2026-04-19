@@ -2308,6 +2308,54 @@ def build_narrative_driver_detail(narrative_items: list[Any]) -> str | None:
     return "; ".join(details)
 
 
+def build_reason_code_lookup(driver: Any) -> dict[str, Any]:
+    return {
+        str(getattr(reason_code, "code", "")): reason_code
+        for reason_code in getattr(driver, "reason_codes", []) or []
+        if getattr(reason_code, "code", None)
+    }
+
+
+def build_driver_secondary_labels(driver: Any) -> list[str]:
+    code_lookup = build_reason_code_lookup(driver)
+    labels: list[str] = []
+    for code in getattr(driver, "secondary_reason_codes", []) or []:
+        reason_code = code_lookup.get(code)
+        labels.append(reason_code.label if reason_code else str(code).replace("_", " ").title())
+    return labels
+
+
+def build_driver_evidence_points(diagnosis: PortfolioRiskDiagnosis, driver: Any) -> list[str]:
+    fundamentals_by_ticker = {item.ticker: item for item in diagnosis.holding_fundamentals}
+    narrative_by_ticker: dict[str, list[Any]] = {}
+    for item in diagnosis.narrative_evidence:
+        narrative_by_ticker.setdefault(item.ticker, []).append(item)
+
+    evidence_points: list[str] = []
+    reason_codes = list(getattr(driver, "reason_codes", []) or [])
+    for reason_code in reason_codes[:3]:
+        for evidence in getattr(reason_code, "evidence", [])[:2]:
+            if evidence and evidence not in evidence_points:
+                evidence_points.append(str(evidence))
+
+    fundamentals = fundamentals_by_ticker.get(driver.ticker)
+    if fundamentals:
+        if fundamentals.beta is not None and f"Beta: {fundamentals.beta:.2f}" not in evidence_points:
+            evidence_points.append(f"Beta: {fundamentals.beta:.2f}")
+        if fundamentals.latest_filed_date:
+            evidence_points.append(f"Latest filed fundamentals: {fundamentals.latest_filed_date}")
+
+    narrative_items = narrative_by_ticker.get(driver.ticker, [])
+    narrative_detail = build_narrative_driver_detail(narrative_items)
+    if narrative_detail and narrative_detail not in evidence_points:
+        evidence_points.append(narrative_detail)
+
+    for evidence in getattr(driver, "evidence_summary", [])[:3]:
+        if evidence and evidence not in evidence_points:
+            evidence_points.append(str(evidence))
+    return evidence_points[:4]
+
+
 def build_holding_driver_explanation(diagnosis: PortfolioRiskDiagnosis, driver: Any) -> str:
     fundamentals_by_ticker = {item.ticker: item for item in diagnosis.holding_fundamentals}
     narrative_by_ticker: dict[str, list[Any]] = {}
@@ -2383,52 +2431,96 @@ def build_sector_driver_explanation(driver: Any) -> str:
 
 
 def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
-    holding_items = "".join(
-        (
-            "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.14);border-radius:16px;"
-            "background:rgba(15,23,42,.34);margin-bottom:12px'>"
-            "<div style='display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline'>"
-            f"<div style='font-size:18px;font-weight:700;color:#f8fafc'>{driver.ticker}</div>"
-            + (
-                f"<div style='font-size:15px;color:#cbd5e1'>({driver.sector})</div>"
-                if driver.sector
-                else ""
+    holding_items = ""
+    for driver in diagnosis.top_holding_drivers:
+        secondary_labels = build_driver_secondary_labels(driver)
+        evidence_points = build_driver_evidence_points(diagnosis, driver)
+        evidence_html = "".join(
+            f"<li style='margin-bottom:6px'>{point}</li>"
+            for point in evidence_points
+        ) or "<li>No extra evidence attached yet.</li>"
+        secondary_html = "".join(
+            (
+                "<span style='padding:6px 10px;border-radius:999px;"
+                "background:rgba(59,130,246,.10);border:1px solid rgba(96,165,250,.18);"
+                "color:#dbeafe;font-size:12px;font-weight:600'>"
+                f"{label}"
+                "</span>"
             )
+            for label in secondary_labels
+        ) or (
+            "<span style='padding:6px 10px;border-radius:999px;background:rgba(148,163,184,.08);"
+            "border:1px solid rgba(148,163,184,.14);color:#cbd5e1;font-size:12px'>No secondary reasons</span>"
+        )
+        confidence_tone = "#34d399" if driver.driver_confidence_band == "High" else "#fbbf24" if driver.driver_confidence_band == "Medium" else "#f87171"
+        holding_items += (
+            "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
+            "background:rgba(15,23,42,.34);margin-bottom:14px'>"
+            "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
+            "<div>"
+            f"<div style='font-size:20px;font-weight:800;color:#f8fafc'>{driver.ticker}"
+            + (f"<span style='font-size:15px;font-weight:500;color:#cbd5e1;margin-left:10px'>({driver.sector})</span>" if driver.sector else "")
             + "</div>"
             "<div style='display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:10px;font-size:14px;color:#93c5fd'>"
-            f"<span>Weight: <strong style='color:#f8fafc'>{percent_display(driver.current_weight)}</strong></span>"
-            f"<span>Vs benchmark: <strong style='color:#f8fafc'>{percent_display(driver.excess_return_vs_benchmark)}</strong></span>"
-            f"<span>Variance contribution: <strong style='color:#f8fafc'>{percent_display(driver.variance_contribution_pct)}</strong></span>"
+            f"<span>Weight <strong style='color:#f8fafc'>{percent_display(driver.current_weight)}</strong></span>"
+            f"<span>Vs benchmark <strong style='color:#f8fafc'>{percent_display(driver.excess_return_vs_benchmark)}</strong></span>"
+            f"<span>Variance contribution <strong style='color:#f8fafc'>{percent_display(driver.variance_contribution_pct)}</strong></span>"
             "</div>"
-            f"<div style='margin-top:12px;font-size:15px;line-height:1.55;color:#dbe4f0'>{build_holding_driver_explanation(diagnosis, driver)}</div>"
+            "</div>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:{confidence_tone};font-size:12px;font-weight:700'>"
+            f"{driver.driver_confidence_band} confidence"
+            "</div>"
+            "</div>"
+            "<div style='display:grid;grid-template-columns:minmax(280px,1.3fr) minmax(260px,1fr);gap:16px;margin-top:16px'>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.46);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Main reason this holding is driving diagnosis</div>"
+            f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:8px'>{driver.primary_reason_label or 'Primary driver not set'}</div>"
+            f"<div style='font-size:15px;line-height:1.6;color:#dbe4f0;margin-top:10px'>{driver.primary_reason_summary or build_holding_driver_explanation(diagnosis, driver)}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Supporting reasons</div>"
+            f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:10px'>{secondary_html}</div>"
+            "</div>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Simple evidence behind this read</div>"
+            "<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>"
+            f"{evidence_html}"
+            "</ul>"
+            "</div>"
+            "</div>"
             "</div>"
         )
-        for driver in diagnosis.top_holding_drivers
-    ) or "<div style='color:#cbd5e1'>No holding-level drivers were identified yet.</div>"
+
+    if not holding_items:
+        holding_items = "<div style='color:#cbd5e1'>No holding-level drivers were identified yet.</div>"
+
     sector_items = "".join(
         (
             "<div style='padding:14px 16px;border:1px solid rgba(148,163,184,.14);border-radius:14px;"
             "background:rgba(15,23,42,.28);margin-bottom:10px'>"
+            f"<div style='display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap'>"
             f"<div style='font-size:16px;font-weight:700;color:#f8fafc'>{driver.sector}</div>"
+            f"<div style='font-size:12px;color:#93c5fd'>{driver.driver_confidence_band} confidence</div>"
+            "</div>"
             f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Weight <strong style='color:#f8fafc'>{percent_display(driver.weight_pct)}</strong> · "
             f"Vs benchmark <strong style='color:#f8fafc'>{percent_display(driver.excess_return_vs_benchmark)}</strong></div>"
-            f"<div style='margin-top:10px;font-size:14px;line-height:1.5;color:#cbd5e1'>{build_sector_driver_explanation(driver)}</div>"
+            f"<div style='margin-top:10px;font-size:14px;line-height:1.5;color:#e2e8f0'><strong>{driver.primary_reason_label or 'Main sector reason'}:</strong> {driver.primary_reason_summary or build_sector_driver_explanation(driver)}</div>"
             "</div>"
         )
         for driver in diagnosis.top_sector_drivers
     ) or "<div style='color:#cbd5e1'>No sector-level drivers were identified yet.</div>"
     return (
-        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "<div style='display:grid;gap:16px'>"
+        "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Top Holding Drivers</div>"
-        "<div style='font-size:13px;color:#93c5fd;margin-top:6px'>Named positions currently driving the diagnosis.</div>"
+        "<div style='font-size:20px;font-weight:800;color:#f8fafc'>Top Holding Drivers</div>"
+        "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>For each holding, start with the main reason it is risky, then check the supporting reasons and the evidence that made the diagnosis pick it up.</div>"
         f"<div style='margin-top:14px'>{holding_items}</div>"
         "</div>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94));margin-top:16px'>"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Sector Drivers</div>"
-        "<div style='font-size:13px;color:#93c5fd;margin-top:6px'>Sector exposure patterns making the portfolio feel crowded or fragile.</div>"
+        "<div style='font-size:13px;color:#93c5fd;margin-top:6px'>These are the sector-level patterns that make the portfolio feel crowded or fragile.</div>"
         f"<div style='margin-top:14px'>{sector_items}</div>"
+        "</div>"
         "</div>"
     )
 
