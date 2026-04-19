@@ -3990,6 +3990,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         diagnosis_supporting_metrics_df,
         diagnosis_holding_fundamentals_df,
         diagnosis_narrative_evidence_df,
+        recent_volatility_fig,
         diagnosis_macro_html,
         diagnosis_coverage_df,
         diagnosis_confidence_html,
@@ -4153,35 +4154,40 @@ def build_app() -> gr.Blocks:
                         risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
                         drawdown_plot = gr.Plot(label="Downside Depth vs S&P 500")
                     with gr.Tab("Risk Diagnosis", id="risk-diagnosis"):
-                        diagnosis_summary_md = gr.HTML()
-                        with gr.Row():
-                            diagnosis_concern_plot = gr.Plot(label="Top Risk Categories")
-                            diagnosis_risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
-                        with gr.Row():
+                        with gr.Row(equal_height=True):
+                            with gr.Column(scale=6):
+                                diagnosis_driver_md = gr.HTML()
+                            with gr.Column(scale=5):
+                                diagnosis_concern_plot = gr.Plot(label="Top Risk Categories")
+                        with gr.Row(equal_height=True):
                             diagnosis_sector_plot = gr.Plot(label="Sector Crowding View")
+                            diagnosis_recent_volatility_plot = gr.Plot(label="Volatility vs S&P 500")
+                        with gr.Row(equal_height=True):
                             diagnosis_drawdown_plot = gr.Plot(label="Downside Depth vs S&P 500")
-                        diagnosis_driver_md = gr.HTML()
-                        diagnosis_supporting_metrics_df = gr.Dataframe(
-                            label="Supporting Evidence",
-                            interactive=False,
-                            wrap=True,
-                        )
-                        diagnosis_holding_fundamentals_df = gr.Dataframe(
-                            label="Holding Fundamentals",
-                            interactive=False,
-                            wrap=True,
-                        )
-                        diagnosis_narrative_evidence_df = gr.Dataframe(
-                            label="Filing and News Evidence",
-                            interactive=False,
-                            wrap=True,
-                        )
-                        diagnosis_macro_md = gr.HTML()
-                        diagnosis_coverage_df = gr.Dataframe(
-                            label="Source Coverage",
-                            interactive=False,
-                        )
-                        diagnosis_confidence_md = gr.HTML()
+                            diagnosis_macro_md = gr.HTML()
+                        diagnosis_summary_md = gr.HTML()
+                        with gr.Accordion("Detailed Evidence", open=False):
+                            diagnosis_risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
+                            diagnosis_supporting_metrics_df = gr.Dataframe(
+                                label="Supporting Evidence",
+                                interactive=False,
+                                wrap=True,
+                            )
+                            diagnosis_holding_fundamentals_df = gr.Dataframe(
+                                label="Holding Fundamentals",
+                                interactive=False,
+                                wrap=True,
+                            )
+                            diagnosis_narrative_evidence_df = gr.Dataframe(
+                                label="Filing and News Evidence",
+                                interactive=False,
+                                wrap=True,
+                            )
+                            diagnosis_coverage_df = gr.Dataframe(
+                                label="Source Coverage",
+                                interactive=False,
+                            )
+                            diagnosis_confidence_md = gr.HTML()
                     with gr.Tab("Risk Guide", id="risk-guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
@@ -4211,6 +4217,7 @@ def build_app() -> gr.Blocks:
                 diagnosis_supporting_metrics_df,
                 diagnosis_holding_fundamentals_df,
                 diagnosis_narrative_evidence_df,
+                diagnosis_recent_volatility_plot,
                 diagnosis_macro_md,
                 diagnosis_coverage_df,
                 diagnosis_confidence_md,
