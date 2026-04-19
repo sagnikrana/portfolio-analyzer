@@ -14,6 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 import gradio as gr
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -1351,7 +1352,8 @@ def build_market_enriched_metrics(
     value_matrix = (share_matrix * price_matrix).astype(float)
     total_value_series = value_matrix.sum(axis=1).replace(0.0, pd.NA)
     lagged_weights = value_matrix.shift(1).div(total_value_series.shift(1), axis=0)
-    lagged_weights = lagged_weights.replace([math.inf, -math.inf], float("nan")).fillna(0.0)
+    lagged_weights = lagged_weights.apply(pd.to_numeric, errors="coerce")
+    lagged_weights = lagged_weights.where(np.isfinite(lagged_weights.to_numpy(dtype=float)), np.nan).fillna(0.0)
     contribution_matrix = (lagged_weights * asset_returns).fillna(0.0)
     contribution_period = contribution_matrix.loc["2025-01-01":"2025-10-31"].dropna(how="all")
     if not contribution_period.empty:
@@ -4162,7 +4164,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         diagnosis_concern_fig,
         diagnosis_driver_html,
         diagnosis_chart_payload,
-        gr.Dropdown.update(choices=diagnosis_stock_choices, value="Portfolio"),
+        gr.update(choices=diagnosis_stock_choices, value="Portfolio"),
         diagnosis_supporting_metrics_df,
         diagnosis_holding_fundamentals_df,
         diagnosis_narrative_evidence_df,
