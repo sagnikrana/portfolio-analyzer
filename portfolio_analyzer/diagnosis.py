@@ -336,6 +336,33 @@ class HoldingActionRecommendation(BaseModel):
     is_actionable: bool = False
 
 
+class PortfolioActionImpact(BaseModel):
+    """Portfolio-level preview of what improves if current actions are followed.
+
+    This object aggregates all actionable holding recommendations into one
+    simple question for the user:
+
+    - if I actually trim or sell these names, what gets better overall?
+
+    The preview is intentionally directional rather than fully optimized. It is
+    meant to explain the likely benefit of the current action set before we
+    build a deeper rebalance engine.
+    """
+
+    actionable_count: int = 0
+    actionable_tickers: list[str] = Field(default_factory=list)
+    total_value_to_sell: float = 0.0
+    total_weight_reduction_pct_points: float = 0.0
+    total_variance_reduction_pct_points: float = 0.0
+    total_relative_drag_reduction_pct_points: float = 0.0
+    current_largest_position_pct: Optional[float] = None
+    projected_largest_position_pct: Optional[float] = None
+    current_top5_weight_pct: Optional[float] = None
+    projected_top5_weight_pct: Optional[float] = None
+    impact_summary: str = ""
+    impact_bullets: list[str] = Field(default_factory=list)
+
+
 class PortfolioRiskDiagnosis(BaseModel):
     """Top-level typed diagnosis object for one analyzed portfolio snapshot.
 
@@ -369,6 +396,7 @@ class PortfolioRiskDiagnosis(BaseModel):
     holding_risk_contributions: list[HoldingRiskContribution] = Field(default_factory=list)
     holding_action_needs: list[HoldingActionNeed] = Field(default_factory=list)
     holding_action_recommendations: list[HoldingActionRecommendation] = Field(default_factory=list)
+    portfolio_action_impact: Optional[PortfolioActionImpact] = None
     supporting_metrics: list[RiskMetricObservation] = Field(default_factory=list)
     macro_context: Optional[MacroRegimeSnapshot] = None
     holding_fundamentals: list[CompanyFundamentalSnapshot] = Field(default_factory=list)
@@ -383,6 +411,7 @@ HoldingConcernContribution.model_rebuild()
 HoldingRiskContribution.model_rebuild()
 HoldingActionNeed.model_rebuild()
 HoldingActionRecommendation.model_rebuild()
+PortfolioActionImpact.model_rebuild()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -2107,6 +2136,104 @@ def _build_portfolio_impact_preview(
     return weight_reduction, variance_reduction, relative_drag_reduction, summary, bullets
 
 
+def _build_portfolio_action_impact(
+    bundle: dict[str, Any],
+    holding_action_recommendations: list[HoldingActionRecommendation],
+) -> PortfolioActionImpact:
+    """Aggregate all actionable holding recommendations into one impact view."""
+    actionable = [item for item in holding_action_recommendations if item.is_actionable]
+    if not actionable:
+        return PortfolioActionImpact(
+            impact_summary=(
+                "No portfolio-level action impact is being projected right now because the current rule set did not produce any actionable trims or sells."
+            ),
+            impact_bullets=[
+                "The portfolio shape would stay broadly the same under the current recommendation set."
+            ],
+        )
+
+    positions = bundle["open_positions"].copy()
+    if positions.empty:
+        return PortfolioActionImpact(
+            actionable_count=len(actionable),
+            actionable_tickers=[item.ticker for item in actionable],
+            total_value_to_sell=round(sum(item.value_to_sell or 0.0 for item in actionable), 2),
+            total_weight_reduction_pct_points=round(sum(item.projected_weight_reduction_pct_points or 0.0 for item in actionable), 4),
+            total_variance_reduction_pct_points=round(sum(item.projected_variance_reduction_pct_points or 0.0 for item in actionable), 4),
+            total_relative_drag_reduction_pct_points=round(sum(item.projected_relative_drag_reduction_pct_points or 0.0 for item in actionable), 4),
+            impact_summary="The current action set should reduce exposure to the flagged names, but full concentration math could not be rebuilt from the saved positions snapshot.",
+            impact_bullets=["The sell set still lowers exposure to the names currently flagged as laggards."],
+        )
+
+    positions["current_weight"] = pd.to_numeric(positions.get("current_weight"), errors="coerce").fillna(0.0)
+    action_map = {item.ticker: (item.position_reduction_pct or 0.0) for item in actionable}
+    positions["projected_weight"] = positions.apply(
+        lambda row: max(
+            0.0,
+            float(row["current_weight"]) * (1.0 - float(action_map.get(str(row.get("ticker")), 0.0))),
+        ),
+        axis=1,
+    )
+
+    current_weights = sorted(positions["current_weight"].tolist(), reverse=True)
+    projected_weights = sorted(positions["projected_weight"].tolist(), reverse=True)
+
+    current_largest = current_weights[0] if current_weights else None
+    projected_largest = projected_weights[0] if projected_weights else None
+    current_top5 = sum(current_weights[:5]) if current_weights else None
+    projected_top5 = sum(projected_weights[:5]) if projected_weights else None
+
+    total_value_to_sell = round(sum(item.value_to_sell or 0.0 for item in actionable), 2)
+    total_weight_reduction = round(sum(item.projected_weight_reduction_pct_points or 0.0 for item in actionable), 4)
+    total_variance_reduction = round(sum(item.projected_variance_reduction_pct_points or 0.0 for item in actionable), 4)
+    total_drag_reduction = round(sum(item.projected_relative_drag_reduction_pct_points or 0.0 for item in actionable), 4)
+
+    bullets: list[str] = []
+    if current_largest is not None and projected_largest is not None and projected_largest < current_largest:
+        bullets.append(
+            f"The largest position would fall from about {current_largest:.1%} to about {projected_largest:.1%}."
+        )
+    if current_top5 is not None and projected_top5 is not None and projected_top5 < current_top5:
+        bullets.append(
+            f"The top 5 holdings would fall from about {current_top5:.1%} of the portfolio to about {projected_top5:.1%}."
+        )
+    if total_variance_reduction > 0:
+        bullets.append(
+            f"Taken together, these moves could remove about {total_variance_reduction:.1%} of recent variance contribution from the flagged names."
+        )
+    if total_drag_reduction > 0:
+        bullets.append(
+            f"They would also cut about {total_drag_reduction:.1%} of weighted exposure to names that have been lagging the S&P 500."
+        )
+    if total_value_to_sell > 0:
+        bullets.append(
+            f"In total, the current action set would free up about ${total_value_to_sell:,.2f} to redeploy or hold in cash."
+        )
+
+    summary = (
+        "If you follow the current action set, the portfolio should become less concentrated and a bit less exposed to recent laggards."
+    )
+    if total_variance_reduction > 0 and total_drag_reduction > 0:
+        summary = (
+            "If you follow the current action set, the portfolio should become less concentrated, a bit steadier, and less exposed to names that have been trailing the S&P 500."
+        )
+
+    return PortfolioActionImpact(
+        actionable_count=len(actionable),
+        actionable_tickers=[item.ticker for item in actionable],
+        total_value_to_sell=total_value_to_sell,
+        total_weight_reduction_pct_points=total_weight_reduction,
+        total_variance_reduction_pct_points=total_variance_reduction,
+        total_relative_drag_reduction_pct_points=total_drag_reduction,
+        current_largest_position_pct=round(current_largest, 4) if current_largest is not None else None,
+        projected_largest_position_pct=round(projected_largest, 4) if projected_largest is not None else None,
+        current_top5_weight_pct=round(current_top5, 4) if current_top5 is not None else None,
+        projected_top5_weight_pct=round(projected_top5, 4) if projected_top5 is not None else None,
+        impact_summary=summary,
+        impact_bullets=bullets,
+    )
+
+
 def _build_holding_action_recommendations(
     bundle: dict[str, Any],
     holding_action_needs: list[HoldingActionNeed],
@@ -2532,6 +2659,10 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         holding_risk_contributions,
         analysis_end=str(headline.get("analysis_end")),
     )
+    portfolio_action_impact = _build_portfolio_action_impact(
+        bundle,
+        holding_action_recommendations,
+    )
 
     return PortfolioRiskDiagnosis(
         run_id=str(manifest.get("run_id")),
@@ -2553,6 +2684,7 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         holding_risk_contributions=holding_risk_contributions,
         holding_action_needs=holding_action_needs,
         holding_action_recommendations=holding_action_recommendations,
+        portfolio_action_impact=portfolio_action_impact,
         supporting_metrics=supporting_metrics,
         macro_context=macro_context,
         holding_fundamentals=holding_fundamentals,

@@ -3126,6 +3126,7 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     """Render simple sell/trim guidance backed by relative performance windows."""
     actionable = [item for item in diagnosis.holding_action_recommendations if item.is_actionable]
     held = [item for item in diagnosis.holding_action_recommendations if not item.is_actionable][:4]
+    action_impact = diagnosis.portfolio_action_impact
 
     if not actionable:
         return (
@@ -3133,6 +3134,35 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
             "<div style='font-size:20px;font-weight:800;color:#f8fafc'>Risk Actions</div>"
             "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No holdings currently meet the stricter sell / trim rule. The current logic only recommends action when a holding has actually been underperforming the S&P 500 over a meaningful period.</div>"
+            "</div>"
+        )
+
+    impact_section = ""
+    if action_impact is not None:
+        impact_bullets_html = "".join(
+            f"<li style='margin-bottom:7px'>{render_bold_markers(note)}</li>"
+            for note in action_impact.impact_bullets[:5]
+        ) or "<li>No portfolio-level impact preview was available.</li>"
+        impact_cards = (
+            metric_card("Actionable names", str(action_impact.actionable_count), ", ".join(action_impact.actionable_tickers[:4]) or "None")
+            + metric_card("Capital freed", money_text(action_impact.total_value_to_sell), "Estimated value sold or trimmed")
+            + metric_card("Weight reduction", percent_display(action_impact.total_weight_reduction_pct_points), "Combined weight reduction")
+            + metric_card("Variance relief", percent_display(action_impact.total_variance_reduction_pct_points), "Recent variance contribution removed")
+            + metric_card("Lag relief", percent_display(action_impact.total_relative_drag_reduction_pct_points), "Weighted benchmark-lag exposure reduced")
+            + metric_card(
+                "Largest position",
+                percent_display(action_impact.projected_largest_position_pct),
+                f"From {percent_display(action_impact.current_largest_position_pct)}",
+            )
+        )
+        impact_section = (
+            "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94));margin-bottom:18px'>"
+            "<div style='font-size:20px;font-weight:800;color:#f8fafc'>If You Follow The Current Action Set</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:10px'>{render_bold_markers(action_impact.impact_summary)}</div>"
+            f"<div class='metric-strip' style='margin-top:14px'>{impact_cards}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>What likely improves at the portfolio level</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{impact_bullets_html}</ul>"
             "</div>"
         )
 
@@ -3244,7 +3274,7 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Risk Actions</div>"
         "<div style='font-size:14px;color:#93c5fd;margin-top:8px'>This tab is narrower than a full rebalance engine. It focuses on one question: which holdings now have enough underperformance versus the S&P 500, combined with portfolio risk, to justify trimming or selling.</div>"
-        f"<div style='margin-top:16px'>{cards}</div>"
+        f"<div style='margin-top:16px'>{impact_section}{cards}</div>"
         "</div>"
         f"{held_section}"
         "</div>"
