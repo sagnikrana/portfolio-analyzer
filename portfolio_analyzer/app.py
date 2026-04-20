@@ -3273,7 +3273,7 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Risk Actions</div>"
-        "<div style='font-size:14px;color:#93c5fd;margin-top:8px'>This tab is narrower than a full rebalance engine. It focuses on one question: which holdings now have enough underperformance versus the S&P 500, combined with portfolio risk, to justify trimming or selling.</div>"
+        "<div style='font-size:14px;color:#93c5fd;margin-top:8px'>This tab is narrower than a full rebalance engine. It focuses on one question: which holdings now have enough underperformance versus the S&P 500, combined with portfolio risk and recent company or market caution signals, to justify trimming or selling.</div>"
         f"<div style='margin-top:16px'>{impact_section}{cards}</div>"
         "</div>"
         f"{held_section}"

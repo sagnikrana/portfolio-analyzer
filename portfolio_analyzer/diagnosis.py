@@ -1832,23 +1832,23 @@ def _recommendation_reduction_from_underperformance(
             "sell_all",
             1.0,
         )
-    if underperformance >= 0.9:
+    if underperformance >= 0.85:
         reduction = 0.5 if current_weight >= 0.02 or diagnosis_pressure_score >= 45 else 0.35
         return ("Reduce by 50%" if reduction == 0.5 else "Trim 35%", "deep_underperformance_trim", reduction)
-    if underperformance >= 0.7:
-        reduction = 0.35 if diagnosis_pressure_score >= 55 or variance_contribution_pct >= 0.02 else 0.25
+    if underperformance >= 0.65:
+        reduction = 0.35 if diagnosis_pressure_score >= 50 or variance_contribution_pct >= 0.018 or current_weight >= 0.035 else 0.25
         return ("Trim 35%" if reduction == 0.35 else "Trim 25%", "heavy_underperformance_trim", reduction)
-    if underperformance >= 0.5:
-        reduction = 0.25 if diagnosis_pressure_score >= 45 or current_weight >= 0.08 else 0.2 if diagnosis_pressure_score >= 30 else 0.15
+    if underperformance >= 0.45:
+        reduction = 0.25 if diagnosis_pressure_score >= 40 or current_weight >= 0.06 else 0.2 if diagnosis_pressure_score >= 25 or variance_contribution_pct >= 0.012 else 0.15
         if reduction == 0.25:
             return ("Trim 25%", "meaningful_underperformance_trim", reduction)
         return ("Trim 20%" if reduction == 0.2 else "Trim 15%", "meaningful_underperformance_trim", reduction)
-    if underperformance >= 0.35 and (diagnosis_pressure_score >= 30 or current_weight >= 0.05 or variance_contribution_pct >= 0.015):
+    if underperformance >= 0.3 and (diagnosis_pressure_score >= 25 or current_weight >= 0.04 or variance_contribution_pct >= 0.01):
         reduction = 0.15 if diagnosis_pressure_score >= 45 or current_weight >= 0.08 else 0.1
         return ("Trim 15%" if reduction == 0.15 else "Trim 10%", "moderate_underperformance_trim", reduction)
-    if underperformance >= 0.25 and diagnosis_pressure_score >= 30:
+    if underperformance >= 0.2 and (diagnosis_pressure_score >= 25 or current_weight >= 0.03):
         return ("Trim 10%", "watchlist_trim", 0.10)
-    if underperformance >= 0.15 and current_weight >= 0.08:
+    if underperformance >= 0.12 and current_weight >= 0.05:
         return ("Trim 10%", "large_weak_position_trim", 0.10)
     return ("Hold for now", "hold_for_now", 0.0)
 
@@ -2336,7 +2336,7 @@ def _build_holding_action_recommendations(
             reasoning_points = [
                 f"The weighted-average holding period is only about {holding_days} days, which is too short for this sell rule to treat as durable underperformance.",
             ]
-        elif excess_return_vs_benchmark >= -0.25:
+        elif excess_return_vs_benchmark >= -0.18:
             recommendation_label = "Hold for now"
             recommendation_code = "not_enough_underperformance"
             reduction_pct = 0.0
@@ -2357,8 +2357,8 @@ def _build_holding_action_recommendations(
                 diagnosis_pressure_score=diagnosis_pressure_score,
                 variance_contribution_pct=variance_contribution_pct,
             )
-            if reduction_pct == 0 and modifier_score >= 0.12 and (excess_return_vs_benchmark or 0.0) <= -0.15:
-                reduction_pct = 0.10
+            if reduction_pct == 0 and modifier_score >= 0.10 and (excess_return_vs_benchmark or 0.0) <= -0.12:
+                reduction_pct = 0.10 if modifier_score < 0.16 else 0.15
                 recommendation_code = "external_modifiers_trigger_trim"
             elif reduction_pct > 0 and modifier_score >= 0.10:
                 reduction_pct = min(1.0, reduction_pct + 0.05)
@@ -2366,6 +2366,9 @@ def _build_holding_action_recommendations(
                 if modifier_score >= 0.18:
                     reduction_pct = min(1.0, reduction_pct + 0.05)
                     recommendation_code = "external_modifiers_strongly_strengthen_trim"
+            elif reduction_pct > 0 and modifier_score >= 0.05 and underperform_windows >= 1:
+                reduction_pct = min(1.0, reduction_pct + 0.05)
+                recommendation_code = "external_modifiers_support_existing_trim"
             if underperform_windows >= 2:
                 escalation = 0.10 if underperform_windows == 2 else 0.15
                 if diagnosis_pressure_score >= 45 or current_weight >= 0.08 or variance_contribution_pct >= 0.02:
@@ -2376,7 +2379,10 @@ def _build_holding_action_recommendations(
                 reduction_pct = min(1.0, reduction_pct + 0.05)
                 recommendation_code = "persistent_underperformance_supports_trim"
             if outperform_windows >= 2:
-                reduction_pct = max(0.0, reduction_pct - 0.15)
+                reduction_pct = max(0.0, reduction_pct - 0.10)
+                if reduction_pct == 0 and (excess_return_vs_benchmark or 0.0) <= -0.45:
+                    reduction_pct = 0.10
+                    recommendation_code = "long_horizon_strength_softens_but_does_not_cancel_trim"
                 if reduction_pct == 0:
                     recommendation_label = "Hold for now"
                     recommendation_code = "long_horizon_outperformance_offsets_since_buy_lag"
