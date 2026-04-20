@@ -321,6 +321,8 @@ class HoldingActionRecommendation(BaseModel):
     what_changed: str = ""
     why_it_matters: str = ""
     amount_rationale: str = ""
+    explicit_sell_modifiers: list[str] = Field(default_factory=list)
+    modifier_score: float = 0.0
     reasoning_points: list[str] = Field(default_factory=list)
     supporting_evidence: list[str] = Field(default_factory=list)
     guardrail_notes: list[str] = Field(default_factory=list)
@@ -1855,6 +1857,55 @@ def _normalize_recommendation_reduction(reduction_pct: float) -> float:
     return 0.0
 
 
+def _build_explicit_sell_modifiers(
+    *,
+    action_need: Optional[HoldingActionNeed],
+    linked_primary_concern: Optional[str],
+) -> tuple[list[str], float]:
+    """Translate external evidence into explicit sell modifiers.
+
+    These modifiers are intentionally separate from the raw performance trigger.
+    They help the system say, in plain language, what else in the market or in
+    the company is making the underperformance harder to ignore.
+
+    The score is deliberately small relative to the core benchmark-lag logic:
+    external evidence can strengthen or tip a borderline case, but it should not
+    replace observable market underperformance as the main trigger.
+    """
+    if action_need is None:
+        return [], 0.0
+
+    codes = set(action_need.supporting_reason_codes or [])
+    evidence = list(action_need.supporting_evidence or [])
+    modifiers: list[str] = []
+    score = 0.0
+
+    if "negative_earnings" in codes:
+        modifiers.append("**Profits are under pressure** in the latest company filing, which makes weak market performance more concerning.")
+        score += 0.10
+    if "balance_sheet_stretch" in codes:
+        modifiers.append("**The balance sheet looks more stretched** than steadier holdings, so the downside can be harder to absorb.")
+        score += 0.06
+    if "narrative_risk" in codes:
+        headline = next((item for item in evidence if item and "Macro flag:" not in str(item) and "Beta:" not in str(item) and "Current weight:" not in str(item) and "Excess return vs benchmark:" not in str(item)), None)
+        if headline:
+            headline_text = str(headline)
+            if "10-Q" in headline_text or "10-K" in headline_text:
+                headline_text = "the latest company report"
+            modifiers.append(f"**Recent company reports or news added caution** around this name, including {headline_text}.")
+        else:
+            modifiers.append("**Recent company reports or news added caution** around this holding.")
+        score += 0.06
+    if "restrictive_rates_sensitivity" in codes or linked_primary_concern == "Macro sensitivity":
+        modifiers.append("**Higher interest rates are still a headwind** for this part of the market.")
+        score += 0.05
+    if "high_beta" in codes and linked_primary_concern in {"Market-relative risk", "Macro sensitivity"}:
+        modifiers.append("**This stock tends to move more than the market**, which can make a weak trend hit the portfolio harder.")
+        score += 0.05
+
+    return _unique_nonempty(modifiers), round(score, 2)
+
+
 def _build_recommendation_summary(
     *,
     ticker: str,
@@ -2076,6 +2127,10 @@ def _build_holding_action_recommendations(
             if action_need is not None
             else contribution.primary_concern_label if contribution is not None else None
         )
+        explicit_sell_modifiers, modifier_score = _build_explicit_sell_modifiers(
+            action_need=action_need,
+            linked_primary_concern=linked_primary_concern,
+        )
 
         if is_fund:
             recommendation_label = "Hold for now"
@@ -2120,6 +2175,15 @@ def _build_holding_action_recommendations(
                 diagnosis_pressure_score=diagnosis_pressure_score,
                 variance_contribution_pct=variance_contribution_pct,
             )
+            if reduction_pct == 0 and modifier_score >= 0.12 and (excess_return_vs_benchmark or 0.0) <= -0.15:
+                reduction_pct = 0.10
+                recommendation_code = "external_modifiers_trigger_trim"
+            elif reduction_pct > 0 and modifier_score >= 0.10:
+                reduction_pct = min(1.0, reduction_pct + 0.05)
+                recommendation_code = "external_modifiers_strengthen_trim"
+                if modifier_score >= 0.18:
+                    reduction_pct = min(1.0, reduction_pct + 0.05)
+                    recommendation_code = "external_modifiers_strongly_strengthen_trim"
             if underperform_windows >= 2:
                 escalation = 0.10 if underperform_windows == 2 else 0.15
                 if diagnosis_pressure_score >= 45 or current_weight >= 0.08 or variance_contribution_pct >= 0.02:
@@ -2154,6 +2218,10 @@ def _build_holding_action_recommendations(
             if current_weight >= 0.08 and excess_return_vs_benchmark <= -0.15:
                 reasoning_points.append(
                     f"It is also a large enough position at {current_weight:.1%} of the portfolio that even moderate underperformance can do real damage."
+                )
+            if explicit_sell_modifiers:
+                reasoning_points.append(
+                    f"External market and company signals added {modifier_score:.0%} of extra trim pressure on top of the performance case."
                 )
             if outperform_windows > 0:
                 reasoning_points.append(
@@ -2256,6 +2324,8 @@ def _build_holding_action_recommendations(
                 what_changed=what_changed,
                 why_it_matters=why_it_matters,
                 amount_rationale=amount_rationale,
+                explicit_sell_modifiers=explicit_sell_modifiers,
+                modifier_score=modifier_score,
                 reasoning_points=reasoning_points,
                 supporting_evidence=supporting_evidence[:6],
                 guardrail_notes=guardrail_notes,

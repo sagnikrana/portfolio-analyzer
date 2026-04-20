@@ -2460,6 +2460,12 @@ def humanize_macro_flag(flag: str) -> str:
     return mapping.get(str(flag or "").strip(), str(flag or ""))
 
 
+def render_bold_markers(text: Any) -> str:
+    """Convert **double-asterisk** emphasis into HTML bold text."""
+    raw = str(text or "")
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", raw)
+
+
 def short_concern_badge(label: str | None) -> str:
     """Shorter concern label for compact dashboard chips."""
     mapping = {
@@ -3072,6 +3078,8 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "3Y vs S&P 500": percent_display(item.relative_3y_return_pct),
                 "5Y vs S&P 500": percent_display(item.relative_5y_return_pct),
                 "Confidence": item.confidence_band,
+                "Explicit sell modifiers": " | ".join(item.explicit_sell_modifiers),
+                "Modifier score": item.modifier_score,
                 "What changed": item.what_changed,
                 "Why it matters": item.why_it_matters,
                 "Why this amount": item.amount_rationale,
@@ -3094,6 +3102,8 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "3Y vs S&P 500",
                 "5Y vs S&P 500",
                 "Confidence",
+                "Explicit sell modifiers",
+                "Modifier score",
                 "What changed",
                 "Why it matters",
                 "Why this amount",
@@ -3144,6 +3154,10 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             f"<li style='margin-bottom:7px'>{humanize_evidence_point(point, item.ticker)}</li>"
             for point in item.supporting_evidence[:5]
         ) or "<li>No supporting evidence was attached.</li>"
+        modifiers = "".join(
+            f"<li style='margin-bottom:7px'>{render_bold_markers(note)}</li>"
+            for note in item.explicit_sell_modifiers[:4]
+        ) or "<li>No extra filing, news, or macro modifiers were strong enough to change the recommendation.</li>"
         guardrails = "".join(
             f"<li style='margin-bottom:7px'>{note}</li>"
             for note in item.guardrail_notes[:3]
@@ -3167,21 +3181,23 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             "<div style='font-size:16px;line-height:1.6;color:#e2e8f0;margin-top:14px'>"
             f"{action_line}"
             "</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:10px'>{item.recommendation_summary}</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:10px'>{render_bold_markers(item.recommendation_summary)}</div>"
             "<div style='display:grid;grid-template-columns:minmax(280px,1.2fr) minmax(250px,1fr);gap:16px;margin-top:16px'>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What changed</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{item.what_changed}</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.what_changed)}</div>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Why that matters</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{item.why_it_matters}</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.why_it_matters)}</div>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Why this amount</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{item.amount_rationale}</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.amount_rationale)}</div>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Extra reasoning</div>"
             f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{reasoning}</ul>"
             "</div>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Recent performance vs the S&P 500</div>"
             f"<div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px'>{performance_window_chip('1Y', item.relative_1y_return_pct)}{performance_window_chip('3Y', item.relative_3y_return_pct)}{performance_window_chip('5Y', item.relative_5y_return_pct)}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Extra market and company signals that added pressure</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{modifiers}</ul>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Evidence used</div>"
             f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence}</ul>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>What kept this from being more aggressive</div>"
@@ -3196,7 +3212,7 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         held_cards = "".join(
             "<div style='padding:12px 14px;border-radius:14px;border:1px solid rgba(148,163,184,.12);background:rgba(15,23,42,.26)'>"
             f"<div style='font-size:16px;font-weight:700;color:#f8fafc'>{item.ticker} <span style='font-size:12px;color:#34d399;font-weight:700'>{item.recommendation_label}</span></div>"
-            f"<div style='font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:8px'>{item.recommendation_summary}</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:8px'>{render_bold_markers(item.recommendation_summary)}</div>"
             "</div>"
             for item in held
         )
