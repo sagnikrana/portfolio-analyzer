@@ -1828,7 +1828,7 @@ def _recommendation_reduction_from_underperformance(
 
     if underperformance >= 1.0 and current_weight <= 0.015:
         return (
-            "Sell entire position",
+            "Sell all shares",
             "sell_all",
             1.0,
         )
@@ -1856,7 +1856,7 @@ def _recommendation_reduction_from_underperformance(
 def _recommendation_label_from_reduction(reduction_pct: float) -> str:
     """Map a normalized trim size back to the user-facing action label."""
     if reduction_pct >= 0.999:
-        return "Sell entire position"
+        return "Sell all shares"
     if reduction_pct >= 0.5:
         return "Reduce by 50%"
     if reduction_pct >= 0.35:
@@ -1940,6 +1940,67 @@ def _build_explicit_sell_modifiers(
     return _unique_nonempty(modifiers), round(score, 2)
 
 
+def _should_sell_all_recommendation(
+    *,
+    excess_return_vs_benchmark: Optional[float],
+    underperform_windows: int,
+    outperform_windows: int,
+    current_weight: float,
+    diagnosis_pressure_score: float,
+    modifier_score: float,
+) -> bool:
+    """Decide when a trim should escalate into a full exit.
+
+    A full-exit recommendation should stay rare. We only use it when the
+    pattern is strong enough that keeping a small residual position would add
+    little portfolio value:
+
+    - the holding has badly lagged the trade-matched S&P 500,
+    - the weakness is persistent across the longer trailing windows we track,
+    - there is no meaningful longer-horizon offset,
+    - and the position is small or medium enough that exiting does not create
+      a new concentration gap elsewhere.
+
+    This helper intentionally sits *above* the trim-sizing logic. That keeps
+    the main underperformance thresholds simple while making the "sell all"
+    rule explicit, auditable, and easier to explain in notebooks and the app.
+    """
+    if excess_return_vs_benchmark is None or excess_return_vs_benchmark >= 0:
+        return False
+
+    underperformance = abs(excess_return_vs_benchmark)
+    no_long_horizon_support = outperform_windows == 0
+    small_or_medium_position = current_weight <= 0.04
+
+    if (
+        underperformance >= 1.0
+        and underperform_windows >= 3
+        and no_long_horizon_support
+        and small_or_medium_position
+    ):
+        return True
+
+    if (
+        underperformance >= 0.85
+        and underperform_windows >= 3
+        and no_long_horizon_support
+        and current_weight <= 0.03
+        and (modifier_score >= 0.10 or diagnosis_pressure_score >= 35)
+    ):
+        return True
+
+    if (
+        underperformance >= 1.2
+        and underperform_windows >= 2
+        and no_long_horizon_support
+        and current_weight <= 0.06
+        and diagnosis_pressure_score >= 45
+    ):
+        return True
+
+    return False
+
+
 def _build_recommendation_summary(
     *,
     ticker: str,
@@ -1966,7 +2027,7 @@ def _build_recommendation_summary(
         )
 
     action_clause = (
-        "selling the full position is the current recommendation."
+        "selling all shares is the current recommendation."
         if reduction_pct >= 0.999
         else f"trimming about {reduction_pct:.0%} of the position is the current recommendation."
     )
@@ -2048,7 +2109,7 @@ def _build_recommendation_explanation_parts(
             "No sell-down amount is being recommended because the evidence is not strong enough after the current guardrails are applied."
         )
     elif reduction_pct >= 0.999:
-        amount_rationale = "The current recommendation is to sell the full position because the underperformance is severe and there is not enough offsetting evidence to justify keeping even a small stake."
+        amount_rationale = "The current recommendation is to sell all shares because the underperformance is severe and there is not enough offsetting evidence to justify keeping even a small residual position."
     else:
         amount_rationale = (
             f"The current size is a {reduction_pct:.0%} trim, rather than a full exit, because the system is balancing benchmark lag against the strength of the supporting evidence."
@@ -2386,6 +2447,16 @@ def _build_holding_action_recommendations(
                 if reduction_pct == 0:
                     recommendation_label = "Hold for now"
                     recommendation_code = "long_horizon_outperformance_offsets_since_buy_lag"
+            if _should_sell_all_recommendation(
+                excess_return_vs_benchmark=excess_return_vs_benchmark,
+                underperform_windows=underperform_windows,
+                outperform_windows=outperform_windows,
+                current_weight=current_weight,
+                diagnosis_pressure_score=diagnosis_pressure_score,
+                modifier_score=modifier_score,
+            ):
+                reduction_pct = 1.0
+                recommendation_code = "sell_all_persistent_underperformer"
             reduction_pct = _normalize_recommendation_reduction(reduction_pct)
             recommendation_label = _recommendation_label_from_reduction(reduction_pct)
             reasoning_points = [
@@ -2414,6 +2485,10 @@ def _build_holding_action_recommendations(
             if outperform_windows > 0:
                 reasoning_points.append(
                     f"At the same time, it has still beaten the S&P 500 in {outperform_windows} trailing windows, so the recommendation is moderated rather than absolute."
+                )
+            if reduction_pct >= 0.999:
+                reasoning_points.append(
+                    "The weakness is now persistent enough across the longer trailing windows that the system no longer sees a strong reason to keep a small residual position."
                 )
 
         shares_to_sell = round((quantity or 0.0) * reduction_pct, 4) if quantity is not None else None

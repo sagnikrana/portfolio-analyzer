@@ -3116,7 +3116,7 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "Why",
             ]
         )
-    action_order = {"Sell entire position": 0, "Reduce by 50%": 1, "Trim 35%": 2, "Trim 25%": 3, "Trim 20%": 4, "Trim 15%": 5, "Trim 10%": 6, "Hold for now": 7}
+    action_order = {"Sell all shares": 0, "Reduce by 50%": 1, "Trim 35%": 2, "Trim 25%": 3, "Trim 20%": 4, "Trim 15%": 5, "Trim 10%": 6, "Hold for now": 7}
     frame = pd.DataFrame(rows)
     frame["_sort"] = frame["Action"].map(action_order).fillna(99)
     return frame.sort_values(["_sort", "Ticker"]).drop(columns=["_sort"]).reset_index(drop=True)
@@ -3168,7 +3168,7 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
 
     cards = ""
     for item in actionable:
-        if item.recommendation_label == "Sell entire position":
+        if item.recommendation_label == "Sell all shares":
             action_line = (
                 f"Sell the full position: about <strong>{number_text(item.shares_to_sell, 4)}</strong> shares, "
                 f"or roughly <strong>{money_text(item.value_to_sell)}</strong>."
