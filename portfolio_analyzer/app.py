@@ -3072,6 +3072,9 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "3Y vs S&P 500": percent_display(item.relative_3y_return_pct),
                 "5Y vs S&P 500": percent_display(item.relative_5y_return_pct),
                 "Confidence": item.confidence_band,
+                "What changed": item.what_changed,
+                "Why it matters": item.why_it_matters,
+                "Why this amount": item.amount_rationale,
                 "Why": item.recommendation_summary,
             }
         )
@@ -3091,6 +3094,9 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "3Y vs S&P 500",
                 "5Y vs S&P 500",
                 "Confidence",
+                "What changed",
+                "Why it matters",
+                "Why this amount",
                 "Why",
             ]
         )
@@ -3138,6 +3144,10 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             f"<li style='margin-bottom:7px'>{humanize_evidence_point(point, item.ticker)}</li>"
             for point in item.supporting_evidence[:5]
         ) or "<li>No supporting evidence was attached.</li>"
+        guardrails = "".join(
+            f"<li style='margin-bottom:7px'>{note}</li>"
+            for note in item.guardrail_notes[:3]
+        ) or "<li>No major guardrails were triggered.</li>"
 
         cards += (
             "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
@@ -3160,7 +3170,13 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:10px'>{item.recommendation_summary}</div>"
             "<div style='display:grid;grid-template-columns:minmax(280px,1.2fr) minmax(250px,1fr);gap:16px;margin-top:16px'>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Why the system is recommending action</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What changed</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{item.what_changed}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Why that matters</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{item.why_it_matters}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Why this amount</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{item.amount_rationale}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Extra reasoning</div>"
             f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{reasoning}</ul>"
             "</div>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
@@ -3168,6 +3184,8 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             f"<div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px'>{performance_window_chip('1Y', item.relative_1y_return_pct)}{performance_window_chip('3Y', item.relative_3y_return_pct)}{performance_window_chip('5Y', item.relative_5y_return_pct)}</div>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Evidence used</div>"
             f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence}</ul>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>What kept this from being more aggressive</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{guardrails}</ul>"
             "</div>"
             "</div>"
             "</div>"
@@ -5095,7 +5113,7 @@ def launch_app() -> None:
     app = build_app()
     # Default to local launch so the dashboard reliably binds to 7861 without
     # depending on Gradio's share tunnel port allocation.
-    app.launch(server_name="127.0.0.1", server_port=7862, share=False)
+    app.launch(server_name="127.0.0.1", server_port=7860, share=True)
 
 
 if __name__ == "__main__":

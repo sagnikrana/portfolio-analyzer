@@ -318,8 +318,12 @@ class HoldingActionRecommendation(BaseModel):
     linked_primary_concern: Optional[str] = None
     diagnosis_pressure_score: float = 0.0
     recommendation_summary: str
+    what_changed: str = ""
+    why_it_matters: str = ""
+    amount_rationale: str = ""
     reasoning_points: list[str] = Field(default_factory=list)
     supporting_evidence: list[str] = Field(default_factory=list)
+    guardrail_notes: list[str] = Field(default_factory=list)
     confidence_score: float = 0.0
     confidence_band: str = "Low"
     is_actionable: bool = False
@@ -1899,6 +1903,104 @@ def _build_recommendation_summary(
     )
 
 
+def _build_recommendation_explanation_parts(
+    *,
+    ticker: str,
+    recommendation_label: str,
+    reduction_pct: float,
+    weighted_avg_buy_date: Optional[str],
+    excess_return_vs_benchmark: Optional[float],
+    diagnosis_pressure_score: float,
+    linked_primary_concern: Optional[str],
+    underperform_windows: int,
+    outperform_windows: int,
+    current_weight: float,
+    variance_contribution_pct: float,
+    is_actionable: bool,
+) -> tuple[str, str, str]:
+    """Split the recommendation into user-facing explanation parts.
+
+    We keep the overall summary for compact surfaces, but these fields make it
+    easier for notebooks and dashboards to explain:
+    - what changed
+    - why that matters for the portfolio
+    - why this specific trim size was chosen
+    """
+    period_text = (
+        f"since the weighted-average buy date of {weighted_avg_buy_date}"
+        if weighted_avg_buy_date
+        else "over the tracked holding period"
+    )
+    lag_text = f"{abs(excess_return_vs_benchmark or 0.0):.1%}"
+    concern_text = linked_primary_concern.lower() if linked_primary_concern else "portfolio risk"
+
+    what_changed = (
+        f"{ticker} has lagged the trade-matched S&P 500 by {lag_text} {period_text}."
+        if (excess_return_vs_benchmark or 0.0) < 0
+        else f"{ticker} has not built a strong enough lag versus the S&P 500 {period_text} to justify action."
+    )
+    if underperform_windows > 0:
+        what_changed += f" It also underperformed in {underperform_windows} of the trailing 1Y/3Y/5Y windows that were available."
+
+    why_it_matters = (
+        f"This matters because the holding is still feeding {concern_text}"
+        if linked_primary_concern
+        else "This matters because the holding is still adding measurable portfolio pressure"
+    )
+    detail_parts: list[str] = []
+    if diagnosis_pressure_score > 0:
+        detail_parts.append(f"{diagnosis_pressure_score:.1f}/100 diagnosis pressure")
+    if current_weight >= 0.08:
+        detail_parts.append(f"a meaningful position size at {current_weight:.1%} of the portfolio")
+    if variance_contribution_pct >= 0.02:
+        detail_parts.append(f"{variance_contribution_pct:.1%} of tracked variance")
+    if detail_parts:
+        why_it_matters += " through " + ", ".join(detail_parts)
+    why_it_matters += "."
+
+    if not is_actionable:
+        amount_rationale = (
+            "No sell-down amount is being recommended because the evidence is not strong enough after the current guardrails are applied."
+        )
+    elif reduction_pct >= 0.999:
+        amount_rationale = "The current recommendation is to sell the full position because the underperformance is severe and there is not enough offsetting evidence to justify keeping even a small stake."
+    else:
+        amount_rationale = (
+            f"The current size is a {reduction_pct:.0%} trim, rather than a full exit, because the system is balancing benchmark lag against the strength of the supporting evidence."
+        )
+        if outperform_windows > 0:
+            amount_rationale += f" Longer-horizon strength in {outperform_windows} trailing window(s) kept the recommendation from becoming even more aggressive."
+
+    return what_changed, why_it_matters, amount_rationale
+
+
+def _build_recommendation_guardrail_notes(
+    *,
+    is_fund: bool,
+    holding_days: Optional[int],
+    outperform_windows: int,
+    underperform_windows: int,
+    diagnosis_pressure_score: float,
+    current_weight: float,
+    reduction_pct: float,
+) -> list[str]:
+    """Explain which guardrails softened or blocked the action recommendation."""
+    notes: list[str] = []
+    if is_fund:
+        notes.append("ETF and fund positions are intentionally kept out of the single-stock sell rule.")
+    if holding_days is not None and holding_days < 120:
+        notes.append("The holding period is still short, so the system avoids treating the early return gap as durable evidence.")
+    if outperform_windows >= 2:
+        notes.append("Strong trailing outperformance in multiple longer windows softened the recommendation.")
+    elif outperform_windows == 1:
+        notes.append("Some longer-horizon strength is still present, so the recommendation is moderated rather than absolute.")
+    if reduction_pct > 0 and diagnosis_pressure_score < 30 and current_weight < 0.05 and underperform_windows <= 1:
+        notes.append("The trim stays relatively small because the portfolio impact is still limited.")
+    if not notes and reduction_pct == 0:
+        notes.append("Current guardrails blocked a sell call because the evidence was not consistent enough.")
+    return notes
+
+
 def _build_holding_action_recommendations(
     bundle: dict[str, Any],
     holding_action_needs: list[HoldingActionNeed],
@@ -2080,6 +2182,29 @@ def _build_holding_action_recommendations(
             + trailing_window_evidence
             + (list(getattr(action_need, "supporting_evidence", [])[:2]) if action_need is not None else [])
         )
+        what_changed, why_it_matters, amount_rationale = _build_recommendation_explanation_parts(
+            ticker=ticker,
+            recommendation_label=recommendation_label,
+            reduction_pct=reduction_pct,
+            weighted_avg_buy_date=weighted_avg_buy_date,
+            excess_return_vs_benchmark=excess_return_vs_benchmark,
+            diagnosis_pressure_score=diagnosis_pressure_score,
+            linked_primary_concern=linked_primary_concern,
+            underperform_windows=underperform_windows,
+            outperform_windows=outperform_windows,
+            current_weight=current_weight,
+            variance_contribution_pct=variance_contribution_pct,
+            is_actionable=is_actionable,
+        )
+        guardrail_notes = _build_recommendation_guardrail_notes(
+            is_fund=is_fund,
+            holding_days=holding_days,
+            outperform_windows=outperform_windows,
+            underperform_windows=underperform_windows,
+            diagnosis_pressure_score=diagnosis_pressure_score,
+            current_weight=current_weight,
+            reduction_pct=reduction_pct,
+        )
 
         recommendations.append(
             HoldingActionRecommendation(
@@ -2128,8 +2253,12 @@ def _build_holding_action_recommendations(
                     linked_primary_concern=linked_primary_concern,
                     is_actionable=is_actionable,
                 ),
+                what_changed=what_changed,
+                why_it_matters=why_it_matters,
+                amount_rationale=amount_rationale,
                 reasoning_points=reasoning_points,
                 supporting_evidence=supporting_evidence[:6],
+                guardrail_notes=guardrail_notes,
                 confidence_score=confidence_score,
                 confidence_band=confidence_band,
                 is_actionable=is_actionable,
