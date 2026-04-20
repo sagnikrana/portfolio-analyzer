@@ -299,6 +299,9 @@ class HoldingActionRecommendation(BaseModel):
     shares_to_sell: Optional[float] = None
     value_to_sell: Optional[float] = None
     target_weight_after_action: Optional[float] = None
+    projected_weight_reduction_pct_points: Optional[float] = None
+    projected_variance_reduction_pct_points: Optional[float] = None
+    projected_relative_drag_reduction_pct_points: Optional[float] = None
     performance_window_start: Optional[str] = None
     performance_window_end: Optional[str] = None
     performance_window_label: str
@@ -323,6 +326,8 @@ class HoldingActionRecommendation(BaseModel):
     amount_rationale: str = ""
     explicit_sell_modifiers: list[str] = Field(default_factory=list)
     modifier_score: float = 0.0
+    portfolio_impact_summary: str = ""
+    portfolio_impact_bullets: list[str] = Field(default_factory=list)
     reasoning_points: list[str] = Field(default_factory=list)
     supporting_evidence: list[str] = Field(default_factory=list)
     guardrail_notes: list[str] = Field(default_factory=list)
@@ -2052,6 +2057,56 @@ def _build_recommendation_guardrail_notes(
     return notes
 
 
+def _build_portfolio_impact_preview(
+    *,
+    ticker: str,
+    current_weight: float,
+    reduction_pct: float,
+    variance_contribution_pct: float,
+    excess_return_vs_benchmark: Optional[float],
+) -> tuple[float, float, float, str, list[str]]:
+    """Estimate what likely improves if the holding is trimmed or sold.
+
+    This is intentionally a preview, not a full portfolio re-optimization. The
+    goal is to explain directionally useful outcomes in user language:
+    - lower concentration from a smaller position
+    - lower volatility from reducing a variance contributor
+    - less exposure to a holding that has lagged the market
+    """
+    weight_reduction = round(current_weight * reduction_pct, 4)
+    variance_reduction = round((variance_contribution_pct or 0.0) * reduction_pct, 4)
+    relative_drag_reduction = round(weight_reduction * max(0.0, abs(excess_return_vs_benchmark or 0.0)), 4)
+
+    bullets: list[str] = []
+    if weight_reduction > 0:
+        bullets.append(
+            f"**Lower concentration:** {ticker}'s portfolio weight would fall by about {weight_reduction:.1%}."
+        )
+    if variance_reduction >= 0.005:
+        bullets.append(
+            f"**Lower volatility:** this could remove about {variance_reduction:.1%} of the holding's recent contribution to portfolio swings."
+        )
+    elif variance_contribution_pct > 0 and reduction_pct > 0:
+        bullets.append(
+            f"**Slightly steadier portfolio behavior:** this would trim a small part of the holding's recent volatility contribution."
+        )
+    if relative_drag_reduction > 0:
+        bullets.append(
+            f"**Less benchmark-lag exposure:** it would cut about {relative_drag_reduction:.1%} of weighted exposure to a holding that has been trailing the S&P 500."
+        )
+
+    if not bullets:
+        bullets.append("**Portfolio impact looks limited:** this action is mostly about discipline and monitoring rather than a large immediate portfolio change.")
+
+    summary = "If you make this move, the most likely near-term benefit is a cleaner portfolio shape with less reliance on this single lagging position."
+    if len(bullets) >= 3:
+        summary = "If you make this move, the portfolio should become less concentrated, a bit steadier, and less exposed to a name that has been lagging the market."
+    elif len(bullets) == 2:
+        summary = "If you make this move, the portfolio should become less dependent on this holding and somewhat less exposed to its recent weakness."
+
+    return weight_reduction, variance_reduction, relative_drag_reduction, summary, bullets
+
+
 def _build_holding_action_recommendations(
     bundle: dict[str, Any],
     holding_action_needs: list[HoldingActionNeed],
@@ -2232,6 +2287,19 @@ def _build_holding_action_recommendations(
         value_to_sell = round((current_value or 0.0) * reduction_pct, 2) if current_value is not None else None
         target_weight_after_action = round(current_weight * (1.0 - reduction_pct), 4) if current_weight is not None else None
         is_actionable = reduction_pct > 0
+        (
+            projected_weight_reduction_pct_points,
+            projected_variance_reduction_pct_points,
+            projected_relative_drag_reduction_pct_points,
+            portfolio_impact_summary,
+            portfolio_impact_bullets,
+        ) = _build_portfolio_impact_preview(
+            ticker=ticker,
+            current_weight=current_weight,
+            reduction_pct=reduction_pct,
+            variance_contribution_pct=variance_contribution_pct,
+            excess_return_vs_benchmark=excess_return_vs_benchmark,
+        )
         confidence_score, confidence_band = _recommendation_confidence(
             holding_days=holding_days,
             diagnosis_pressure_score=diagnosis_pressure_score,
@@ -2287,6 +2355,9 @@ def _build_holding_action_recommendations(
                 shares_to_sell=shares_to_sell,
                 value_to_sell=value_to_sell,
                 target_weight_after_action=target_weight_after_action,
+                projected_weight_reduction_pct_points=projected_weight_reduction_pct_points,
+                projected_variance_reduction_pct_points=projected_variance_reduction_pct_points,
+                projected_relative_drag_reduction_pct_points=projected_relative_drag_reduction_pct_points,
                 performance_window_start=weighted_avg_buy_date,
                 performance_window_end=analysis_end,
                 performance_window_label=(
@@ -2326,6 +2397,8 @@ def _build_holding_action_recommendations(
                 amount_rationale=amount_rationale,
                 explicit_sell_modifiers=explicit_sell_modifiers,
                 modifier_score=modifier_score,
+                portfolio_impact_summary=portfolio_impact_summary,
+                portfolio_impact_bullets=portfolio_impact_bullets,
                 reasoning_points=reasoning_points,
                 supporting_evidence=supporting_evidence[:6],
                 guardrail_notes=guardrail_notes,

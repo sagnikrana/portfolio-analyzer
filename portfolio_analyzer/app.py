@@ -3073,6 +3073,9 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "Sell / trim value": money_text(item.value_to_sell),
                 "Shares to sell": number_text(item.shares_to_sell, 4),
                 "Target weight": percent_display(item.target_weight_after_action),
+                "Weight reduction": percent_display(item.projected_weight_reduction_pct_points),
+                "Variance reduction": percent_display(item.projected_variance_reduction_pct_points),
+                "Lag-exposure reduction": percent_display(item.projected_relative_drag_reduction_pct_points),
                 "Since-buy vs S&P 500": percent_display(item.relative_performance_vs_benchmark),
                 "1Y vs S&P 500": percent_display(item.relative_1y_return_pct),
                 "3Y vs S&P 500": percent_display(item.relative_3y_return_pct),
@@ -3097,6 +3100,9 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "Sell / trim value",
                 "Shares to sell",
                 "Target weight",
+                "Weight reduction",
+                "Variance reduction",
+                "Lag-exposure reduction",
                 "Since-buy vs S&P 500",
                 "1Y vs S&P 500",
                 "3Y vs S&P 500",
@@ -3158,6 +3164,10 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             f"<li style='margin-bottom:7px'>{render_bold_markers(note)}</li>"
             for note in item.explicit_sell_modifiers[:4]
         ) or "<li>No extra filing, news, or macro modifiers were strong enough to change the recommendation.</li>"
+        impacts = "".join(
+            f"<li style='margin-bottom:7px'>{render_bold_markers(note)}</li>"
+            for note in item.portfolio_impact_bullets[:4]
+        ) or "<li>No meaningful portfolio impact was estimated.</li>"
         guardrails = "".join(
             f"<li style='margin-bottom:7px'>{note}</li>"
             for note in item.guardrail_notes[:3]
@@ -3196,6 +3206,9 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Recent performance vs the S&P 500</div>"
             f"<div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px'>{performance_window_chip('1Y', item.relative_1y_return_pct)}{performance_window_chip('3Y', item.relative_3y_return_pct)}{performance_window_chip('5Y', item.relative_5y_return_pct)}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>What likely improves if you do this</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.portfolio_impact_summary)}</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{impacts}</ul>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Extra market and company signals that added pressure</div>"
             f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{modifiers}</ul>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Evidence used</div>"
