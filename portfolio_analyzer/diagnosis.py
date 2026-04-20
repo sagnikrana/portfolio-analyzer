@@ -1799,11 +1799,56 @@ def _recommendation_reduction_from_underperformance(
         reduction = 0.35 if diagnosis_pressure_score >= 55 or variance_contribution_pct >= 0.02 else 0.25
         return ("Trim 35%" if reduction == 0.35 else "Trim 25%", "heavy_underperformance_trim", reduction)
     if underperformance >= 0.5:
-        reduction = 0.2 if diagnosis_pressure_score >= 30 else 0.15
+        reduction = 0.25 if diagnosis_pressure_score >= 45 or current_weight >= 0.08 else 0.2 if diagnosis_pressure_score >= 30 else 0.15
+        if reduction == 0.25:
+            return ("Trim 25%", "meaningful_underperformance_trim", reduction)
         return ("Trim 20%" if reduction == 0.2 else "Trim 15%", "meaningful_underperformance_trim", reduction)
-    if underperformance >= 0.25 and diagnosis_pressure_score >= 40:
+    if underperformance >= 0.35 and (diagnosis_pressure_score >= 30 or current_weight >= 0.05 or variance_contribution_pct >= 0.015):
+        reduction = 0.15 if diagnosis_pressure_score >= 45 or current_weight >= 0.08 else 0.1
+        return ("Trim 15%" if reduction == 0.15 else "Trim 10%", "moderate_underperformance_trim", reduction)
+    if underperformance >= 0.25 and diagnosis_pressure_score >= 30:
         return ("Trim 10%", "watchlist_trim", 0.10)
+    if underperformance >= 0.15 and current_weight >= 0.08:
+        return ("Trim 10%", "large_weak_position_trim", 0.10)
     return ("Hold for now", "hold_for_now", 0.0)
+
+
+def _recommendation_label_from_reduction(reduction_pct: float) -> str:
+    """Map a normalized trim size back to the user-facing action label."""
+    if reduction_pct >= 0.999:
+        return "Sell entire position"
+    if reduction_pct >= 0.5:
+        return "Reduce by 50%"
+    if reduction_pct >= 0.35:
+        return "Trim 35%"
+    if reduction_pct >= 0.25:
+        return "Trim 25%"
+    if reduction_pct >= 0.2:
+        return "Trim 20%"
+    if reduction_pct >= 0.15:
+        return "Trim 15%"
+    if reduction_pct >= 0.1:
+        return "Trim 10%"
+    return "Hold for now"
+
+
+def _normalize_recommendation_reduction(reduction_pct: float) -> float:
+    """Snap raw trim math to a small set of user-facing, explainable action sizes."""
+    if reduction_pct >= 0.999:
+        return 1.0
+    if reduction_pct >= 0.5:
+        return 0.5
+    if reduction_pct >= 0.35:
+        return 0.35
+    if reduction_pct >= 0.25:
+        return 0.25
+    if reduction_pct >= 0.2:
+        return 0.2
+    if reduction_pct >= 0.15:
+        return 0.15
+    if reduction_pct >= 0.1:
+        return 0.1
+    return 0.0
 
 
 def _build_recommendation_summary(
@@ -1973,17 +2018,22 @@ def _build_holding_action_recommendations(
                 diagnosis_pressure_score=diagnosis_pressure_score,
                 variance_contribution_pct=variance_contribution_pct,
             )
+            if underperform_windows >= 2:
+                escalation = 0.10 if underperform_windows == 2 else 0.15
+                if diagnosis_pressure_score >= 45 or current_weight >= 0.08 or variance_contribution_pct >= 0.02:
+                    escalation += 0.05
+                reduction_pct = min(1.0, reduction_pct + escalation)
+                recommendation_code = "persistent_underperformance_escalation"
+            elif underperform_windows >= 1 and (diagnosis_pressure_score >= 50 or current_weight >= 0.08):
+                reduction_pct = min(1.0, reduction_pct + 0.05)
+                recommendation_code = "persistent_underperformance_supports_trim"
             if outperform_windows >= 2:
                 reduction_pct = max(0.0, reduction_pct - 0.15)
                 if reduction_pct == 0:
                     recommendation_label = "Hold for now"
                     recommendation_code = "long_horizon_outperformance_offsets_since_buy_lag"
-                elif reduction_pct <= 0.15:
-                    recommendation_label = "Trim 15%"
-                elif reduction_pct <= 0.25:
-                    recommendation_label = "Trim 25%"
-                elif reduction_pct <= 0.35:
-                    recommendation_label = "Trim 35%"
+            reduction_pct = _normalize_recommendation_reduction(reduction_pct)
+            recommendation_label = _recommendation_label_from_reduction(reduction_pct)
             reasoning_points = [
                 f"Since {weighted_avg_buy_date or 'the weighted-average buy date'}, the holding has lagged the trade-matched S&P 500 by {(excess_return_vs_benchmark or 0.0):.1%}.",
             ]
@@ -1998,6 +2048,10 @@ def _build_holding_action_recommendations(
             if underperform_windows > 0:
                 reasoning_points.append(
                     f"It has also trailed the S&P 500 in {underperform_windows} of the trailing 1Y/3Y/5Y windows that were available."
+                )
+            if current_weight >= 0.08 and excess_return_vs_benchmark <= -0.15:
+                reasoning_points.append(
+                    f"It is also a large enough position at {current_weight:.1%} of the portfolio that even moderate underperformance can do real damage."
                 )
             if outperform_windows > 0:
                 reasoning_points.append(
