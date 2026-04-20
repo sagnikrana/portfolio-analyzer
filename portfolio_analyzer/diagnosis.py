@@ -305,6 +305,15 @@ class HoldingActionRecommendation(BaseModel):
     holding_return_pct: Optional[float] = None
     benchmark_return_pct: Optional[float] = None
     relative_performance_vs_benchmark: Optional[float] = None
+    stock_1y_return_pct: Optional[float] = None
+    benchmark_1y_return_pct: Optional[float] = None
+    relative_1y_return_pct: Optional[float] = None
+    stock_3y_return_pct: Optional[float] = None
+    benchmark_3y_return_pct: Optional[float] = None
+    relative_3y_return_pct: Optional[float] = None
+    stock_5y_return_pct: Optional[float] = None
+    benchmark_5y_return_pct: Optional[float] = None
+    relative_5y_return_pct: Optional[float] = None
     linked_action_need_label: Optional[str] = None
     linked_primary_concern: Optional[str] = None
     diagnosis_pressure_score: float = 0.0
@@ -480,6 +489,7 @@ def load_diagnosis_bundle(base_dir: Path) -> dict[str, Any]:
         "risk_metrics": _load_csv(base_dir / "risk_metric_scores.csv"),
         "risk_dimensions": _load_csv(base_dir / "risk_dimension_scores.csv"),
         "open_positions": _load_csv(base_dir / "open_positions.csv"),
+        "holding_performance_context": _load_csv(base_dir / "holding_performance_context.csv"),
         "sector_allocation": _load_csv(base_dir / "sector_allocation.csv"),
         "performance_attribution": _load_csv(base_dir / "performance_attribution.csv"),
         "volatility_drivers": _load_csv(base_dir / "top_volatility_drivers_2025.csv"),
@@ -1741,6 +1751,26 @@ def _recommendation_confidence(
     return score, _driver_confidence_band(score)
 
 
+def _relative_window_readout(
+    performance_row: dict[str, Any],
+) -> tuple[int, int, list[str]]:
+    """Summarize whether 1Y/3Y/5Y windows reinforce or soften the sell case."""
+    underperform_count = 0
+    outperform_count = 0
+    evidence: list[str] = []
+    for years in (1, 3, 5):
+        relative = _safe_float(performance_row.get(f"relative_{years}y_return_pct"))
+        if relative is None:
+            continue
+        if relative < 0:
+            underperform_count += 1
+            evidence.append(f"Trailing {years}Y vs S&P 500: {relative:.1%}")
+        elif relative > 0:
+            outperform_count += 1
+            evidence.append(f"Trailing {years}Y vs S&P 500: +{relative:.1%}")
+    return underperform_count, outperform_count, evidence
+
+
 def _recommendation_reduction_from_underperformance(
     *,
     excess_return_vs_benchmark: float,
@@ -1838,6 +1868,7 @@ def _build_holding_action_recommendations(
     evidence help size the trim, but they do not create a sell call on their own.
     """
     positions = bundle["open_positions"].copy()
+    performance_context = bundle["holding_performance_context"].copy()
     volatility = bundle["volatility_drivers"].copy()
     if positions.empty:
         return []
@@ -1859,6 +1890,10 @@ def _build_holding_action_recommendations(
     positions["variance_contribution_pct"] = pd.to_numeric(
         positions.get("variance_contribution_pct"), errors="coerce"
     ).fillna(0.0)
+    performance_lookup = {}
+    if not performance_context.empty:
+        for row in performance_context.to_dict(orient="records"):
+            performance_lookup[str(row.get("ticker"))] = row
 
     action_need_lookup = {item.ticker: item for item in holding_action_needs}
     contribution_lookup = {item.ticker: item for item in holding_risk_contributions}
@@ -1887,6 +1922,8 @@ def _build_holding_action_recommendations(
         diagnosis_pressure_score = (
             action_need.action_pressure_score if action_need is not None else 0.0
         )
+        performance_row = performance_lookup.get(ticker, {})
+        underperform_windows, outperform_windows, trailing_window_evidence = _relative_window_readout(performance_row)
         linked_primary_concern = (
             action_need.linked_primary_concern
             if action_need is not None
@@ -1922,6 +1959,13 @@ def _build_holding_action_recommendations(
             reasoning_points = [
                 "The holding has not lagged the trade-matched S&P 500 by enough to justify trimming under the current rule set.",
             ]
+        elif underperform_windows == 0 and outperform_windows >= 1:
+            recommendation_label = "Hold for now"
+            recommendation_code = "long_horizon_support_still_positive"
+            reduction_pct = 0.0
+            reasoning_points = [
+                "The holding has lagged since your buy date, but the trailing 1Y/3Y/5Y comparison still shows enough longer-horizon support that the system is not issuing a sell recommendation yet.",
+            ]
         else:
             recommendation_label, recommendation_code, reduction_pct = _recommendation_reduction_from_underperformance(
                 excess_return_vs_benchmark=excess_return_vs_benchmark,
@@ -1929,6 +1973,17 @@ def _build_holding_action_recommendations(
                 diagnosis_pressure_score=diagnosis_pressure_score,
                 variance_contribution_pct=variance_contribution_pct,
             )
+            if outperform_windows >= 2:
+                reduction_pct = max(0.0, reduction_pct - 0.15)
+                if reduction_pct == 0:
+                    recommendation_label = "Hold for now"
+                    recommendation_code = "long_horizon_outperformance_offsets_since_buy_lag"
+                elif reduction_pct <= 0.15:
+                    recommendation_label = "Trim 15%"
+                elif reduction_pct <= 0.25:
+                    recommendation_label = "Trim 25%"
+                elif reduction_pct <= 0.35:
+                    recommendation_label = "Trim 35%"
             reasoning_points = [
                 f"Since {weighted_avg_buy_date or 'the weighted-average buy date'}, the holding has lagged the trade-matched S&P 500 by {(excess_return_vs_benchmark or 0.0):.1%}.",
             ]
@@ -1939,6 +1994,14 @@ def _build_holding_action_recommendations(
             if variance_contribution_pct >= 0.02:
                 reasoning_points.append(
                     f"It contributed {variance_contribution_pct:.1%} of the tracked 2025 portfolio variance, so it is not just a weak performer in isolation."
+                )
+            if underperform_windows > 0:
+                reasoning_points.append(
+                    f"It has also trailed the S&P 500 in {underperform_windows} of the trailing 1Y/3Y/5Y windows that were available."
+                )
+            if outperform_windows > 0:
+                reasoning_points.append(
+                    f"At the same time, it has still beaten the S&P 500 in {outperform_windows} trailing windows, so the recommendation is moderated rather than absolute."
                 )
 
         shares_to_sell = round((quantity or 0.0) * reduction_pct, 4) if quantity is not None else None
@@ -1960,6 +2023,7 @@ def _build_holding_action_recommendations(
                 f"Diagnosis pressure: {diagnosis_pressure_score:.1f}/100" if diagnosis_pressure_score else None,
                 f"Variance contribution (2025): {variance_contribution_pct:.1%}" if variance_contribution_pct else None,
             ]
+            + trailing_window_evidence
             + (list(getattr(action_need, "supporting_evidence", [])[:2]) if action_need is not None else [])
         )
 
@@ -1986,6 +2050,15 @@ def _build_holding_action_recommendations(
                 holding_return_pct=unrealized_return_pct,
                 benchmark_return_pct=benchmark_return_since_buy,
                 relative_performance_vs_benchmark=excess_return_vs_benchmark,
+                stock_1y_return_pct=_safe_float(performance_row.get("stock_1y_return_pct")),
+                benchmark_1y_return_pct=_safe_float(performance_row.get("benchmark_1y_return_pct")),
+                relative_1y_return_pct=_safe_float(performance_row.get("relative_1y_return_pct")),
+                stock_3y_return_pct=_safe_float(performance_row.get("stock_3y_return_pct")),
+                benchmark_3y_return_pct=_safe_float(performance_row.get("benchmark_3y_return_pct")),
+                relative_3y_return_pct=_safe_float(performance_row.get("relative_3y_return_pct")),
+                stock_5y_return_pct=_safe_float(performance_row.get("stock_5y_return_pct")),
+                benchmark_5y_return_pct=_safe_float(performance_row.get("benchmark_5y_return_pct")),
+                relative_5y_return_pct=_safe_float(performance_row.get("relative_5y_return_pct")),
                 linked_action_need_label=action_need.action_label if action_need is not None else None,
                 linked_primary_concern=linked_primary_concern,
                 diagnosis_pressure_score=diagnosis_pressure_score,

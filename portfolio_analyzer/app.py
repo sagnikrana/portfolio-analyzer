@@ -589,6 +589,7 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
     yahoo_map = {symbol: normalize_ticker_for_yahoo(symbol) for symbol in tickers}
     yahoo_tickers = [yahoo_map[symbol] for symbol in tickers]
     history_start = (pd.Timestamp(start_date) - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
+    long_horizon_start = (pd.Timestamp.today().normalize() - pd.DateOffset(years=5) - pd.Timedelta(days=15)).strftime("%Y-%m-%d")
 
     if yahoo_tickers:
         ticker_history_raw = yf.download(
@@ -602,8 +603,21 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
         ticker_close = ticker_close.rename(
             columns={yahoo_symbol: original for original, yahoo_symbol in yahoo_map.items()}
         )
+
+        long_horizon_history_raw = yf.download(
+            tickers=yahoo_tickers,
+            start=long_horizon_start,
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+        )
+        long_horizon_ticker_close = extract_close_frame(long_horizon_history_raw, yahoo_tickers)
+        long_horizon_ticker_close = long_horizon_ticker_close.rename(
+            columns={yahoo_symbol: original for original, yahoo_symbol in yahoo_map.items()}
+        )
     else:
         ticker_close = pd.DataFrame()
+        long_horizon_ticker_close = pd.DataFrame()
 
     benchmark_raw = yf.download(
         tickers=benchmark_symbol,
@@ -615,6 +629,16 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
     benchmark_close = extract_close_frame(benchmark_raw, [benchmark_symbol]).iloc[:, 0].dropna()
     benchmark_close.name = benchmark_symbol
 
+    benchmark_long_raw = yf.download(
+        tickers=benchmark_symbol,
+        start=long_horizon_start,
+        auto_adjust=False,
+        progress=False,
+        threads=False,
+    )
+    benchmark_long_close = extract_close_frame(benchmark_long_raw, [benchmark_symbol]).iloc[:, 0].dropna()
+    benchmark_long_close.name = benchmark_symbol
+
     latest_prices = ticker_close.ffill().iloc[-1].dropna().to_dict() if not ticker_close.empty else {}
     latest_benchmark_price = float(benchmark_close.iloc[-1]) if not benchmark_close.empty else None
     sector_by_ticker = {symbol: fetch_yahoo_sector_label(yahoo_symbol) for symbol, yahoo_symbol in yahoo_map.items()}
@@ -623,6 +647,8 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
         "ticker_close": ticker_close,
         "latest_prices": latest_prices,
         "benchmark_close": benchmark_close,
+        "long_horizon_ticker_close": long_horizon_ticker_close,
+        "long_horizon_benchmark_close": benchmark_long_close,
         "latest_benchmark_price": latest_benchmark_price,
         "sector_by_ticker": sector_by_ticker,
     }
@@ -657,6 +683,16 @@ def price_return_between_dates(price_series: pd.Series, start_date: Any, end_dat
     if start_price <= 0:
         return None
     return (end_price / start_price) - 1
+
+
+def trailing_price_return(price_series: pd.Series, years: int) -> float | None:
+    if price_series.empty:
+        return None
+    end_ts = pd.Timestamp(price_series.index.max()).normalize()
+    start_target = end_ts - pd.DateOffset(years=years)
+    if pd.Timestamp(price_series.index.min()).normalize() > start_target:
+        return None
+    return price_return_between_dates(price_series, start_target, end_ts)
 
 
 def build_daily_share_matrix(df: pd.DataFrame, market_index: pd.Index, tickers: list[str]) -> pd.DataFrame:
@@ -783,6 +819,49 @@ def annualized_return(final_value: float, initial_value: float, years: float) ->
     if years <= 0 or initial_value <= 0 or final_value <= 0:
         return None
     return (final_value / initial_value) ** (1 / years) - 1
+
+
+def build_holding_performance_context(
+    open_positions_df: pd.DataFrame,
+    market_data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Build trailing 1Y/3Y/5Y return context for current holdings.
+
+    The recommendation layer needs a broader lens than "since you bought it".
+    This dataset answers whether a holding that has lagged since purchase has
+    also lagged the S&P 500 across broader trailing windows.
+    """
+    ticker_close = market_data.get("long_horizon_ticker_close", pd.DataFrame())
+    benchmark_close = market_data.get("long_horizon_benchmark_close", pd.Series(dtype=float))
+    if open_positions_df.empty or benchmark_close.empty:
+        return []
+
+    benchmark_window_returns = {
+        years: trailing_price_return(benchmark_close, years)
+        for years in (1, 3, 5)
+    }
+    as_of_date = pd.Timestamp(benchmark_close.index.max()).date().isoformat()
+    rows: list[dict[str, Any]] = []
+    for _, row in open_positions_df.iterrows():
+        ticker = row.get("ticker")
+        if not ticker or ticker not in ticker_close.columns:
+            continue
+        series = ticker_close[ticker].dropna()
+        if series.empty:
+            continue
+        context_row: dict[str, Any] = {"ticker": ticker, "as_of_date": as_of_date}
+        for years in (1, 3, 5):
+            stock_return = trailing_price_return(series, years)
+            benchmark_return = benchmark_window_returns.get(years)
+            context_row[f"stock_{years}y_return_pct"] = stock_return
+            context_row[f"benchmark_{years}y_return_pct"] = benchmark_return
+            context_row[f"relative_{years}y_return_pct"] = (
+                stock_return - benchmark_return
+                if stock_return is not None and benchmark_return is not None
+                else None
+            )
+        rows.append(context_row)
+    return rows
 
 
 def xnpv(rate: float, cashflows: list[tuple[pd.Timestamp, float]]) -> float:
@@ -1019,6 +1098,7 @@ def build_market_enriched_metrics(
     open_positions_df["excess_return_vs_benchmark"] = (
         open_positions_df["unrealized_return_pct"] - open_positions_df["benchmark_return_since_buy"]
     )
+    holding_performance_context = build_holding_performance_context(open_positions_df, market_data)
 
     current_portfolio_value = float(open_positions_df["current_value"].fillna(0.0).sum())
     total_unrealized_pnl = float(open_positions_df["unrealized_pnl"].fillna(0.0).sum())
@@ -1479,6 +1559,7 @@ def build_market_enriched_metrics(
         "headline_metrics": headline_metrics,
         "risk_score": risk_score,
         "open_positions": open_positions_df.sort_values("current_value", ascending=False).round(4).to_dict(orient="records"),
+        "holding_performance_context": holding_performance_context,
         "sector_allocation": sector_allocation[["sector", "current_value", "weight_pct", "excess_return_vs_benchmark"]]
         .round(4)
         .to_dict(orient="records"),
@@ -1657,6 +1738,7 @@ def save_diagnosis_artifacts(
         "files": [
             "transactions.csv",
             "open_positions.csv",
+            "holding_performance_context.csv",
             "sector_allocation.csv",
             "timeseries.csv",
             "risk_metric_scores.csv",
@@ -1673,6 +1755,7 @@ def save_diagnosis_artifacts(
     file_writes: list[tuple[str, Any]] = [
         ("transactions.csv", transactions),
         ("open_positions.csv", market_metrics["open_positions"]),
+        ("holding_performance_context.csv", market_metrics.get("holding_performance_context", [])),
         ("sector_allocation.csv", market_metrics["sector_allocation"]),
         ("timeseries.csv", market_metrics["timeseries"]),
         ("risk_metric_scores.csv", metric_frame),
@@ -2377,6 +2460,19 @@ def humanize_macro_flag(flag: str) -> str:
     return mapping.get(str(flag or "").strip(), str(flag or ""))
 
 
+def short_concern_badge(label: str | None) -> str:
+    """Shorter concern label for compact dashboard chips."""
+    mapping = {
+        "Concentration risk": "Large-position risk",
+        "Market-relative risk": "Sharper-than-market moves",
+        "Behavioral risk": "Trading-pattern risk",
+        "Sector crowding": "Sector crowding",
+        "Company-specific risk": "Company-specific issues",
+        "Macro sensitivity": "Rate / macro sensitivity",
+    }
+    return mapping.get(str(label or "").strip(), str(label or "Portfolio review"))
+
+
 def build_action_summary_for_users(action_need: Any, contribution: Any) -> str:
     """Rewrite the action-layer summary into plain user language for the dashboard.
 
@@ -2409,6 +2505,19 @@ def build_action_summary_for_users(action_need: Any, contribution: Any) -> str:
     return prefix + " The main reason is simple: " + concern_explanation.lower() + "." + score_clause
 
 
+def humanize_action_reasoning_point(text: Any) -> str:
+    """Make recommendation reasoning read naturally in the Risk Actions tab."""
+    point = str(text or "").strip()
+    if not point:
+        return ""
+    point = point.replace("trade-matched S&P 500", "S&P 500 over the same period")
+    point = point.replace("diagnosis pressure", "extra portfolio risk pressure")
+    point = point.replace("trimming easier to defend", "a trim more reasonable")
+    point = point.replace("It has also trailed the S&P 500 in", "It also underperformed the S&P 500 in")
+    point = point.replace("At the same time, it has still beaten the S&P 500 in", "At the same time, it still beat the S&P 500 in")
+    return point
+
+
 def humanize_evidence_point(evidence: Any, ticker: str | None = None) -> str:
     text = str(evidence or "").strip()
     ticker_label = ticker or "This holding"
@@ -2435,6 +2544,24 @@ def humanize_evidence_point(evidence: Any, ticker: str | None = None) -> str:
     if text.startswith("Latest filed fundamentals: "):
         value = text.replace("Latest filed fundamentals: ", "", 1)
         return f"The latest filed financial snapshot used here is dated {value}."
+    if text.startswith("Holding return since weighted-average buy date: "):
+        value = text.replace("Holding return since weighted-average buy date: ", "", 1)
+        return f"Since the average buy date, {ticker_label} returned {value}."
+    if text.startswith("Benchmark return over the same period: "):
+        value = text.replace("Benchmark return over the same period: ", "", 1)
+        return f"Over that same period, the S&P 500 returned {value}."
+    if text.startswith("Relative performance vs benchmark: "):
+        value = text.replace("Relative performance vs benchmark: ", "", 1)
+        return f"Relative to the S&P 500, {ticker_label} was {value}."
+    if text.startswith("1Y relative vs S&P 500: "):
+        value = text.replace("1Y relative vs S&P 500: ", "", 1)
+        return f"Over the last year, {ticker_label} was {value} versus the S&P 500."
+    if text.startswith("3Y relative vs S&P 500: "):
+        value = text.replace("3Y relative vs S&P 500: ", "", 1)
+        return f"Over the last 3 years, {ticker_label} was {value} versus the S&P 500."
+    if text.startswith("5Y relative vs S&P 500: "):
+        value = text.replace("5Y relative vs S&P 500: ", "", 1)
+        return f"Over the last 5 years, {ticker_label} was {value} versus the S&P 500."
     return text
 
 
@@ -2899,6 +3026,180 @@ def build_confidence_completeness_html(diagnosis: PortfolioRiskDiagnosis) -> str
         "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Evidence Gaps</div>"
         f"<ul style='margin-top:14px;color:#e2e8f0;padding-left:18px'>{gaps}</ul>"
         "</div>"
+        "</div>"
+    )
+
+
+def performance_window_chip(label: str, relative_value: float | None) -> str:
+    """Render one trailing-window comparison chip for the Risk Actions tab."""
+    if relative_value is None:
+        tone = "#cbd5e1"
+        background = "rgba(51,65,85,.55)"
+        text = "Not enough history"
+    elif relative_value >= 0:
+        tone = "#34d399"
+        background = "rgba(6,78,59,.22)"
+        text = f"Beat S&P 500 by {percent_display(relative_value)}"
+    else:
+        tone = "#f87171"
+        background = "rgba(127,29,29,.22)"
+        text = f"Lagged S&P 500 by {percent_display(abs(relative_value))}"
+    return (
+        "<div style='padding:10px 12px;border-radius:14px;"
+        f"background:{background};border:1px solid rgba(148,163,184,.14)'>"
+        f"<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>{label}</div>"
+        f"<div style='font-size:13px;color:{tone};font-weight:700;margin-top:6px'>{text}</div>"
+        "</div>"
+    )
+
+
+def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
+    """Create a review table for the new Risk Actions tab."""
+    rows = []
+    for item in diagnosis.holding_action_recommendations:
+        rows.append(
+            {
+                "Ticker": item.ticker,
+                "Action": item.recommendation_label,
+                "Actionable": "Yes" if item.is_actionable else "No",
+                "Current weight": percent_display(item.current_weight),
+                "Current value": money_text(item.current_value),
+                "Sell / trim value": money_text(item.value_to_sell),
+                "Shares to sell": number_text(item.shares_to_sell, 4),
+                "Target weight": percent_display(item.target_weight_after_action),
+                "Since-buy vs S&P 500": percent_display(item.relative_performance_vs_benchmark),
+                "1Y vs S&P 500": percent_display(item.relative_1y_return_pct),
+                "3Y vs S&P 500": percent_display(item.relative_3y_return_pct),
+                "5Y vs S&P 500": percent_display(item.relative_5y_return_pct),
+                "Confidence": item.confidence_band,
+                "Why": item.recommendation_summary,
+            }
+        )
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "Ticker",
+                "Action",
+                "Actionable",
+                "Current weight",
+                "Current value",
+                "Sell / trim value",
+                "Shares to sell",
+                "Target weight",
+                "Since-buy vs S&P 500",
+                "1Y vs S&P 500",
+                "3Y vs S&P 500",
+                "5Y vs S&P 500",
+                "Confidence",
+                "Why",
+            ]
+        )
+    action_order = {"Sell entire position": 0, "Reduce by 50%": 1, "Trim 35%": 2, "Trim 25%": 3, "Trim 20%": 4, "Trim 15%": 5, "Trim 10%": 6, "Hold for now": 7}
+    frame = pd.DataFrame(rows)
+    frame["_sort"] = frame["Action"].map(action_order).fillna(99)
+    return frame.sort_values(["_sort", "Ticker"]).drop(columns=["_sort"]).reset_index(drop=True)
+
+
+def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
+    """Render simple sell/trim guidance backed by relative performance windows."""
+    actionable = [item for item in diagnosis.holding_action_recommendations if item.is_actionable]
+    held = [item for item in diagnosis.holding_action_recommendations if not item.is_actionable][:4]
+
+    if not actionable:
+        return (
+            "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            "<div style='font-size:20px;font-weight:800;color:#f8fafc'>Risk Actions</div>"
+            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No holdings currently meet the stricter sell / trim rule. The current logic only recommends action when a holding has actually been underperforming the S&P 500 over a meaningful period.</div>"
+            "</div>"
+        )
+
+    cards = ""
+    for item in actionable:
+        if item.recommendation_label == "Sell entire position":
+            action_line = (
+                f"Sell the full position: about <strong>{number_text(item.shares_to_sell, 4)}</strong> shares, "
+                f"or roughly <strong>{money_text(item.value_to_sell)}</strong>."
+            )
+        else:
+            action_line = (
+                f"{item.recommendation_label} now: sell about <strong>{number_text(item.shares_to_sell, 4)}</strong> shares "
+                f"(roughly <strong>{money_text(item.value_to_sell)}</strong>) and bring the weight from "
+                f"<strong>{percent_display(item.current_weight)}</strong> down to about "
+                f"<strong>{percent_display(item.target_weight_after_action)}</strong>."
+            )
+
+        reasoning = "".join(
+            f"<li style='margin-bottom:7px'>{humanize_action_reasoning_point(point)}</li>"
+            for point in item.reasoning_points[:4]
+        ) or "<li>No extra reasoning was attached.</li>"
+
+        evidence = "".join(
+            f"<li style='margin-bottom:7px'>{humanize_evidence_point(point, item.ticker)}</li>"
+            for point in item.supporting_evidence[:5]
+        ) or "<li>No supporting evidence was attached.</li>"
+
+        cards += (
+            "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
+            "background:rgba(15,23,42,.34);margin-bottom:14px'>"
+            "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
+            "<div>"
+            f"<div style='font-size:22px;font-weight:800;color:#f8fafc'>{item.ticker}"
+            + (f"<span style='font-size:15px;font-weight:500;color:#cbd5e1;margin-left:10px'>({item.sector})</span>" if item.sector else "")
+            + "</div>"
+            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Confidence: <strong style='color:#f8fafc'>{item.confidence_band}</strong> · Since-buy window: <strong style='color:#f8fafc'>{percent_display(item.relative_performance_vs_benchmark)}</strong> versus the S&P 500</div>"
+            "</div>"
+            "<div style='display:flex;gap:8px;flex-wrap:wrap'>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(127,29,29,.22);border:1px solid rgba(248,113,113,.22);color:#fca5a5;font-size:12px;font-weight:700'>{item.recommendation_label}</div>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:#93c5fd;font-size:12px;font-weight:700'>{short_concern_badge(item.linked_primary_concern)}</div>"
+            "</div>"
+            "</div>"
+            "<div style='font-size:16px;line-height:1.6;color:#e2e8f0;margin-top:14px'>"
+            f"{action_line}"
+            "</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:10px'>{item.recommendation_summary}</div>"
+            "<div style='display:grid;grid-template-columns:minmax(280px,1.2fr) minmax(250px,1fr);gap:16px;margin-top:16px'>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Why the system is recommending action</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{reasoning}</ul>"
+            "</div>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Recent performance vs the S&P 500</div>"
+            f"<div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px'>{performance_window_chip('1Y', item.relative_1y_return_pct)}{performance_window_chip('3Y', item.relative_3y_return_pct)}{performance_window_chip('5Y', item.relative_5y_return_pct)}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Evidence used</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence}</ul>"
+            "</div>"
+            "</div>"
+            "</div>"
+        )
+
+    held_section = ""
+    if held:
+        held_cards = "".join(
+            "<div style='padding:12px 14px;border-radius:14px;border:1px solid rgba(148,163,184,.12);background:rgba(15,23,42,.26)'>"
+            f"<div style='font-size:16px;font-weight:700;color:#f8fafc'>{item.ticker} <span style='font-size:12px;color:#34d399;font-weight:700'>{item.recommendation_label}</span></div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:8px'>{item.recommendation_summary}</div>"
+            "</div>"
+            for item in held
+        )
+        held_section = (
+            "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94));margin-top:18px'>"
+            "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Names Not Flagged for Sale Right Now</div>"
+            "<div style='font-size:13px;color:#93c5fd;margin-top:6px'>This is here to show the rule is not blindly selling every higher-risk name. Some holdings still look acceptable once their broader performance versus the S&P 500 is considered.</div>"
+            f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:14px'>{held_cards}</div>"
+            "</div>"
+        )
+
+    return (
+        "<div style='display:grid;gap:16px'>"
+        "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Risk Actions</div>"
+        "<div style='font-size:14px;color:#93c5fd;margin-top:8px'>This tab is narrower than a full rebalance engine. It focuses on one question: which holdings now have enough underperformance versus the S&P 500, combined with portfolio risk, to justify trimming or selling.</div>"
+        f"<div style='margin-top:16px'>{cards}</div>"
+        "</div>"
+        f"{held_section}"
         "</div>"
     )
 
@@ -4462,6 +4763,8 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         market_metrics,
         market_data,
     )
+    risk_actions_html = build_risk_actions_html(diagnosis)
+    risk_actions_df = build_risk_actions_frame(diagnosis)
     eq_fig = plot_equity_curves(market_metrics["timeseries"])
     sector_fig = plot_sector_allocation(market_metrics.get("sector_allocation", []))
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
@@ -4504,6 +4807,8 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         diagnosis_driver_html,
         diagnosis_chart_payload,
         gr.update(choices=diagnosis_stock_choices, value="Portfolio"),
+        risk_actions_html,
+        risk_actions_df,
         diagnosis_supporting_metrics_df,
         diagnosis_holding_fundamentals_df,
         diagnosis_narrative_evidence_df,
@@ -4714,6 +5019,13 @@ def build_app() -> gr.Blocks:
                             diagnosis_confidence_md = gr.HTML()
                         with gr.Accordion("Diagnosis Snapshot and Alignment", open=False):
                             diagnosis_summary_md = gr.HTML()
+                    with gr.Tab("Risk Actions", id="risk-actions"):
+                        risk_actions_md = gr.HTML()
+                        risk_actions_df = gr.Dataframe(
+                            label="Recommendation Detail",
+                            interactive=False,
+                            wrap=True,
+                        )
                     with gr.Tab("Risk Guide", id="risk-guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
@@ -4742,6 +5054,8 @@ def build_app() -> gr.Blocks:
                 diagnosis_driver_md,
                 diagnosis_chart_state,
                 diagnosis_stock_filter,
+                risk_actions_md,
+                risk_actions_df,
                 diagnosis_supporting_metrics_df,
                 diagnosis_holding_fundamentals_df,
                 diagnosis_narrative_evidence_df,
