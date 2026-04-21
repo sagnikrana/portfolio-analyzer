@@ -21,6 +21,19 @@ from plotly.subplots import make_subplots
 import yfinance as yf
 
 try:
+    from portfolio_analyzer.buy_candidates import (
+        BuyCandidateUniverseEntry,
+        buy_candidate_universe_frame,
+        load_buy_candidate_universe,
+    )
+except ModuleNotFoundError:
+    from buy_candidates import (
+        BuyCandidateUniverseEntry,
+        buy_candidate_universe_frame,
+        load_buy_candidate_universe,
+    )
+
+try:
     from portfolio_analyzer.diagnosis import (
         PortfolioPreferences,
         PortfolioRiskDiagnosis,
@@ -39,10 +52,14 @@ except ModuleNotFoundError:
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
 DATA_DIR = REPO_ROOT / "data"
+RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
+STRUCTURED_DIR = PROCESSED_DIR / "structured"
 INTERIM_DIR = DATA_DIR / "interim"
 DIAGNOSIS_DIR = PROCESSED_DIR / "diagnosis"
 DIAGNOSIS_RUNS_DIR = INTERIM_DIR / "diagnosis_runs"
+BUY_CANDIDATE_UNIVERSE_PATH = RAW_DIR / "buy_candidate_universe.csv"
+BUY_CANDIDATE_UNIVERSE_ENRICHED_PATH = STRUCTURED_DIR / "buy_candidate_universe_enriched.csv"
 DEFAULT_MODEL_NAME = "gemma:2b"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 BENCHMARK_SYMBOL = "^GSPC"
@@ -3507,6 +3524,320 @@ def build_buy_preferences_html(preferences: PortfolioPreferences | None) -> str:
     )
 
 
+@lru_cache(maxsize=1)
+def load_buy_candidate_universe_review_data() -> tuple[list[BuyCandidateUniverseEntry], pd.DataFrame, pd.DataFrame]:
+    """Load the curated buy universe and its enriched review surface.
+
+    This tab is intentionally lighter than the diagnosis flow. We want a quick,
+    reliable way to inspect the candidate universe without coupling it to a full
+    portfolio analysis run. The raw CSV is read through the typed
+    `BuyCandidateUniverseEntry` object so the app review surface stays aligned
+    with the object layer we plan to use for the future buy engine.
+    """
+    entries = load_buy_candidate_universe(BUY_CANDIDATE_UNIVERSE_PATH)
+    raw_frame = buy_candidate_universe_frame(entries)
+
+    if BUY_CANDIDATE_UNIVERSE_ENRICHED_PATH.exists():
+        enriched_frame = pd.read_csv(BUY_CANDIDATE_UNIVERSE_ENRICHED_PATH)
+    else:
+        enriched_frame = pd.DataFrame(
+            columns=[
+                "ticker",
+                "market_data_symbol",
+                "security_name",
+                "asset_type",
+                "primary_role",
+                "sector",
+                "style_tilt",
+                "region",
+                "annualized_volatility_1y",
+                "relative_1y_return_pct",
+                "relative_3y_return_pct",
+                "relative_5y_return_pct",
+                "beta",
+            ]
+        )
+    return entries, raw_frame, enriched_frame
+
+
+def build_buy_candidate_universe_summary_html(
+    entries: list[BuyCandidateUniverseEntry],
+    enriched_frame: pd.DataFrame,
+) -> str:
+    """Render the top-of-tab summary for the curated buy universe."""
+    if not entries:
+        return (
+            "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Universe</div>"
+            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No curated buy-candidate universe has been loaded yet.</div>"
+            "</div>"
+        )
+
+    etf_count = sum(1 for item in entries if item.asset_type.lower() == "etf")
+    stock_count = sum(1 for item in entries if item.asset_type.lower() != "etf")
+    core_count = sum(1 for item in entries if item.is_core)
+    defensive_count = sum(1 for item in entries if item.is_defensive)
+    eligible_count = sum(1 for item in entries if item.eligible_for_buy_engine)
+    top_role = (
+        pd.Series([item.primary_role for item in entries]).value_counts().index[0]
+        if entries
+        else "Not available"
+    )
+
+    best_relative_1y = None
+    steadiest_name = None
+    if not enriched_frame.empty:
+        enriched_numeric = enriched_frame.copy()
+        for column in ["relative_1y_return_pct", "annualized_volatility_1y"]:
+            if column in enriched_numeric.columns:
+                enriched_numeric[column] = pd.to_numeric(enriched_numeric[column], errors="coerce")
+        relative_candidates = enriched_numeric.dropna(subset=["relative_1y_return_pct"])
+        if not relative_candidates.empty:
+            best_row = relative_candidates.sort_values("relative_1y_return_pct", ascending=False).iloc[0]
+            best_relative_1y = f'{best_row["ticker"]} ({pct_text(best_row["relative_1y_return_pct"])})'
+        stable_candidates = enriched_numeric.dropna(subset=["annualized_volatility_1y"])
+        if not stable_candidates.empty:
+            stable_row = stable_candidates.sort_values("annualized_volatility_1y", ascending=True).iloc[0]
+            steadiest_name = f'{stable_row["ticker"]} ({percent_display(stable_row["annualized_volatility_1y"])})'
+
+    cards = (
+        metric_card("Curated names", str(len(entries)), f"{eligible_count} currently eligible")
+        + metric_card("ETF vs stocks", f"{etf_count} / {stock_count}", "ETF-first universe")
+        + metric_card("Core / defensive", f"{core_count} / {defensive_count}", "Designed for gap-filling roles")
+        + metric_card("Most common role", top_role, "What this universe leans toward")
+    )
+    detail_html = (
+        f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:12px'>"
+        f"This is the <strong>starting universe</strong> for the future buy engine. "
+        f"It is deliberately curated so the system can explain <strong>why a name is even under consideration</strong> "
+        f"before making any buy recommendation. "
+        + (
+            f"Right now, the strongest trailing 1Y relative performer in the set is <strong>{best_relative_1y}</strong>. "
+            if best_relative_1y
+            else ""
+        )
+        + (
+            f"The steadiest 1Y candidate by realized volatility is <strong>{steadiest_name}</strong>."
+            if steadiest_name
+            else ""
+        )
+        + "</div>"
+    )
+    return (
+        "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Universe</div>"
+        "<div style='font-size:15px;color:#93c5fd;margin-top:8px'>A review layer for the separate candidate universe we will use on the buy side.</div>"
+        f"<div class='metric-strip' style='margin-top:14px'>{cards}</div>"
+        f"{detail_html}"
+        "</div>"
+    )
+
+
+def plot_buy_candidate_role_mix(entries: list[BuyCandidateUniverseEntry]) -> go.Figure:
+    """Show the universe mix quickly by role and security type."""
+    fig = go.Figure()
+    if not entries:
+        fig.add_annotation(
+            text="No buy-candidate entries are available yet.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15, "color": "#e2e8f0"},
+        )
+        fig.update_layout(
+            title="Candidate Universe Mix",
+            height=360,
+            margin={"l": 24, "r": 24, "t": 56, "b": 24},
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(17,24,39,0.55)",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
+    frame = pd.DataFrame(
+        {
+            "primary_role": [item.primary_role for item in entries],
+            "asset_type": [item.asset_type for item in entries],
+        }
+    )
+    grouped = (
+        frame.groupby(["primary_role", "asset_type"])
+        .size()
+        .reset_index(name="count")
+        .sort_values(["count", "primary_role"], ascending=[False, True])
+    )
+    role_order = grouped.groupby("primary_role")["count"].sum().sort_values(ascending=True).index.tolist()
+    for asset_type, color in [("ETF", "#38bdf8"), ("Stock", "#818cf8")]:
+        subset = grouped[grouped["asset_type"] == asset_type]
+        subset = subset.set_index("primary_role").reindex(role_order, fill_value=0).reset_index()
+        fig.add_trace(
+            go.Bar(
+                x=subset["count"],
+                y=subset["primary_role"],
+                orientation="h",
+                name=asset_type,
+                marker={"color": color},
+                hovertemplate="<b>%{y}</b><br>Count: %{x}<br>Asset type: " + asset_type + "<extra></extra>",
+            )
+        )
+    fig.update_layout(
+        title="Candidate Universe Mix",
+        height=max(360, 100 + 58 * len(role_order)),
+        margin={"l": 40, "r": 24, "t": 56, "b": 36},
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+        barmode="stack",
+        hoverlabel=dark_hoverlabel(),
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
+        xaxis={"title": "Number of candidates", "gridcolor": "rgba(148,163,184,0.16)"},
+        yaxis={"gridcolor": "rgba(148,163,184,0.08)"},
+        font={"color": "#e2e8f0"},
+    )
+    return fig
+
+
+def plot_buy_candidate_enrichment_map(enriched_frame: pd.DataFrame) -> go.Figure:
+    """Render a quick-read enrichment map for candidate review.
+
+    The chart is intentionally simple: users can see which names have looked
+    steadier or stronger versus the S&P 500 without reading the full table.
+    """
+    fig = go.Figure()
+    if enriched_frame.empty:
+        fig.add_annotation(
+            text="Run the buy-candidate enrichment pipeline to populate candidate metrics.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15, "color": "#e2e8f0"},
+        )
+        fig.update_layout(
+            title="Candidate Strength vs Stability",
+            height=380,
+            margin={"l": 24, "r": 24, "t": 56, "b": 24},
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(17,24,39,0.55)",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
+    frame = enriched_frame.copy()
+    for column in ["annualized_volatility_1y", "relative_1y_return_pct", "relative_3y_return_pct"]:
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = frame.dropna(subset=["annualized_volatility_1y", "relative_1y_return_pct"])
+    if frame.empty:
+        return plot_buy_candidate_enrichment_map(pd.DataFrame())
+
+    frame["label"] = frame["ticker"].astype(str)
+    colors = {"ETF": "#38bdf8", "Stock": "#818cf8"}
+    for asset_type, subset in frame.groupby("asset_type"):
+        fig.add_trace(
+            go.Scatter(
+                x=subset["annualized_volatility_1y"] * 100,
+                y=subset["relative_1y_return_pct"] * 100,
+                mode="markers+text",
+                name=str(asset_type),
+                text=subset["label"],
+                textposition="top center",
+                marker={
+                    "size": 14,
+                    "color": colors.get(str(asset_type), "#22c55e"),
+                    "line": {"color": "rgba(15,23,42,0.9)", "width": 1},
+                },
+                customdata=np.stack(
+                    [
+                        subset["primary_role"].fillna(""),
+                        (subset["relative_3y_return_pct"].fillna(0.0) * 100).round(1),
+                    ],
+                    axis=1,
+                ),
+                hovertemplate=(
+                    "<b>%{text}</b><br>"
+                    "1Y volatility: %{x:.1f}%<br>"
+                    "1Y vs S&P 500: %{y:.1f}%<br>"
+                    "Primary role: %{customdata[0]}<br>"
+                    "3Y vs S&P 500: %{customdata[1]:.1f}%<extra></extra>"
+                ),
+            )
+        )
+    fig.add_hline(y=0, line_dash="dash", line_color="#f59e0b", opacity=0.9)
+    fig.update_layout(
+        title="Candidate Strength vs Stability",
+        height=420,
+        margin={"l": 40, "r": 24, "t": 56, "b": 36},
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+        hoverlabel=dark_hoverlabel(),
+        xaxis={"title": "Annualized 1Y volatility (%)", "gridcolor": "rgba(148,163,184,0.16)"},
+        yaxis={"title": "1Y return vs S&P 500 (%)", "gridcolor": "rgba(148,163,184,0.16)"},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
+        font={"color": "#e2e8f0"},
+    )
+    return fig
+
+
+def build_buy_candidate_enriched_frame(enriched_frame: pd.DataFrame) -> pd.DataFrame:
+    """Format enriched universe metrics for the dashboard table."""
+    if enriched_frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "Ticker",
+                "Name",
+                "Asset Type",
+                "Role",
+                "Sector",
+                "1Y vs S&P 500",
+                "3Y vs S&P 500",
+                "5Y vs S&P 500",
+                "1Y Volatility",
+                "Beta",
+            ]
+        )
+
+    frame = enriched_frame.copy()
+    numeric_columns = [
+        "relative_1y_return_pct",
+        "relative_3y_return_pct",
+        "relative_5y_return_pct",
+        "annualized_volatility_1y",
+        "beta",
+    ]
+    for column in numeric_columns:
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+
+    review = pd.DataFrame(
+        {
+            "Ticker": frame["ticker"],
+            "Name": frame["security_name"],
+            "Asset Type": frame["asset_type"],
+            "Role": frame["primary_role"],
+            "Sector": frame["sector"],
+            "1Y vs S&P 500": frame["relative_1y_return_pct"].apply(pct_text),
+            "3Y vs S&P 500": frame["relative_3y_return_pct"].apply(pct_text),
+            "5Y vs S&P 500": frame["relative_5y_return_pct"].apply(pct_text),
+            "1Y Volatility": frame["annualized_volatility_1y"].apply(percent_display),
+            "Beta": frame["beta"].apply(lambda value: number_text(value, 2) if pd.notna(value) else "N/A"),
+        }
+    )
+    review["_sort_1y"] = frame["relative_1y_return_pct"].fillna(-999.0)
+    review = review.sort_values(["_sort_1y", "Ticker"], ascending=[False, True]).drop(columns=["_sort_1y"])
+    return review.reset_index(drop=True)
+
+
 def build_buy_preference_sector_choices(diagnosis: PortfolioRiskDiagnosis) -> list[str]:
     """Return sector choices ordered for the buy-preferences form."""
     ordered: list[str] = []
@@ -5279,6 +5610,15 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
 
 
 def build_app() -> gr.Blocks:
+    buy_universe_entries, buy_universe_raw_df, buy_universe_enriched_source_df = load_buy_candidate_universe_review_data()
+    buy_universe_summary_html = build_buy_candidate_universe_summary_html(
+        buy_universe_entries,
+        buy_universe_enriched_source_df,
+    )
+    buy_universe_role_fig = plot_buy_candidate_role_mix(buy_universe_entries)
+    buy_universe_enrichment_fig = plot_buy_candidate_enrichment_map(buy_universe_enriched_source_df)
+    buy_universe_enriched_df = build_buy_candidate_enriched_frame(buy_universe_enriched_source_df)
+
     with gr.Blocks(
         title="Portfolio Analyzer Dashboard",
         theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
@@ -5495,6 +5835,29 @@ def build_app() -> gr.Blocks:
                                 interactive=False,
                                 wrap=True,
                             )
+                    with gr.Tab("Buy Universe", id="buy-universe"):
+                        buy_universe_md = gr.HTML(value=buy_universe_summary_html)
+                        with gr.Row(equal_height=True):
+                            buy_universe_role_plot = gr.Plot(
+                                value=buy_universe_role_fig,
+                                label="Candidate Universe Mix",
+                            )
+                            buy_universe_enrichment_plot = gr.Plot(
+                                value=buy_universe_enrichment_fig,
+                                label="Candidate Strength vs Stability",
+                            )
+                        buy_universe_df = gr.Dataframe(
+                            value=buy_universe_raw_df,
+                            label="Curated Candidate Universe",
+                            interactive=False,
+                            wrap=True,
+                        )
+                        buy_universe_enriched_df_component = gr.Dataframe(
+                            value=buy_universe_enriched_df,
+                            label="Enriched Candidate Review",
+                            interactive=False,
+                            wrap=True,
+                        )
                     with gr.Tab("Buy Preferences", id="buy-preferences"):
                         with gr.Row(equal_height=False):
                             with gr.Column(scale=1, min_width=300):

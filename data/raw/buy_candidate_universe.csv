@@ -1,0 +1,20 @@
+ticker,market_data_symbol,security_name,asset_type,primary_role,sector,style_tilt,region,is_core,is_defensive,is_income,is_growth,eligible_for_buy_engine,notes
+VOO,VOO,Vanguard S&P 500 ETF,ETF,Core benchmark ballast,Broad Market,Blend,US,TRUE,FALSE,FALSE,FALSE,TRUE,Default broad-market core holding
+IVV,IVV,iShares Core S&P 500 ETF,ETF,Core benchmark ballast,Broad Market,Blend,US,TRUE,FALSE,FALSE,FALSE,TRUE,Alternative S&P 500 core exposure
+VTI,VTI,Vanguard Total Stock Market ETF,ETF,Core diversification,Broad Market,Blend,US,TRUE,FALSE,FALSE,FALSE,TRUE,Broader US equity exposure than S&P 500 only
+SCHD,SCHD,Schwab U.S. Dividend Equity ETF,ETF,Income and quality ballast,Financial Services,Income,US,FALSE,TRUE,TRUE,FALSE,TRUE,Dividend-oriented ETF with quality tilt
+VIG,VIG,Vanguard Dividend Appreciation ETF,ETF,Quality ballast,Financial Services,Quality,US,FALSE,TRUE,TRUE,FALSE,TRUE,Dividend growth ETF for steadier quality exposure
+QUAL,QUAL,iShares MSCI USA Quality Factor ETF,ETF,Quality ballast,Broad Market,Quality,US,FALSE,TRUE,FALSE,FALSE,TRUE,Quality factor ETF for stronger balance sheets
+USMV,USMV,iShares MSCI USA Min Vol Factor ETF,ETF,Lower-volatility ballast,Broad Market,Low Volatility,US,FALSE,TRUE,FALSE,FALSE,TRUE,Designed to reduce portfolio swings
+XLV,XLV,Health Care Select Sector SPDR Fund,ETF,Defensive diversifier,Health Care,Defensive,US,FALSE,TRUE,FALSE,FALSE,TRUE,Healthcare sector ETF for defensive diversification
+XLP,XLP,Consumer Staples Select Sector SPDR Fund,ETF,Defensive diversifier,Consumer Defensive,Defensive,US,FALSE,TRUE,TRUE,FALSE,TRUE,Staples ETF for resilience in weaker markets
+XLU,XLU,Utilities Select Sector SPDR Fund,ETF,Defensive diversifier,Utilities,Defensive,US,FALSE,TRUE,TRUE,FALSE,TRUE,Utilities ETF for lower-beta diversification
+BND,BND,Vanguard Total Bond Market ETF,ETF,Stability sleeve,Fixed Income,Defensive,US,FALSE,TRUE,TRUE,FALSE,TRUE,Broad bond exposure for steadier ballast
+VGIT,VGIT,Vanguard Intermediate-Term Treasury ETF,ETF,Stability sleeve,Fixed Income,Defensive,US,FALSE,TRUE,TRUE,FALSE,TRUE,Treasury exposure for a more defensive mix
+BRK.B,BRK-B,Berkshire Hathaway Inc. Class B,Stock,Quality compounder,Financial Services,Quality,US,FALSE,FALSE,FALSE,FALSE,TRUE,Large diversified quality compounder
+JPM,JPM,JPMorgan Chase & Co.,Stock,Financial quality,Financial Services,Quality,US,FALSE,FALSE,TRUE,FALSE,TRUE,Large-cap financial with broad earnings base
+PG,PG,Procter & Gamble Co.,Stock,Defensive compounder,Consumer Defensive,Defensive,US,FALSE,TRUE,TRUE,FALSE,TRUE,Consumer staples leader with steadier demand
+JNJ,JNJ,Johnson & Johnson,Stock,Defensive compounder,Health Care,Defensive,US,FALSE,TRUE,TRUE,FALSE,TRUE,Diversified healthcare franchise
+WMT,WMT,Walmart Inc.,Stock,Defensive compounder,Consumer Defensive,Defensive,US,FALSE,TRUE,FALSE,FALSE,TRUE,Defensive retail exposure with resilient cash flow
+COST,COST,Costco Wholesale Corporation,Stock,Resilient quality,Consumer Defensive,Quality,US,FALSE,TRUE,FALSE,FALSE,TRUE,Resilient consumer franchise with strong membership model
+MSFT,MSFT,Microsoft Corporation,Stock,Quality growth,Technology,Quality Growth,US,FALSE,FALSE,FALSE,TRUE,TRUE,High-quality large-cap growth if portfolio still needs selective growth
