@@ -3281,6 +3281,179 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     )
 
 
+def build_portfolio_gap_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
+    """Create a review table for the new Portfolio Gaps tab."""
+    rows: list[dict[str, Any]] = []
+    for gap in diagnosis.portfolio_gaps:
+        rows.append(
+            {
+                "Gap": gap.label,
+                "Severity": f"{gap.severity_score:.1f}/100",
+                "Band": gap.severity_band,
+                "What is missing": gap.what_is_missing,
+                "Why this gap exists": gap.why_this_gap_exists,
+                "What would change": " | ".join(gap.what_would_change),
+                "Linked concerns": ", ".join(gap.linked_concerns),
+                "Supporting evidence": " | ".join([str(item) for item in gap.supporting_evidence if item]),
+                "Suggested tilt": gap.suggested_vehicle_tilt,
+            }
+        )
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "Gap",
+                "Severity",
+                "Band",
+                "What is missing",
+                "Why this gap exists",
+                "What would change",
+                "Linked concerns",
+                "Supporting evidence",
+                "Suggested tilt",
+            ]
+        )
+    frame = pd.DataFrame(rows)
+    frame["_sort"] = frame["Severity"].str.extract(r"([0-9.]+)").astype(float)
+    return frame.sort_values("_sort", ascending=False).drop(columns=["_sort"]).reset_index(drop=True)
+
+
+def build_portfolio_preferences_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
+    """Render the inferred PortfolioPreferences object as a review table."""
+    preferences = diagnosis.portfolio_preferences
+    if preferences is None:
+        return pd.DataFrame(columns=["Preference", "Current setting"])
+
+    rows = [
+        {"Preference": "Available cash now", "Current setting": money_text(preferences.available_cash_now)},
+        {
+            "Preference": "Available cash if current actions are followed",
+            "Current setting": money_text(preferences.available_cash_if_actions_followed),
+        },
+        {"Preference": "Reinvest freed cash", "Current setting": preferences.reinvestment_preference_label},
+        {
+            "Preference": "Stated risk tolerance",
+            "Current setting": f"{preferences.stated_risk_score:.0f}/100 ({preferences.stated_risk_band})",
+        },
+        {
+            "Preference": "Suggested max size for a new add",
+            "Current setting": percent_display(preferences.suggested_max_new_position_pct),
+        },
+        {"Preference": "ETFs allowed", "Current setting": "Yes" if preferences.allow_etfs else "No"},
+        {"Preference": "Single stocks allowed", "Current setting": "Yes" if preferences.allow_single_stocks else "No"},
+        {"Preference": "Default vehicle tilt", "Current setting": preferences.vehicle_preference_label},
+        {
+            "Preference": "Sector preferences",
+            "Current setting": ", ".join(preferences.sector_preferences) if preferences.sector_preferences else "Not set yet",
+        },
+        {
+            "Preference": "Inferred sector avoidances",
+            "Current setting": ", ".join(preferences.inferred_sector_avoidances) if preferences.inferred_sector_avoidances else "None inferred",
+        },
+        {
+            "Preference": "Unresolved user decisions",
+            "Current setting": " | ".join(preferences.unresolved_preferences),
+        },
+        {
+            "Preference": "Assumptions being used right now",
+            "Current setting": " | ".join(preferences.assumption_notes),
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
+def build_portfolio_gaps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
+    """Explain what the portfolio still needs before any buy suggestions exist."""
+    preferences = diagnosis.portfolio_preferences
+    if not diagnosis.portfolio_gaps:
+        return (
+            "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Portfolio Gaps</div>"
+            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No portfolio gaps were surfaced from the current action set.</div>"
+            "</div>"
+        )
+
+    intro = (
+        "This tab is the **why buy anything at all?** layer. It does not suggest securities yet. "
+        "It explains what the portfolio would still be missing after the current trims and sells, "
+        "and what would likely improve if a future add solved that gap well."
+    )
+    preference_cards = ""
+    if preferences is not None:
+        preference_cards = (
+            metric_card("Cash available now", money_text(preferences.available_cash_now), "Uninvested cash already on hand")
+            + metric_card("Cash if actions are followed", money_text(preferences.available_cash_if_actions_followed), "Current cash plus freed capital")
+            + metric_card("Risk tolerance", f"{preferences.stated_risk_score:.0f}/100", preferences.stated_risk_band)
+            + metric_card("Max new position", percent_display(preferences.suggested_max_new_position_pct), "Temporary cap for new adds")
+        )
+
+    gap_cards = ""
+    for gap in diagnosis.portfolio_gaps:
+        linked_concerns = ", ".join(gap.linked_concerns) or "No linked concerns recorded"
+        evidence_html = "".join(
+            f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
+            for item in gap.supporting_evidence[:4]
+            if item
+        )
+        improvements_html = "".join(
+            f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
+            for item in gap.what_would_change[:4]
+            if item
+        )
+        gap_cards += (
+            "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            f"<div style='display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap'>"
+            f"<div><div style='font-size:20px;font-weight:800;color:#f8fafc'>{gap.label}</div>"
+            f"<div style='font-size:13px;line-height:1.5;color:#93c5fd;margin-top:6px'>{gap.severity_band} · {gap.severity_score:.1f}/100</div></div>"
+            f"<div style='font-size:12px;line-height:1.4;color:#cbd5e1;max-width:320px'><strong>Linked concerns:</strong> {linked_concerns}</div>"
+            "</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:12px'><strong>What is missing:</strong> {render_bold_markers(gap.what_is_missing)}</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:10px'><strong>Why this gap exists:</strong> {render_bold_markers(gap.why_this_gap_exists)}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>What would likely improve if this gap is filled well</div>"
+            f"<ul style='margin:10px 0 0 18px;color:#e2e8f0;line-height:1.55'>{improvements_html or '<li>No improvement notes recorded.</li>'}</ul>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Evidence behind this gap</div>"
+            f"<ul style='margin:10px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence_html or '<li>No supporting evidence recorded.</li>'}</ul>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:14px'><strong>Default tilt for a future add:</strong> {render_bold_markers(gap.suggested_vehicle_tilt)}</div>"
+            "</div>"
+        )
+
+    preference_section = ""
+    if preferences is not None:
+        assumptions = "".join(
+            f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
+            for item in preferences.assumption_notes[:4]
+        )
+        unresolved = "".join(
+            f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
+            for item in preferences.unresolved_preferences[:5]
+        )
+        preference_section = (
+            "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94));margin-top:18px'>"
+            "<div style='font-size:20px;font-weight:800;color:#f8fafc'>Default Preferences and Constraints</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:10px'>{render_bold_markers(preferences.constraints_summary)}</div>"
+            f"<div class='metric-strip' style='margin-top:14px'>{preference_cards}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>What the system is assuming for now</div>"
+            f"<ul style='margin:10px 0 0 18px;color:#e2e8f0;line-height:1.55'>{assumptions}</ul>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Questions we still need from you before buy recommendations</div>"
+            f"<ul style='margin:10px 0 0 18px;color:#e2e8f0;line-height:1.55'>{unresolved}</ul>"
+            "</div>"
+        )
+
+    return (
+        "<div style='display:flex;flex-direction:column;gap:18px'>"
+        "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Portfolio Gaps</div>"
+        f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>{render_bold_markers(intro)}</div>"
+        "</div>"
+        + gap_cards
+        + preference_section
+        + "</div>"
+    )
+
+
 def build_single_ticker_timeseries_records(
     ticker: str,
     ticker_close: pd.DataFrame,
@@ -4842,6 +5015,9 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
     )
     risk_actions_html = build_risk_actions_html(diagnosis)
     risk_actions_df = build_risk_actions_frame(diagnosis)
+    portfolio_gaps_html = build_portfolio_gaps_html(diagnosis)
+    portfolio_gaps_df = build_portfolio_gap_frame(diagnosis)
+    portfolio_preferences_df = build_portfolio_preferences_frame(diagnosis)
     eq_fig = plot_equity_curves(market_metrics["timeseries"])
     sector_fig = plot_sector_allocation(market_metrics.get("sector_allocation", []))
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
@@ -4886,6 +5062,9 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         gr.update(choices=diagnosis_stock_choices, value="Portfolio"),
         risk_actions_html,
         risk_actions_df,
+        portfolio_gaps_html,
+        portfolio_gaps_df,
+        portfolio_preferences_df,
         diagnosis_supporting_metrics_df,
         diagnosis_holding_fundamentals_df,
         diagnosis_narrative_evidence_df,
@@ -5103,6 +5282,18 @@ def build_app() -> gr.Blocks:
                             interactive=False,
                             wrap=True,
                         )
+                    with gr.Tab("Portfolio Gaps", id="portfolio-gaps"):
+                        portfolio_gaps_md = gr.HTML()
+                        portfolio_gaps_df = gr.Dataframe(
+                            label="Gap Detail",
+                            interactive=False,
+                            wrap=True,
+                        )
+                        portfolio_preferences_df = gr.Dataframe(
+                            label="Preferences and Constraints",
+                            interactive=False,
+                            wrap=True,
+                        )
                     with gr.Tab("Risk Guide", id="risk-guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
@@ -5133,6 +5324,9 @@ def build_app() -> gr.Blocks:
                 diagnosis_stock_filter,
                 risk_actions_md,
                 risk_actions_df,
+                portfolio_gaps_md,
+                portfolio_gaps_df,
+                portfolio_preferences_df,
                 diagnosis_supporting_metrics_df,
                 diagnosis_holding_fundamentals_df,
                 diagnosis_narrative_evidence_df,

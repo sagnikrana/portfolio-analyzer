@@ -363,6 +363,61 @@ class PortfolioActionImpact(BaseModel):
     impact_bullets: list[str] = Field(default_factory=list)
 
 
+class PortfolioGap(BaseModel):
+    """A portfolio-level gap that should be understood before suggesting buys.
+
+    The purpose of this object is explanation-first. It answers:
+
+    - what is still missing after the current trims or sells?
+    - why does that matter for this portfolio specifically?
+    - what would likely improve if the gap were filled later?
+
+    This keeps the future buy-side grounded in a portfolio need instead of
+    turning directly into "here are some stocks to buy."
+    """
+
+    gap_key: str
+    label: str
+    severity_score: float
+    severity_band: str
+    what_is_missing: str
+    why_this_gap_exists: str
+    what_would_change: list[str] = Field(default_factory=list)
+    linked_concerns: list[str] = Field(default_factory=list)
+    supporting_evidence: list[str] = Field(default_factory=list)
+    suggested_vehicle_tilt: str = ""
+
+
+class PortfolioPreferences(BaseModel):
+    """Default preferences and constraints for the future buy-side.
+
+    The project does not yet ask the user for buy preferences directly, but the
+    buy-side needs an object that says what constraints are already known and
+    what still needs an explicit answer. This model captures:
+
+    - capital that is already available or could be freed by current actions
+    - risk tolerance carried forward from the dashboard input
+    - simple default guardrails for new adds
+    - unresolved decisions that the user should eventually confirm
+    """
+
+    available_cash_now: float = 0.0
+    available_cash_if_actions_followed: float = 0.0
+    reinvest_freed_cash: Optional[bool] = None
+    reinvestment_preference_label: str = ""
+    stated_risk_score: float = 0.0
+    stated_risk_band: str = ""
+    suggested_max_new_position_pct: Optional[float] = None
+    allow_etfs: bool = True
+    allow_single_stocks: bool = True
+    vehicle_preference_label: str = ""
+    sector_preferences: list[str] = Field(default_factory=list)
+    inferred_sector_avoidances: list[str] = Field(default_factory=list)
+    constraints_summary: str = ""
+    unresolved_preferences: list[str] = Field(default_factory=list)
+    assumption_notes: list[str] = Field(default_factory=list)
+
+
 class PortfolioRiskDiagnosis(BaseModel):
     """Top-level typed diagnosis object for one analyzed portfolio snapshot.
 
@@ -397,6 +452,8 @@ class PortfolioRiskDiagnosis(BaseModel):
     holding_action_needs: list[HoldingActionNeed] = Field(default_factory=list)
     holding_action_recommendations: list[HoldingActionRecommendation] = Field(default_factory=list)
     portfolio_action_impact: Optional[PortfolioActionImpact] = None
+    portfolio_gaps: list[PortfolioGap] = Field(default_factory=list)
+    portfolio_preferences: Optional[PortfolioPreferences] = None
     supporting_metrics: list[RiskMetricObservation] = Field(default_factory=list)
     macro_context: Optional[MacroRegimeSnapshot] = None
     holding_fundamentals: list[CompanyFundamentalSnapshot] = Field(default_factory=list)
@@ -412,6 +469,8 @@ HoldingRiskContribution.model_rebuild()
 HoldingActionNeed.model_rebuild()
 HoldingActionRecommendation.model_rebuild()
 PortfolioActionImpact.model_rebuild()
+PortfolioGap.model_rebuild()
+PortfolioPreferences.model_rebuild()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -2295,6 +2354,258 @@ def _build_portfolio_action_impact(
     )
 
 
+def _suggested_max_new_position_pct(stated_risk_score: float) -> float:
+    """Infer a simple default cap for new adds from stated risk tolerance.
+
+    This is a temporary guardrail for the buy-side design layer. It prevents the
+    first replacement ideas from recreating the same concentration problem we
+    are trying to solve, even before we ask the user for explicit preferences.
+    """
+    if stated_risk_score <= 35:
+        return 0.05
+    if stated_risk_score <= 65:
+        return 0.08
+    return 0.10
+
+
+def _build_portfolio_preferences(
+    bundle: dict[str, Any],
+    portfolio_action_impact: Optional[PortfolioActionImpact],
+    top_sector_drivers: list[SectorRiskDriver],
+) -> PortfolioPreferences:
+    """Create the first buy-side constraint object from known portfolio facts.
+
+    We are not collecting explicit buy preferences from the user yet, so this
+    builder produces an inferred default object. It keeps a clean separation
+    between:
+
+    - what we already know from the current analysis
+    - what the user still needs to tell us before true buy recommendations
+    """
+    headline = bundle["headline"]
+    risk = bundle["risk"]
+    available_cash_now = _safe_float(headline.get("uninvested_cash_estimate")) or 0.0
+    action_cash = portfolio_action_impact.total_value_to_sell if portfolio_action_impact is not None else 0.0
+    stated_risk_score = float(risk.get("stated_score", 0.0))
+    stated_risk_band = str(risk.get("stated_band", ""))
+    suggested_max_new_position_pct = _suggested_max_new_position_pct(stated_risk_score)
+
+    crowded_sector = next(
+        (
+            driver.sector
+            for driver in top_sector_drivers
+            if (driver.weight_pct or 0.0) >= 0.25 and "crowd" in str(driver.primary_reason_label or "").lower()
+        ),
+        None,
+    )
+    inferred_sector_avoidances = [crowded_sector] if crowded_sector else []
+
+    if stated_risk_score <= 35:
+        vehicle_preference_label = "Default to steadier ETF-led adds unless you explicitly want individual stocks."
+    elif stated_risk_score <= 65:
+        vehicle_preference_label = "Default to a blend of diversified ETFs and selective single stocks."
+    else:
+        vehicle_preference_label = "Higher-risk profile allows either ETFs or single stocks, but new adds should still avoid rebuilding concentration."
+
+    assumption_notes = [
+        "No explicit buy-side preferences have been captured yet, so this object uses conservative defaults.",
+        f"New adds are temporarily capped near {suggested_max_new_position_pct:.0%} of the portfolio to avoid recreating concentration too quickly.",
+    ]
+    if crowded_sector:
+        assumption_notes.append(
+            f"Until you say otherwise, the most crowded current sector ({crowded_sector}) is treated as a lower-priority place for fresh capital."
+        )
+
+    unresolved_preferences = [
+        "Should freed cash be fully reinvested, partly reinvested, or left partly in cash?",
+        "Do you prefer ETFs, single stocks, or a blend for new capital?",
+        "Are there any sectors you want to emphasize or avoid?",
+        "What is the maximum size you are comfortable giving to a new position?",
+    ]
+
+    constraints_summary = (
+        f"Right now the system can assume about ${available_cash_now + action_cash:,.2f} could be available for future adds, "
+        f"but reinvestment rules and sector preferences are still user decisions. Until those are set, the safest default is to favor diversified adds and keep new positions below about {suggested_max_new_position_pct:.0%}."
+    )
+
+    return PortfolioPreferences(
+        available_cash_now=round(available_cash_now, 2),
+        available_cash_if_actions_followed=round(available_cash_now + action_cash, 2),
+        reinvest_freed_cash=None,
+        reinvestment_preference_label="Not set yet — decide whether freed cash should be reinvested or partly left in cash.",
+        stated_risk_score=stated_risk_score,
+        stated_risk_band=stated_risk_band,
+        suggested_max_new_position_pct=suggested_max_new_position_pct,
+        allow_etfs=True,
+        allow_single_stocks=True,
+        vehicle_preference_label=vehicle_preference_label,
+        sector_preferences=[],
+        inferred_sector_avoidances=inferred_sector_avoidances,
+        constraints_summary=constraints_summary,
+        unresolved_preferences=unresolved_preferences,
+        assumption_notes=assumption_notes,
+    )
+
+
+def _build_portfolio_gaps(
+    bundle: dict[str, Any],
+    top_concerns: list[DiagnosisConcern],
+    top_sector_drivers: list[SectorRiskDriver],
+    portfolio_action_impact: Optional[PortfolioActionImpact],
+) -> list[PortfolioGap]:
+    """Explain what the portfolio still needs before any buy ideas are shown.
+
+    The goal here is not to recommend securities. It is to surface the portfolio
+    needs that future buys would have to solve. That makes later buy-side logic
+    much easier to trust because it starts with:
+
+    - what is missing?
+    - why is it missing?
+    - what changes if we fill that gap?
+    """
+    headline = bundle["headline"]
+    concentration_concern = next((item for item in top_concerns if item.concern_key == "concentration"), None)
+    market_concern = next((item for item in top_concerns if item.concern_key == "market"), None)
+    macro_series = bundle.get("macro_series", pd.DataFrame())
+    sector_allocation = bundle.get("sector_allocation", pd.DataFrame()).copy()
+    if not sector_allocation.empty:
+        sector_allocation["weight_pct"] = pd.to_numeric(sector_allocation.get("weight_pct"), errors="coerce").fillna(0.0)
+        sector_allocation = sector_allocation.sort_values("weight_pct", ascending=False)
+
+    gaps: list[PortfolioGap] = []
+    max_position_weight = _safe_float(headline.get("max_position_weight")) or 0.0
+    top5_weight = _safe_float(headline.get("top_5_weight")) or 0.0
+    relative_volatility = _safe_float(headline.get("relative_volatility_to_benchmark")) or 0.0
+    relative_market_sensitivity = _safe_float(headline.get("relative_market_sensitivity_to_benchmark")) or 0.0
+    cash_freed = portfolio_action_impact.total_value_to_sell if portfolio_action_impact is not None else 0.0
+    restrictive_rates = False
+    if not macro_series.empty and "series_key" in macro_series.columns and "value" in macro_series.columns:
+        fed_row = macro_series.loc[macro_series["series_key"].astype(str) == "fed_funds_rate"].tail(1)
+        fed_value = _safe_float(fed_row["value"].iloc[-1]) if not fed_row.empty else None
+        restrictive_rates = fed_value is not None and fed_value >= 3.0
+
+    if concentration_concern is not None or max_position_weight >= 0.15 or top5_weight >= 0.55:
+        largest_after = portfolio_action_impact.projected_largest_position_pct if portfolio_action_impact else None
+        top5_after = portfolio_action_impact.projected_top5_weight_pct if portfolio_action_impact else None
+        gaps.append(
+            PortfolioGap(
+                gap_key="diversified_core",
+                label="Needs more diversification and steadier core exposure",
+                severity_score=round(max(concentration_concern.severity_score if concentration_concern else 0.0, max_position_weight * 120), 1),
+                severity_band=_severity_band(max(concentration_concern.severity_score if concentration_concern else 0.0, max_position_weight * 120)),
+                what_is_missing="The portfolio still needs more capital in holdings that do not depend so heavily on one or two names.",
+                why_this_gap_exists=(
+                    f"The largest position still makes up about {max_position_weight:.1%} of the portfolio"
+                    + (f", and even after the current trims the largest position would still be about {largest_after:.1%}" if largest_after is not None else "")
+                    + f". The top 5 holdings currently account for about {top5_weight:.1%}"
+                    + (f", falling only to about {top5_after:.1%} under the current action set." if top5_after is not None else ".")
+                ),
+                what_would_change=[
+                    "Less dependence on one holding to carry the whole portfolio.",
+                    "A steadier portfolio if the biggest current winner reverses.",
+                    "More room to add future ideas without immediately recreating concentration pressure.",
+                ],
+                linked_concerns=[item.label for item in top_concerns[:2] if item.label],
+                supporting_evidence=_unique_nonempty(
+                    [
+                        f"Largest position: {max_position_weight:.1%}",
+                        f"Top 5 holdings: {top5_weight:.1%}",
+                        (
+                            f"Projected top 5 after current actions: {top5_after:.1%}"
+                            if top5_after is not None else None
+                        ),
+                    ]
+                ),
+                suggested_vehicle_tilt="Prefer benchmark-like core holdings or diversified funds before adding more single-name risk.",
+            )
+        )
+
+    if not sector_allocation.empty and float(sector_allocation["weight_pct"].iloc[0]) >= 0.25:
+        top_sector = str(sector_allocation.iloc[0]["sector"])
+        top_sector_weight = float(sector_allocation.iloc[0]["weight_pct"])
+        gaps.append(
+            PortfolioGap(
+                gap_key="sector_balance",
+                label="Needs less reliance on one sector",
+                severity_score=round(min(100.0, top_sector_weight * 120), 1),
+                severity_band=_severity_band(min(100.0, top_sector_weight * 120)),
+                what_is_missing="The portfolio needs more balance outside its most crowded sector.",
+                why_this_gap_exists=f"{top_sector} currently makes up about {top_sector_weight:.1%} of invested capital, which means sector-specific weakness can spread across too much of the account.",
+                what_would_change=[
+                    "Less cluster risk from one part of the market dominating the account.",
+                    "More balanced sector exposure after the current trims free up capital.",
+                    "A cleaner path to future adds that do not stack onto the same theme.",
+                ],
+                linked_concerns=["Concentration risk", "Sector crowding"],
+                supporting_evidence=_unique_nonempty(
+                    [
+                        f"Top sector: {top_sector}",
+                        f"Top sector weight: {top_sector_weight:.1%}",
+                        (
+                            f"Lead sector driver: {top_sector_drivers[0].primary_reason_label}"
+                            if top_sector_drivers else None
+                        ),
+                    ]
+                ),
+                suggested_vehicle_tilt="Favor adds outside the most crowded sector, or use broader funds that naturally dilute sector concentration.",
+            )
+        )
+
+    if market_concern is not None or relative_volatility >= 1.4 or relative_market_sensitivity >= 1.15:
+        gaps.append(
+            PortfolioGap(
+                gap_key="defensive_ballast",
+                label="Needs steadier, lower-volatility ballast",
+                severity_score=round(max(market_concern.severity_score if market_concern else 0.0, relative_volatility * 35), 1),
+                severity_band=_severity_band(max(market_concern.severity_score if market_concern else 0.0, relative_volatility * 35)),
+                what_is_missing="The portfolio still needs holdings that behave more like a steady core than a high-swing growth sleeve.",
+                why_this_gap_exists=(
+                    f"Recent portfolio volatility has been about {relative_volatility:.2f}x the S&P 500"
+                    f" and market sensitivity is about {relative_market_sensitivity:.2f}x."
+                    + (" Higher interest rates also make that kind of high-swing mix less forgiving." if restrictive_rates else "")
+                ),
+                what_would_change=[
+                    "Smaller portfolio swings during normal market pullbacks.",
+                    "Less pressure to keep trimming individual laggards just to calm the portfolio down.",
+                    "A more stable base for any future stock ideas added on top.",
+                ],
+                linked_concerns=[
+                    label for label in [market_concern.label if market_concern else None, "Macro sensitivity" if restrictive_rates else None] if label
+                ],
+                supporting_evidence=_unique_nonempty(
+                    [
+                        f"Relative volatility vs S&P 500: {relative_volatility:.2f}x",
+                        f"Relative market sensitivity vs S&P 500: {relative_market_sensitivity:.2f}x",
+                        "Rates are still relatively high." if restrictive_rates else None,
+                    ]
+                ),
+                suggested_vehicle_tilt="Favor lower-beta, benchmark-like, or more defensive holdings over additional high-swing names.",
+            )
+        )
+
+    if cash_freed > 0:
+        gaps.append(
+            PortfolioGap(
+                gap_key="capital_redeployment_plan",
+                label="Needs a clear plan for freed cash",
+                severity_score=52.0,
+                severity_band=_severity_band(52.0),
+                what_is_missing="The portfolio will need a clear rule for what to do with the cash created by the current action set.",
+                why_this_gap_exists=f"The current trims and sells would free up about ${cash_freed:,.2f}. Without a plan, that cash can either sit idle by accident or get pushed back into the same crowded parts of the portfolio.",
+                what_would_change=[
+                    "Future adds can be tied to a real portfolio need instead of impulse redeployment.",
+                    "Cash can be split intentionally between reinvestment and dry powder if that fits the user.",
+                    "Buy recommendations later can be sized around an actual budget instead of vague opportunity lists.",
+                ],
+                linked_concerns=["Action follow-through"],
+                supporting_evidence=[f"Cash freed by current actions: ${cash_freed:,.2f}"],
+                suggested_vehicle_tilt="Decide first how much cash should be redeployed, then match that budget to the most important gap rather than the most exciting ticker.",
+            )
+        )
+
+    return sorted(gaps, key=lambda item: (-item.severity_score, item.label))
+
+
 def _build_holding_action_recommendations(
     bundle: dict[str, Any],
     holding_action_needs: list[HoldingActionNeed],
@@ -2744,6 +3055,17 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         bundle,
         holding_action_recommendations,
     )
+    portfolio_preferences = _build_portfolio_preferences(
+        bundle,
+        portfolio_action_impact,
+        top_sector_drivers,
+    )
+    portfolio_gaps = _build_portfolio_gaps(
+        bundle,
+        top_concerns,
+        top_sector_drivers,
+        portfolio_action_impact,
+    )
 
     return PortfolioRiskDiagnosis(
         run_id=str(manifest.get("run_id")),
@@ -2766,6 +3088,8 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         holding_action_needs=holding_action_needs,
         holding_action_recommendations=holding_action_recommendations,
         portfolio_action_impact=portfolio_action_impact,
+        portfolio_gaps=portfolio_gaps,
+        portfolio_preferences=portfolio_preferences,
         supporting_metrics=supporting_metrics,
         macro_context=macro_context,
         holding_fundamentals=holding_fundamentals,
