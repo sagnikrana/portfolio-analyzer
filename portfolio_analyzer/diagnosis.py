@@ -403,6 +403,7 @@ class PortfolioPreferences(BaseModel):
 
     available_cash_now: float = 0.0
     available_cash_if_actions_followed: float = 0.0
+    budget_to_deploy: Optional[float] = None
     reinvest_freed_cash: Optional[bool] = None
     reinvestment_preference_label: str = ""
     stated_risk_score: float = 0.0
@@ -410,12 +411,14 @@ class PortfolioPreferences(BaseModel):
     suggested_max_new_position_pct: Optional[float] = None
     allow_etfs: bool = True
     allow_single_stocks: bool = True
+    single_stocks_preferred: Optional[bool] = None
     vehicle_preference_label: str = ""
     sector_preferences: list[str] = Field(default_factory=list)
     inferred_sector_avoidances: list[str] = Field(default_factory=list)
     constraints_summary: str = ""
     unresolved_preferences: list[str] = Field(default_factory=list)
     assumption_notes: list[str] = Field(default_factory=list)
+    preference_source: str = "inferred_defaults"
 
 
 class PortfolioRiskDiagnosis(BaseModel):
@@ -2368,6 +2371,15 @@ def _suggested_max_new_position_pct(stated_risk_score: float) -> float:
     return 0.10
 
 
+def _risk_band_from_score(stated_risk_score: float) -> str:
+    """Convert a 0-100 stated risk score into a broad user-facing band."""
+    if stated_risk_score < 35:
+        return "Conservative"
+    if stated_risk_score < 70:
+        return "Moderate"
+    return "Aggressive"
+
+
 def _build_portfolio_preferences(
     bundle: dict[str, Any],
     portfolio_action_impact: Optional[PortfolioActionImpact],
@@ -2431,6 +2443,7 @@ def _build_portfolio_preferences(
     return PortfolioPreferences(
         available_cash_now=round(available_cash_now, 2),
         available_cash_if_actions_followed=round(available_cash_now + action_cash, 2),
+        budget_to_deploy=round(available_cash_now + action_cash, 2),
         reinvest_freed_cash=None,
         reinvestment_preference_label="Not set yet — decide whether freed cash should be reinvested or partly left in cash.",
         stated_risk_score=stated_risk_score,
@@ -2438,12 +2451,119 @@ def _build_portfolio_preferences(
         suggested_max_new_position_pct=suggested_max_new_position_pct,
         allow_etfs=True,
         allow_single_stocks=True,
+        single_stocks_preferred=None,
         vehicle_preference_label=vehicle_preference_label,
         sector_preferences=[],
         inferred_sector_avoidances=inferred_sector_avoidances,
         constraints_summary=constraints_summary,
         unresolved_preferences=unresolved_preferences,
         assumption_notes=assumption_notes,
+        preference_source="inferred_defaults",
+    )
+
+
+def portfolio_preferences_from_user_inputs(
+    *,
+    base_preferences: PortfolioPreferences,
+    budget_to_deploy: Optional[float],
+    reinvest_choice: str,
+    sector_preferences: Optional[list[str]],
+    max_new_position_pct: Optional[float],
+    stated_risk_score: Optional[float],
+    allow_etfs: bool,
+    allow_single_stocks: bool,
+    vehicle_preference: str,
+) -> PortfolioPreferences:
+    """Create a user-defined `PortfolioPreferences` object from dashboard inputs.
+
+    This is the bridge from UI controls into the typed buy-side constraints
+    layer. It starts from the inferred base preferences, then replaces them with
+    the choices the user has explicitly made.
+
+    The resulting object is meant to be stable enough for later buy-side logic
+    to consume directly, instead of scraping loosely typed UI values again.
+    """
+    resolved_budget = budget_to_deploy
+    if resolved_budget is None or resolved_budget < 0:
+        resolved_budget = base_preferences.available_cash_if_actions_followed
+
+    resolved_risk_score = (
+        float(stated_risk_score)
+        if stated_risk_score is not None
+        else float(base_preferences.stated_risk_score)
+    )
+    resolved_risk_band = _risk_band_from_score(resolved_risk_score)
+
+    resolved_max_position_pct = (
+        float(max_new_position_pct)
+        if max_new_position_pct is not None
+        else float(base_preferences.suggested_max_new_position_pct or _suggested_max_new_position_pct(resolved_risk_score))
+    )
+
+    cleaned_sector_preferences = [item for item in (sector_preferences or []) if str(item).strip()]
+
+    if reinvest_choice == "Yes":
+        reinvest_freed_cash = True
+        reinvestment_preference_label = "Freed cash should be reinvested."
+    elif reinvest_choice == "No":
+        reinvest_freed_cash = False
+        reinvestment_preference_label = "Freed cash does not have to be reinvested."
+    else:
+        reinvest_freed_cash = None
+        reinvestment_preference_label = "Reinvestment is still undecided."
+
+    if vehicle_preference == "Prefer ETFs":
+        single_stocks_preferred = False
+        vehicle_preference_label = "Prefer ETFs for future adds."
+    elif vehicle_preference == "Prefer single stocks":
+        single_stocks_preferred = True
+        vehicle_preference_label = "Prefer single stocks for future adds."
+    else:
+        single_stocks_preferred = None
+        vehicle_preference_label = "Blend ETFs and single stocks unless a later rule says otherwise."
+
+    unresolved_preferences: list[str] = []
+    if reinvest_freed_cash is None:
+        unresolved_preferences.append("Decide whether freed cash should be fully reinvested or partly kept in cash.")
+    if not allow_etfs and not allow_single_stocks:
+        unresolved_preferences.append("At least one vehicle type must be allowed before buy suggestions can work.")
+    if not cleaned_sector_preferences:
+        unresolved_preferences.append("Sector preferences are still open, so future adds will default to portfolio-need first.")
+
+    assumption_notes = [
+        f"Budget to deploy is set to about ${resolved_budget:,.2f}.",
+        f"New adds should stay at or below about {resolved_max_position_pct:.0%} of the portfolio unless you later override that.",
+    ]
+    if base_preferences.inferred_sector_avoidances:
+        assumption_notes.append(
+            "Current crowded sectors are still treated as lower-priority places for fresh capital unless you explicitly choose them."
+        )
+
+    constraints_summary = (
+        f"The buy side should currently work with about ${resolved_budget:,.2f}, a stated risk tolerance of {resolved_risk_score:.0f}/100 ({resolved_risk_band}), "
+        f"and a new-position cap near {resolved_max_position_pct:.0%}. "
+        f"{vehicle_preference_label}"
+    )
+
+    return PortfolioPreferences(
+        available_cash_now=base_preferences.available_cash_now,
+        available_cash_if_actions_followed=base_preferences.available_cash_if_actions_followed,
+        budget_to_deploy=round(float(resolved_budget), 2),
+        reinvest_freed_cash=reinvest_freed_cash,
+        reinvestment_preference_label=reinvestment_preference_label,
+        stated_risk_score=round(resolved_risk_score, 1),
+        stated_risk_band=resolved_risk_band,
+        suggested_max_new_position_pct=round(resolved_max_position_pct, 4),
+        allow_etfs=allow_etfs,
+        allow_single_stocks=allow_single_stocks,
+        single_stocks_preferred=single_stocks_preferred,
+        vehicle_preference_label=vehicle_preference_label,
+        sector_preferences=cleaned_sector_preferences,
+        inferred_sector_avoidances=base_preferences.inferred_sector_avoidances,
+        constraints_summary=constraints_summary,
+        unresolved_preferences=unresolved_preferences,
+        assumption_notes=assumption_notes,
+        preference_source="user_defined",
     )
 
 

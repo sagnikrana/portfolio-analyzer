@@ -21,9 +21,19 @@ from plotly.subplots import make_subplots
 import yfinance as yf
 
 try:
-    from portfolio_analyzer.diagnosis import PortfolioRiskDiagnosis, portfolio_risk_diagnosis_from_saved_artifacts
+    from portfolio_analyzer.diagnosis import (
+        PortfolioPreferences,
+        PortfolioRiskDiagnosis,
+        portfolio_preferences_from_user_inputs,
+        portfolio_risk_diagnosis_from_saved_artifacts,
+    )
 except ModuleNotFoundError:
-    from diagnosis import PortfolioRiskDiagnosis, portfolio_risk_diagnosis_from_saved_artifacts
+    from diagnosis import (
+        PortfolioPreferences,
+        PortfolioRiskDiagnosis,
+        portfolio_preferences_from_user_inputs,
+        portfolio_risk_diagnosis_from_saved_artifacts,
+    )
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -3390,9 +3400,8 @@ def build_portfolio_gap_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame
     return frame.sort_values("_sort", ascending=False).drop(columns=["_sort"]).reset_index(drop=True)
 
 
-def build_portfolio_preferences_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
-    """Render the inferred PortfolioPreferences object as a review table."""
-    preferences = diagnosis.portfolio_preferences
+def build_portfolio_preferences_frame(preferences: PortfolioPreferences | None) -> pd.DataFrame:
+    """Render a `PortfolioPreferences` object as a review table."""
     if preferences is None:
         return pd.DataFrame(columns=["Preference", "Current setting"])
 
@@ -3401,6 +3410,10 @@ def build_portfolio_preferences_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.D
         {
             "Preference": "Available cash if current actions are followed",
             "Current setting": money_text(preferences.available_cash_if_actions_followed),
+        },
+        {
+            "Preference": "Budget to deploy",
+            "Current setting": money_text(preferences.budget_to_deploy),
         },
         {"Preference": "Reinvest freed cash", "Current setting": preferences.reinvestment_preference_label},
         {
@@ -3413,6 +3426,16 @@ def build_portfolio_preferences_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.D
         },
         {"Preference": "ETFs allowed", "Current setting": "Yes" if preferences.allow_etfs else "No"},
         {"Preference": "Single stocks allowed", "Current setting": "Yes" if preferences.allow_single_stocks else "No"},
+        {
+            "Preference": "Single stocks preferred",
+            "Current setting": (
+                "Yes"
+                if preferences.single_stocks_preferred is True
+                else "No"
+                if preferences.single_stocks_preferred is False
+                else "No strong preference"
+            ),
+        },
         {"Preference": "Default vehicle tilt", "Current setting": preferences.vehicle_preference_label},
         {
             "Preference": "Sector preferences",
@@ -3430,8 +3453,109 @@ def build_portfolio_preferences_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.D
             "Preference": "Assumptions being used right now",
             "Current setting": " | ".join(preferences.assumption_notes),
         },
+        {"Preference": "Preference source", "Current setting": preferences.preference_source},
     ]
     return pd.DataFrame(rows)
+
+
+def build_buy_preferences_html(preferences: PortfolioPreferences | None) -> str:
+    """Render a concise summary of the active buy-side preference object."""
+    if preferences is None:
+        return (
+            "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Preferences</div>"
+            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>Run an analysis first, then set the buy-side constraints here.</div>"
+            "</div>"
+        )
+
+    source_text = "User-defined constraints" if preferences.preference_source == "user_defined" else "Inferred defaults"
+    unresolved_html = "".join(
+        f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
+        for item in preferences.unresolved_preferences[:4]
+    ) or "<li>No major unresolved preference is blocking the next step.</li>"
+    cards = (
+        metric_card("Budget to deploy", money_text(preferences.budget_to_deploy), source_text)
+        + metric_card("Risk tolerance", f"{preferences.stated_risk_score:.0f}/100", preferences.stated_risk_band)
+        + metric_card("Max new add", percent_display(preferences.suggested_max_new_position_pct), "Per new position")
+        + metric_card(
+            "Vehicle tilt",
+            (
+                "Prefer single stocks"
+                if preferences.single_stocks_preferred is True
+                else "Prefer ETFs"
+                if preferences.single_stocks_preferred is False
+                else "Blend"
+            ),
+            preferences.vehicle_preference_label,
+        )
+    )
+    return (
+        "<div style='display:flex;flex-direction:column;gap:16px'>"
+        "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Preferences</div>"
+        f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>{render_bold_markers(preferences.constraints_summary)}</div>"
+        f"<div class='metric-strip' style='margin-top:14px'>{cards}</div>"
+        "</div>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:18px;font-weight:800;color:#f8fafc'>Still open before buy recommendations</div>"
+        f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{unresolved_html}</ul>"
+        "</div>"
+        "</div>"
+    )
+
+
+def build_buy_preference_sector_choices(diagnosis: PortfolioRiskDiagnosis) -> list[str]:
+    """Return sector choices ordered for the buy-preferences form."""
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for driver in diagnosis.top_sector_drivers:
+        sector = str(driver.sector or "").strip()
+        if sector and sector not in seen:
+            ordered.append(sector)
+            seen.add(sector)
+    for driver in diagnosis.top_holding_drivers:
+        sector = str(driver.sector or "").strip()
+        if sector and sector not in seen:
+            ordered.append(sector)
+            seen.add(sector)
+    return ordered
+
+
+def build_user_portfolio_preferences(
+    diagnosis_payload: dict[str, Any] | None,
+    budget_to_deploy: float | None,
+    reinvest_choice: str,
+    sector_preferences: list[str] | None,
+    max_new_position_pct: float,
+    stated_risk_score: float,
+    allow_etfs: bool,
+    allow_single_stocks: bool,
+    vehicle_preference: str,
+) -> tuple[str, pd.DataFrame]:
+    """Create a user-defined `PortfolioPreferences` object from tab inputs."""
+    if not diagnosis_payload:
+        raise gr.Error("Run analysis first so the buy preferences can inherit the current portfolio context.")
+
+    diagnosis = PortfolioRiskDiagnosis.model_validate(diagnosis_payload)
+    base_preferences = diagnosis.portfolio_preferences
+    if base_preferences is None:
+        raise gr.Error("The current diagnosis does not include default portfolio preferences yet.")
+
+    preferences = portfolio_preferences_from_user_inputs(
+        base_preferences=base_preferences,
+        budget_to_deploy=budget_to_deploy,
+        reinvest_choice=reinvest_choice,
+        sector_preferences=sector_preferences,
+        max_new_position_pct=max_new_position_pct / 100.0 if max_new_position_pct is not None else None,
+        stated_risk_score=stated_risk_score,
+        allow_etfs=allow_etfs,
+        allow_single_stocks=allow_single_stocks,
+        vehicle_preference=vehicle_preference,
+    )
+    return build_buy_preferences_html(preferences), build_portfolio_preferences_frame(preferences)
 
 
 def build_portfolio_gaps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
@@ -5062,7 +5186,24 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
     portfolio_gaps_html = build_portfolio_gaps_html(diagnosis)
     portfolio_gap_fig = plot_portfolio_gaps(diagnosis)
     portfolio_gaps_df = build_portfolio_gap_frame(diagnosis)
-    portfolio_preferences_df = build_portfolio_preferences_frame(diagnosis)
+    portfolio_preferences_df = build_portfolio_preferences_frame(diagnosis.portfolio_preferences)
+    buy_preferences_html = build_buy_preferences_html(diagnosis.portfolio_preferences)
+    buy_preference_sector_choices = build_buy_preference_sector_choices(diagnosis)
+    base_preferences = diagnosis.portfolio_preferences
+    reinvest_choice = (
+        "Yes"
+        if base_preferences is not None and base_preferences.reinvest_freed_cash is True
+        else "No"
+        if base_preferences is not None and base_preferences.reinvest_freed_cash is False
+        else "Decide later"
+    )
+    vehicle_preference = (
+        "Prefer single stocks"
+        if base_preferences is not None and base_preferences.single_stocks_preferred is True
+        else "Prefer ETFs"
+        if base_preferences is not None and base_preferences.single_stocks_preferred is False
+        else "Blend"
+    )
     eq_fig = plot_equity_curves(market_metrics["timeseries"])
     sector_fig = plot_sector_allocation(market_metrics.get("sector_allocation", []))
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
@@ -5092,6 +5233,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         risk_md,
         risk_guide_html,
         risk,
+        diagnosis.model_dump(mode="json"),
         tables["holdings"],
         tables["attribution"],
         tables["volatility_drivers"],
@@ -5111,6 +5253,16 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         portfolio_gap_fig,
         portfolio_gaps_df,
         portfolio_preferences_df,
+        buy_preferences_html,
+        build_portfolio_preferences_frame(diagnosis.portfolio_preferences),
+        gr.update(choices=buy_preference_sector_choices, value=(base_preferences.sector_preferences if base_preferences is not None else [])),
+        gr.update(value=(base_preferences.budget_to_deploy if base_preferences is not None else None)),
+        gr.update(value=reinvest_choice),
+        gr.update(value=((base_preferences.suggested_max_new_position_pct or 0.08) * 100 if base_preferences is not None else 8.0)),
+        gr.update(value=(base_preferences.stated_risk_score if base_preferences is not None else risk_profile)),
+        gr.update(value=(base_preferences.allow_etfs if base_preferences is not None else True)),
+        gr.update(value=(base_preferences.allow_single_stocks if base_preferences is not None else True)),
+        gr.update(value=vehicle_preference),
         diagnosis_supporting_metrics_df,
         diagnosis_holding_fundamentals_df,
         diagnosis_narrative_evidence_df,
@@ -5250,6 +5402,7 @@ def build_app() -> gr.Blocks:
 
             with gr.Column(scale=3, elem_classes=["content-rail"]):
                 risk_state = gr.State(value=None)
+                diagnosis_state = gr.State(value={})
                 diagnosis_chart_state = gr.State(value={})
                 cards = gr.HTML(label="Summary Cards", elem_classes=["summary-cards-wrap"])
                 with gr.Tabs(selected="overview") as main_tabs:
@@ -5342,6 +5495,63 @@ def build_app() -> gr.Blocks:
                                 interactive=False,
                                 wrap=True,
                             )
+                    with gr.Tab("Buy Preferences", id="buy-preferences"):
+                        with gr.Row(equal_height=False):
+                            with gr.Column(scale=1, min_width=300):
+                                buy_budget_to_deploy = gr.Number(
+                                    label="Budget To Deploy",
+                                    value=None,
+                                    precision=2,
+                                    info="Leave as the default if you want the current cash plus freed cash from actions.",
+                                )
+                                buy_reinvest_choice = gr.Radio(
+                                    choices=["Yes", "No", "Decide later"],
+                                    value="Decide later",
+                                    label="Should freed cash be reinvested?",
+                                )
+                                buy_sector_preferences = gr.Dropdown(
+                                    label="Preferred Sectors",
+                                    choices=[],
+                                    value=[],
+                                    multiselect=True,
+                                    interactive=True,
+                                    info="Optional. Leave blank if you want the future buy engine to focus on portfolio need first.",
+                                )
+                                buy_max_position_size = gr.Slider(
+                                    minimum=1,
+                                    maximum=25,
+                                    value=8,
+                                    step=1,
+                                    label="Max Size For A New Position (%)",
+                                )
+                                buy_risk_tolerance = gr.Slider(
+                                    minimum=0,
+                                    maximum=100,
+                                    value=60,
+                                    step=1,
+                                    label="Buy-Side Risk Tolerance (0-100)",
+                                )
+                                buy_allow_etfs = gr.Checkbox(
+                                    label="Allow ETFs",
+                                    value=True,
+                                )
+                                buy_allow_single_stocks = gr.Checkbox(
+                                    label="Allow Single Stocks",
+                                    value=True,
+                                )
+                                buy_vehicle_preference = gr.Radio(
+                                    choices=["Blend", "Prefer ETFs", "Prefer single stocks"],
+                                    value="Blend",
+                                    label="Preferred Vehicle Mix",
+                                )
+                                apply_buy_preferences_btn = gr.Button("Apply Buy Preferences", variant="primary")
+                            with gr.Column(scale=2, min_width=360):
+                                buy_preferences_md = gr.HTML()
+                                buy_preferences_df = gr.Dataframe(
+                                    label="Active Buy Preference Object",
+                                    interactive=False,
+                                    wrap=True,
+                                )
                     with gr.Tab("Risk Guide", id="risk-guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
@@ -5357,6 +5567,7 @@ def build_app() -> gr.Blocks:
                 risk_md,
                 risk_guide_md,
                 risk_state,
+                diagnosis_state,
                 holdings_df,
                 attribution_df,
                 volatility_drivers_df,
@@ -5376,6 +5587,16 @@ def build_app() -> gr.Blocks:
                 portfolio_gap_plot,
                 portfolio_gaps_df,
                 portfolio_preferences_df,
+                buy_preferences_md,
+                buy_preferences_df,
+                buy_sector_preferences,
+                buy_budget_to_deploy,
+                buy_reinvest_choice,
+                buy_max_position_size,
+                buy_risk_tolerance,
+                buy_allow_etfs,
+                buy_allow_single_stocks,
+                buy_vehicle_preference,
                 diagnosis_supporting_metrics_df,
                 diagnosis_holding_fundamentals_df,
                 diagnosis_narrative_evidence_df,
@@ -5398,6 +5619,25 @@ def build_app() -> gr.Blocks:
                 diagnosis_recent_volatility_plot,
                 diagnosis_drawdown_plot,
                 diagnosis_market_sensitivity_plot,
+            ],
+        )
+
+        apply_buy_preferences_btn.click(
+            fn=build_user_portfolio_preferences,
+            inputs=[
+                diagnosis_state,
+                buy_budget_to_deploy,
+                buy_reinvest_choice,
+                buy_sector_preferences,
+                buy_max_position_size,
+                buy_risk_tolerance,
+                buy_allow_etfs,
+                buy_allow_single_stocks,
+                buy_vehicle_preference,
+            ],
+            outputs=[
+                buy_preferences_md,
+                buy_preferences_df,
             ],
         )
 
