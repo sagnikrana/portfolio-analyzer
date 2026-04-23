@@ -6018,7 +6018,7 @@ def launch_app() -> None:
     app = build_app()
     # Default to local launch so the dashboard reliably binds to 7861 without
     # depending on Gradio's share tunnel port allocation.
-    app.launch(server_name="127.0.0.1", server_port=7862, share=True)
+    app.launch(server_name="127.0.0.1", server_port=7860, share=True)
 
 
 if __name__ == "__main__":
