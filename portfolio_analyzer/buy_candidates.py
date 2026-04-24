@@ -17,10 +17,10 @@ RAW_DIR = DATA_DIR / "raw"
 STRUCTURED_DIR = DATA_DIR / "processed" / "structured"
 
 BUY_CANDIDATE_UNIVERSE_PATH = RAW_DIR / "buy_candidate_universe.csv"
-SP500_CONSTITUENTS_PATH = RAW_DIR / "sp500_constituents.csv"
-NASDAQ100_CONSTITUENTS_PATH = RAW_DIR / "nasdaq100_constituents.csv"
-DOW30_CONSTITUENTS_PATH = RAW_DIR / "dow30_constituents.csv"
-MAJOR_ETF_HOLDINGS_PATH = RAW_DIR / "major_etf_holdings.csv"
+SP500_CONSTITUENTS_PATH = STRUCTURED_DIR / "sp500_constituents.csv"
+NASDAQ100_CONSTITUENTS_PATH = STRUCTURED_DIR / "nasdaq100_constituents.csv"
+DOW30_CONSTITUENTS_PATH = STRUCTURED_DIR / "dow30_constituents.csv"
+MAJOR_ETF_HOLDINGS_PATH = STRUCTURED_DIR / "major_etf_holdings.csv"
 
 SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 NASDAQ100_WIKI_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
@@ -731,6 +731,7 @@ def build_known_universe_datasets() -> dict[str, pd.DataFrame]:
     intentionally when we want to refresh the buy universe.
     """
     RAW_DIR.mkdir(parents=True, exist_ok=True)
+    STRUCTURED_DIR.mkdir(parents=True, exist_ok=True)
 
     sp500 = _extract_sp500_constituents()
     nasdaq100 = _extract_nasdaq100_constituents()
