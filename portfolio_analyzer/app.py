@@ -37,15 +37,19 @@ try:
     from portfolio_analyzer.diagnosis import (
         PortfolioPreferences,
         PortfolioRiskDiagnosis,
+        ReplacementCandidate,
         portfolio_preferences_from_user_inputs,
         portfolio_risk_diagnosis_from_saved_artifacts,
+        replacement_candidates_from_user_preferences,
     )
 except ModuleNotFoundError:
     from diagnosis import (
         PortfolioPreferences,
         PortfolioRiskDiagnosis,
+        ReplacementCandidate,
         portfolio_preferences_from_user_inputs,
         portfolio_risk_diagnosis_from_saved_artifacts,
+        replacement_candidates_from_user_preferences,
     )
 
 
@@ -3838,6 +3842,211 @@ def build_buy_candidate_enriched_frame(enriched_frame: pd.DataFrame) -> pd.DataF
     return review.reset_index(drop=True)
 
 
+def build_buy_ideas_html(
+    diagnosis: PortfolioRiskDiagnosis,
+    preferences: PortfolioPreferences | None,
+    candidates: list[ReplacementCandidate],
+) -> str:
+    """Render the explanation-first `Buy Ideas` tab summary and top cards."""
+    if preferences is None:
+        return (
+            "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Ideas</div>"
+            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>Run analysis first so the app can understand the portfolio gaps and constraints.</div>"
+            "</div>"
+        )
+    if not candidates:
+        return (
+            "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Ideas</div>"
+            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No replacement candidates passed the current gap and preference filters yet.</div>"
+            "</div>"
+        )
+
+    top_candidate = candidates[0]
+    cards = (
+        metric_card("Top fit", top_candidate.ticker, top_candidate.linked_gap_label)
+        + metric_card("Current budget", money_text(preferences.budget_to_deploy), "Active buy preference object")
+        + metric_card(
+            "Vehicle mix",
+            (
+                "ETFs only"
+                if preferences.allow_etfs and not preferences.allow_single_stocks
+                else "Stocks only"
+                if preferences.allow_single_stocks and not preferences.allow_etfs
+                else "Blend"
+            ),
+            preferences.vehicle_preference_label,
+        )
+        + metric_card(
+            "Max new add",
+            percent_display(preferences.suggested_max_new_position_pct),
+            "Guardrail for future adds",
+        )
+    )
+
+    candidate_cards = ""
+    for candidate in candidates[:3]:
+        evidence_html = "".join(
+            f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
+            for item in candidate.evidence_summary[:4]
+        ) or "<li>No extra evidence was attached yet.</li>"
+        improvement_html = "".join(
+            f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
+            for item in candidate.what_it_improves[:3]
+        ) or "<li>No improvement notes were attached yet.</li>"
+        allocation_line = ""
+        if candidate.suggested_allocation_amount is not None and candidate.suggested_allocation_pct_of_budget is not None:
+            allocation_line = (
+                f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>"
+                f"Suggested starting slice: <strong style='color:#f8fafc'>{money_text(candidate.suggested_allocation_amount)}</strong> "
+                f"({percent_display(candidate.suggested_allocation_pct_of_budget)} of the current buy budget)"
+                f"</div>"
+            )
+        candidate_cards += (
+            "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
+            "background:rgba(15,23,42,.34);margin-bottom:14px'>"
+            "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
+            "<div>"
+            f"<div style='font-size:22px;font-weight:800;color:#f8fafc'>{candidate.ticker}"
+            f"<span style='font-size:15px;font-weight:500;color:#cbd5e1;margin-left:10px'>({candidate.asset_type} · {candidate.sector})</span></div>"
+            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Role: <strong style='color:#f8fafc'>{candidate.primary_role}</strong> · Confidence: <strong style='color:#f8fafc'>{candidate.confidence_band}</strong></div>"
+            f"{allocation_line}"
+            "</div>"
+            "<div style='display:flex;gap:8px;flex-wrap:wrap'>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(8,145,178,.18);border:1px solid rgba(34,211,238,.18);color:#a5f3fc;font-size:12px;font-weight:700'>{candidate.fit_score:.1f}/100 fit</div>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:#93c5fd;font-size:12px;font-weight:700'>{candidate.linked_gap_label}</div>"
+            "</div>"
+            "</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:14px'>{render_bold_markers(candidate.why_it_fits)}</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:10px'>{render_bold_markers(candidate.preference_fit_summary)}</div>"
+            "<div style='display:grid;grid-template-columns:minmax(260px,1fr) minmax(260px,1fr);gap:16px;margin-top:16px'>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What this could improve</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{improvement_html}</ul>"
+            "</div>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Evidence used</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence_html}</ul>"
+            "</div>"
+            "</div>"
+            "</div>"
+        )
+
+    return (
+        "<div style='display:flex;flex-direction:column;gap:16px'>"
+        "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Ideas</div>"
+        "<div style='font-size:15px;color:#93c5fd;margin-top:8px'>This is the first explanation-first buy layer: not \"what should I buy?\" in the abstract, but \"what kind of add would actually help after the current trims?\"</div>"
+        f"<div class='metric-strip' style='margin-top:14px'>{cards}</div>"
+        "</div>"
+        f"{candidate_cards}"
+        "</div>"
+    )
+
+
+def build_buy_ideas_frame(candidates: list[ReplacementCandidate]) -> pd.DataFrame:
+    """Convert replacement candidates into a compact review table."""
+    if not candidates:
+        return pd.DataFrame(
+            columns=[
+                "Ticker",
+                "Name",
+                "Gap Filled",
+                "Fit",
+                "Role",
+                "Suggested Budget Slice",
+                "1Y vs S&P 500",
+                "3Y vs S&P 500",
+                "5Y vs S&P 500",
+                "1Y Volatility",
+            ]
+        )
+
+    rows: list[dict[str, Any]] = []
+    for item in candidates:
+        rows.append(
+            {
+                "Ticker": item.ticker,
+                "Name": item.security_name,
+                "Gap Filled": item.linked_gap_label,
+                "Fit": f"{item.fit_score:.1f}/100 ({item.fit_band})",
+                "Role": item.primary_role,
+                "Suggested Budget Slice": (
+                    f"{money_text(item.suggested_allocation_amount)} ({percent_display(item.suggested_allocation_pct_of_budget)})"
+                    if item.suggested_allocation_amount is not None and item.suggested_allocation_pct_of_budget is not None
+                    else "Not sized yet"
+                ),
+                "1Y vs S&P 500": pct_text(item.relative_1y_return_pct),
+                "3Y vs S&P 500": pct_text(item.relative_3y_return_pct),
+                "5Y vs S&P 500": pct_text(item.relative_5y_return_pct),
+                "1Y Volatility": percent_display(item.annualized_volatility_1y),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def plot_buy_ideas(candidates: list[ReplacementCandidate]) -> go.Figure:
+    """Render a scan-first fit chart for the current buy ideas."""
+    fig = go.Figure()
+    if not candidates:
+        fig.add_annotation(
+            text="No buy ideas are available under the current constraints.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15, "color": "#e2e8f0"},
+        )
+        fig.update_layout(
+            title="Best Buy Ideas Right Now",
+            height=360,
+            margin={"l": 24, "r": 24, "t": 56, "b": 24},
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(17,24,39,0.55)",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
+    ordered = list(reversed(candidates[:5]))
+    fig.add_trace(
+        go.Bar(
+            x=[item.fit_score for item in ordered],
+            y=[item.ticker for item in ordered],
+            orientation="h",
+            marker={"color": "#22c55e"},
+            customdata=[[item.linked_gap_label, item.primary_role] for item in ordered],
+            text=[f"{item.fit_score:.0f}/100" for item in ordered],
+            textposition="outside",
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Fit score: %{x:.1f}/100<br>"
+                "Gap filled: %{customdata[0]}<br>"
+                "Role: %{customdata[1]}<extra></extra>"
+            ),
+        )
+    )
+    fig.update_layout(
+        title="Best Buy Ideas Right Now",
+        height=max(340, 100 + 56 * len(ordered)),
+        margin={"l": 40, "r": 24, "t": 56, "b": 36},
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+        hoverlabel=dark_hoverlabel(),
+        xaxis={"title": "Fit score", "range": [0, 100], "gridcolor": "rgba(148,163,184,0.16)"},
+        yaxis={"gridcolor": "rgba(148,163,184,0.08)"},
+        font={"color": "#e2e8f0"},
+    )
+    return fig
+
+
 def build_buy_preference_sector_choices(diagnosis: PortfolioRiskDiagnosis) -> list[str]:
     """Return sector choices ordered for the buy-preferences form."""
     ordered: list[str] = []
@@ -3865,8 +4074,13 @@ def build_user_portfolio_preferences(
     allow_etfs: bool,
     allow_single_stocks: bool,
     vehicle_preference: str,
-) -> tuple[str, pd.DataFrame]:
-    """Create a user-defined `PortfolioPreferences` object from tab inputs."""
+) -> tuple[str, pd.DataFrame, dict[str, Any], str, go.Figure, pd.DataFrame]:
+    """Create a user-defined `PortfolioPreferences` object from tab inputs.
+
+    This updates both the preference review surface and the downstream buy ideas
+    so the user can immediately see how a new constraint changes the candidate
+    set.
+    """
     if not diagnosis_payload:
         raise gr.Error("Run analysis first so the buy preferences can inherit the current portfolio context.")
 
@@ -3886,7 +4100,18 @@ def build_user_portfolio_preferences(
         allow_single_stocks=allow_single_stocks,
         vehicle_preference=vehicle_preference,
     )
-    return build_buy_preferences_html(preferences), build_portfolio_preferences_frame(preferences)
+    candidates = replacement_candidates_from_user_preferences(
+        diagnosis=diagnosis,
+        preferences=preferences,
+    )
+    return (
+        build_buy_preferences_html(preferences),
+        build_portfolio_preferences_frame(preferences),
+        preferences.model_dump(mode="json"),
+        build_buy_ideas_html(diagnosis, preferences, candidates),
+        plot_buy_ideas(candidates),
+        build_buy_ideas_frame(candidates),
+    )
 
 
 def build_portfolio_gaps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
@@ -5519,6 +5744,13 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
     portfolio_gaps_df = build_portfolio_gap_frame(diagnosis)
     portfolio_preferences_df = build_portfolio_preferences_frame(diagnosis.portfolio_preferences)
     buy_preferences_html = build_buy_preferences_html(diagnosis.portfolio_preferences)
+    buy_ideas_html = build_buy_ideas_html(
+        diagnosis,
+        diagnosis.portfolio_preferences,
+        diagnosis.replacement_candidates,
+    )
+    buy_ideas_fig = plot_buy_ideas(diagnosis.replacement_candidates)
+    buy_ideas_df = build_buy_ideas_frame(diagnosis.replacement_candidates)
     buy_preference_sector_choices = build_buy_preference_sector_choices(diagnosis)
     base_preferences = diagnosis.portfolio_preferences
     reinvest_choice = (
@@ -5565,6 +5797,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         risk_guide_html,
         risk,
         diagnosis.model_dump(mode="json"),
+        (base_preferences.model_dump(mode="json") if base_preferences is not None else {}),
         tables["holdings"],
         tables["attribution"],
         tables["volatility_drivers"],
@@ -5586,6 +5819,9 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         portfolio_preferences_df,
         buy_preferences_html,
         build_portfolio_preferences_frame(diagnosis.portfolio_preferences),
+        buy_ideas_html,
+        buy_ideas_fig,
+        buy_ideas_df,
         gr.update(choices=buy_preference_sector_choices, value=(base_preferences.sector_preferences if base_preferences is not None else [])),
         gr.update(value=(base_preferences.budget_to_deploy if base_preferences is not None else None)),
         gr.update(value=reinvest_choice),
@@ -5744,6 +5980,7 @@ def build_app() -> gr.Blocks:
                 risk_state = gr.State(value=None)
                 diagnosis_state = gr.State(value={})
                 diagnosis_chart_state = gr.State(value={})
+                buy_preferences_state = gr.State(value={})
                 cards = gr.HTML(label="Summary Cards", elem_classes=["summary-cards-wrap"])
                 with gr.Tabs(selected="overview") as main_tabs:
                     with gr.Tab("Overview", id="overview"):
@@ -5915,6 +6152,14 @@ def build_app() -> gr.Blocks:
                                     interactive=False,
                                     wrap=True,
                                 )
+                    with gr.Tab("Buy Ideas", id="buy-ideas"):
+                        buy_ideas_md = gr.HTML()
+                        buy_ideas_plot = gr.Plot(label="Best Buy Ideas Right Now")
+                        buy_ideas_df = gr.Dataframe(
+                            label="Replacement Candidate Review",
+                            interactive=False,
+                            wrap=True,
+                        )
                     with gr.Tab("Risk Guide", id="risk-guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
@@ -5931,6 +6176,7 @@ def build_app() -> gr.Blocks:
                 risk_guide_md,
                 risk_state,
                 diagnosis_state,
+                buy_preferences_state,
                 holdings_df,
                 attribution_df,
                 volatility_drivers_df,
@@ -5952,6 +6198,9 @@ def build_app() -> gr.Blocks:
                 portfolio_preferences_df,
                 buy_preferences_md,
                 buy_preferences_df,
+                buy_ideas_md,
+                buy_ideas_plot,
+                buy_ideas_df,
                 buy_sector_preferences,
                 buy_budget_to_deploy,
                 buy_reinvest_choice,
@@ -6001,6 +6250,10 @@ def build_app() -> gr.Blocks:
             outputs=[
                 buy_preferences_md,
                 buy_preferences_df,
+                buy_preferences_state,
+                buy_ideas_md,
+                buy_ideas_plot,
+                buy_ideas_df,
             ],
         )
 

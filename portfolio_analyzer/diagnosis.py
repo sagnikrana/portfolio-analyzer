@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
 from pydantic import BaseModel, Field
+
+try:
+    from portfolio_analyzer.buy_candidates import BuyCandidateUniverseEntry, load_buy_candidate_universe
+except ModuleNotFoundError:
+    from buy_candidates import BuyCandidateUniverseEntry, load_buy_candidate_universe
+
+
+APP_DIR = Path(__file__).resolve().parent
+REPO_ROOT = APP_DIR.parent
+RAW_DIR = REPO_ROOT / "data" / "raw"
+STRUCTURED_DIR = REPO_ROOT / "data" / "processed" / "structured"
+BUY_CANDIDATE_UNIVERSE_PATH = RAW_DIR / "buy_candidate_universe.csv"
+BUY_CANDIDATE_UNIVERSE_ENRICHED_PATH = STRUCTURED_DIR / "buy_candidate_universe_enriched.csv"
 
 
 class RiskMetricObservation(BaseModel):
@@ -421,6 +435,46 @@ class PortfolioPreferences(BaseModel):
     preference_source: str = "inferred_defaults"
 
 
+class ReplacementCandidate(BaseModel):
+    """A first-pass buy-side idea tied to a portfolio gap and user constraints.
+
+    This object is intentionally narrower than a full rebalance optimizer. Its
+    job is to answer:
+
+    - which curated candidate looks worth considering next?
+    - which specific portfolio gap would it help fill?
+    - why does it fit the current buy preferences?
+    - what simple evidence supports keeping it in the idea set?
+
+    The object stays explanation-first so the user can understand *why the name
+    is here* before we ever get into a harder buy-size or optimization layer.
+    """
+
+    ticker: str
+    security_name: str
+    asset_type: str
+    sector: str
+    primary_role: str
+    style_tilt: str
+    linked_gap_key: str
+    linked_gap_label: str
+    fit_score: float
+    fit_band: str
+    why_it_fits: str
+    what_it_improves: list[str] = Field(default_factory=list)
+    preference_fit_summary: str = ""
+    evidence_summary: list[str] = Field(default_factory=list)
+    suggested_allocation_pct_of_budget: Optional[float] = None
+    suggested_allocation_amount: Optional[float] = None
+    relative_1y_return_pct: Optional[float] = None
+    relative_3y_return_pct: Optional[float] = None
+    relative_5y_return_pct: Optional[float] = None
+    annualized_volatility_1y: Optional[float] = None
+    beta: Optional[float] = None
+    confidence_score: float = 0.0
+    confidence_band: str = "Low"
+
+
 class PortfolioRiskDiagnosis(BaseModel):
     """Top-level typed diagnosis object for one analyzed portfolio snapshot.
 
@@ -457,6 +511,7 @@ class PortfolioRiskDiagnosis(BaseModel):
     portfolio_action_impact: Optional[PortfolioActionImpact] = None
     portfolio_gaps: list[PortfolioGap] = Field(default_factory=list)
     portfolio_preferences: Optional[PortfolioPreferences] = None
+    replacement_candidates: list[ReplacementCandidate] = Field(default_factory=list)
     supporting_metrics: list[RiskMetricObservation] = Field(default_factory=list)
     macro_context: Optional[MacroRegimeSnapshot] = None
     holding_fundamentals: list[CompanyFundamentalSnapshot] = Field(default_factory=list)
@@ -474,6 +529,7 @@ HoldingActionRecommendation.model_rebuild()
 PortfolioActionImpact.model_rebuild()
 PortfolioGap.model_rebuild()
 PortfolioPreferences.model_rebuild()
+ReplacementCandidate.model_rebuild()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -2726,6 +2782,384 @@ def _build_portfolio_gaps(
     return sorted(gaps, key=lambda item: (-item.severity_score, item.label))
 
 
+@lru_cache(maxsize=1)
+def _load_buy_candidate_universe_inputs() -> tuple[list[BuyCandidateUniverseEntry], pd.DataFrame]:
+    """Load the curated buy universe and its enriched metrics once per process.
+
+    The buy-side candidate layer reads from a deliberately small curated
+    universe. Caching keeps the first-pass buy engine fast while preserving the
+    explicit file-backed boundary between research data and recommendation logic.
+    """
+    entries = load_buy_candidate_universe(BUY_CANDIDATE_UNIVERSE_PATH)
+    enriched = _load_csv(BUY_CANDIDATE_UNIVERSE_ENRICHED_PATH)
+    return entries, enriched
+
+
+def _fit_band(score: float) -> str:
+    """Map a buy-candidate fit score onto a quick review label."""
+    if score < 35:
+        return "Weak fit"
+    if score < 55:
+        return "Plausible fit"
+    if score < 75:
+        return "Good fit"
+    return "Strong fit"
+
+
+def _replacement_candidate_confidence(score: float, evidence_count: int) -> tuple[float, str]:
+    """Estimate confidence for a replacement candidate from fit and evidence."""
+    confidence_score = min(1.0, 0.2 + (score / 100.0) * 0.5 + min(evidence_count, 4) * 0.08)
+    if confidence_score < 0.4:
+        band = "Low"
+    elif confidence_score < 0.72:
+        band = "Medium"
+    else:
+        band = "High"
+    return round(confidence_score, 2), band
+
+
+def _gap_score_for_candidate(
+    candidate: BuyCandidateUniverseEntry,
+    gap: PortfolioGap,
+    candidate_row: dict[str, Any],
+    preferences: PortfolioPreferences,
+) -> tuple[float, list[str], list[str]]:
+    """Score how well one candidate fits one portfolio gap.
+
+    The first buy engine should stay explainable. This helper gives each
+    candidate a deterministic score against each gap, plus human-readable
+    reasons that later power the `Buy Ideas` tab.
+    """
+    score = 0.0
+    reasons: list[str] = []
+    evidence: list[str] = []
+
+    volatility_1y = _safe_float(candidate_row.get("annualized_volatility_1y"))
+    rel_1y = _safe_float(candidate_row.get("relative_1y_return_pct"))
+    rel_3y = _safe_float(candidate_row.get("relative_3y_return_pct"))
+    rel_5y = _safe_float(candidate_row.get("relative_5y_return_pct"))
+    beta = _safe_float(candidate_row.get("beta"))
+
+    if gap.gap_key == "diversified_core":
+        if candidate.is_core:
+            score += 26
+            reasons.append("it adds broader, steadier core exposure")
+        if candidate.primary_role in {"Core benchmark ballast", "Core diversification"}:
+            score += 20
+        if candidate.asset_type == "ETF":
+            score += 8
+        if candidate.sector == "Broad Market":
+            score += 8
+        if rel_3y is not None and rel_3y >= 0:
+            score += 6
+            evidence.append(f"3Y vs S&P 500: {rel_3y:.1%}")
+        if rel_5y is not None and rel_5y >= 0:
+            score += 6
+            evidence.append(f"5Y vs S&P 500: {rel_5y:.1%}")
+
+    if gap.gap_key == "sector_balance":
+        if candidate.sector not in preferences.inferred_sector_avoidances:
+            score += 16
+            reasons.append("it does not add more weight to the most crowded current sector")
+        if candidate.sector in (preferences.sector_preferences or []):
+            score += 18
+            reasons.append("it also matches the sector preference you set")
+        if candidate.sector == "Broad Market":
+            score += 10
+            reasons.append("broad-market exposure naturally spreads sector risk")
+
+    if gap.gap_key == "defensive_ballast":
+        if candidate.is_defensive:
+            score += 24
+            reasons.append("it is designed to be steadier than a high-swing equity sleeve")
+        if "defensive" in candidate.primary_role.lower() or "stability" in candidate.primary_role.lower():
+            score += 15
+        if volatility_1y is not None and volatility_1y <= 0.14:
+            score += 16
+            evidence.append(f"1Y volatility: {volatility_1y:.1%}")
+        elif volatility_1y is not None and volatility_1y <= 0.18:
+            score += 8
+            evidence.append(f"1Y volatility: {volatility_1y:.1%}")
+        if candidate.asset_type == "ETF":
+            score += 6
+        if beta is not None and beta <= 1.0:
+            score += 8
+            evidence.append(f"Beta: {beta:.2f}")
+
+    if gap.gap_key == "capital_redeployment_plan":
+        if candidate.is_core:
+            score += 14
+            reasons.append("it gives freed cash a clear job instead of pushing it back into a narrow theme")
+        if candidate.asset_type == "ETF":
+            score += 8
+        if rel_1y is not None and rel_1y >= -0.05:
+            score += 6
+            evidence.append(f"1Y vs S&P 500: {rel_1y:.1%}")
+
+    if rel_1y is not None and rel_1y > 0:
+        score += min(10.0, rel_1y * 55.0)
+    elif rel_1y is not None and rel_1y < -0.20:
+        score -= 8
+
+    if rel_3y is not None and rel_3y > 0:
+        score += min(12.0, rel_3y * 18.0)
+    elif rel_3y is not None and rel_3y < -0.25:
+        score -= 10
+
+    if rel_5y is not None and rel_5y > 0:
+        score += min(12.0, rel_5y * 12.0)
+    elif rel_5y is not None and rel_5y < -0.30:
+        score -= 10
+
+    return round(score, 1), _unique_nonempty(reasons), _unique_nonempty(evidence)
+
+
+def _preference_penalty_or_bonus(
+    candidate: BuyCandidateUniverseEntry,
+    preferences: PortfolioPreferences,
+) -> tuple[float, list[str]]:
+    """Adjust candidate fit for explicit user constraints."""
+    delta = 0.0
+    notes: list[str] = []
+
+    if candidate.asset_type == "ETF":
+        if not preferences.allow_etfs:
+            return -999.0, ["ETFs are turned off in the current buy preferences."]
+        if preferences.single_stocks_preferred is False:
+            delta += 8.0
+            notes.append("it matches the current ETF preference")
+    else:
+        if not preferences.allow_single_stocks:
+            return -999.0, ["Single stocks are turned off in the current buy preferences."]
+        if preferences.single_stocks_preferred is True:
+            delta += 8.0
+            notes.append("it matches the current single-stock preference")
+
+    preferred_sectors = set(preferences.sector_preferences or [])
+    if preferred_sectors:
+        if candidate.sector in preferred_sectors:
+            delta += 10.0
+            notes.append("it falls inside the sectors you prefer")
+        elif candidate.sector != "Broad Market":
+            delta -= 4.0
+
+    avoided_sectors = set(preferences.inferred_sector_avoidances or [])
+    if candidate.sector in avoided_sectors and candidate.sector not in preferred_sectors:
+        delta -= 18.0
+        notes.append("it sits in a sector the current portfolio already leans on heavily")
+
+    return delta, notes
+
+
+def _candidate_allocation_from_rank(
+    *,
+    candidate_rank: int,
+    candidate_count: int,
+    budget_to_deploy: Optional[float],
+) -> tuple[Optional[float], Optional[float]]:
+    """Suggest a simple starting budget split across the top buy ideas."""
+    if budget_to_deploy is None or budget_to_deploy <= 0 or candidate_count <= 0:
+        return None, None
+
+    base_splits = [0.4, 0.35, 0.25]
+    if candidate_count == 1:
+        pct = 1.0
+    elif candidate_count == 2:
+        pct = 0.55 if candidate_rank == 0 else 0.45
+    else:
+        pct = base_splits[min(candidate_rank, 2)]
+    return round(pct, 4), round(float(budget_to_deploy) * pct, 2)
+
+
+def _build_replacement_candidates(
+    *,
+    portfolio_gaps: list[PortfolioGap],
+    portfolio_preferences: Optional[PortfolioPreferences],
+    holding_action_recommendations: list[HoldingActionRecommendation],
+) -> list[ReplacementCandidate]:
+    """Build the first explanation-first set of buy ideas.
+
+    This is not yet a full optimizer or a broad stock-search engine. It is a
+    deterministic bridge from:
+
+    - what the portfolio still needs
+    - what the user currently allows
+    - what the curated buy universe contains
+
+    into a short list of candidates worth reviewing next.
+    """
+    if portfolio_preferences is None or not portfolio_gaps:
+        return []
+
+    entries, enriched = _load_buy_candidate_universe_inputs()
+    if not entries or enriched.empty:
+        return []
+
+    actionable_tickers = {
+        item.ticker
+        for item in holding_action_recommendations
+        if item.is_actionable
+    }
+    gaps_to_score = portfolio_gaps[:3]
+    enriched_records = {
+        str(row.get("ticker")): row for row in enriched.to_dict(orient="records")
+    }
+
+    scored_candidates: list[dict[str, Any]] = []
+    for entry in entries:
+        if not entry.eligible_for_buy_engine:
+            continue
+        if entry.ticker in actionable_tickers:
+            continue
+        row = enriched_records.get(entry.ticker, {})
+        preference_adjustment, preference_notes = _preference_penalty_or_bonus(entry, portfolio_preferences)
+        if preference_adjustment <= -900:
+            continue
+
+        best_gap: Optional[PortfolioGap] = None
+        best_gap_score = -999.0
+        best_gap_reasons: list[str] = []
+        best_gap_evidence: list[str] = []
+        for gap in gaps_to_score:
+            gap_score, gap_reasons, gap_evidence = _gap_score_for_candidate(
+                entry,
+                gap,
+                row,
+                portfolio_preferences,
+            )
+            total_gap_score = gap_score + preference_adjustment
+            if total_gap_score > best_gap_score:
+                best_gap = gap
+                best_gap_score = total_gap_score
+                best_gap_reasons = gap_reasons
+                best_gap_evidence = gap_evidence
+
+        if best_gap is None:
+            continue
+
+        reason_parts = best_gap_reasons[:2] + preference_notes[:1]
+        why_it_fits = (
+            f"{entry.ticker} stands out because "
+            + "; ".join(reason_parts)
+            + "."
+            if reason_parts
+            else f"{entry.ticker} is a plausible fit for the current portfolio gap."
+        )
+        evidence_summary = _unique_nonempty(
+            best_gap_evidence
+            + [
+                f"Primary role: {entry.primary_role}",
+                f"Sector: {entry.sector}",
+                (
+                    f"1Y volatility: {_safe_float(row.get('annualized_volatility_1y')):.1%}"
+                    if _safe_float(row.get("annualized_volatility_1y")) is not None else None
+                ),
+                (
+                    f"1Y vs S&P 500: {_safe_float(row.get('relative_1y_return_pct')):.1%}"
+                    if _safe_float(row.get("relative_1y_return_pct")) is not None else None
+                ),
+                (
+                    f"3Y vs S&P 500: {_safe_float(row.get('relative_3y_return_pct')):.1%}"
+                    if _safe_float(row.get("relative_3y_return_pct")) is not None else None
+                ),
+                (
+                    f"5Y vs S&P 500: {_safe_float(row.get('relative_5y_return_pct')):.1%}"
+                    if _safe_float(row.get("relative_5y_return_pct")) is not None else None
+                ),
+            ]
+        )
+        what_it_improves = _unique_nonempty(best_gap.what_would_change[:3])
+        preference_fit_summary = (
+            "Fits the current constraints by "
+            + "; ".join(preference_notes)
+            if preference_notes
+            else "Fits the current constraints without breaking the vehicle or sector rules already in place."
+        )
+        scored_candidates.append(
+            {
+                "entry": entry,
+                "row": row,
+                "gap": best_gap,
+                "fit_score": round(max(0.0, min(100.0, best_gap_score)), 1),
+                "why_it_fits": why_it_fits,
+                "what_it_improves": what_it_improves,
+                "preference_fit_summary": preference_fit_summary,
+                "evidence_summary": evidence_summary[:5],
+            }
+        )
+
+    scored_candidates.sort(
+        key=lambda item: (
+            -item["fit_score"],
+            item["entry"].asset_type != "ETF",
+            item["entry"].ticker,
+        )
+    )
+    top_candidates = scored_candidates[:3]
+
+    replacement_candidates: list[ReplacementCandidate] = []
+    for rank, item in enumerate(top_candidates):
+        allocation_pct, allocation_amount = _candidate_allocation_from_rank(
+            candidate_rank=rank,
+            candidate_count=len(top_candidates),
+            budget_to_deploy=portfolio_preferences.budget_to_deploy,
+        )
+        confidence_score, confidence_band = _replacement_candidate_confidence(
+            item["fit_score"],
+            len(item["evidence_summary"]),
+        )
+        entry = item["entry"]
+        row = item["row"]
+        gap = item["gap"]
+        replacement_candidates.append(
+            ReplacementCandidate(
+                ticker=entry.ticker,
+                security_name=entry.security_name,
+                asset_type=entry.asset_type,
+                sector=entry.sector,
+                primary_role=entry.primary_role,
+                style_tilt=entry.style_tilt,
+                linked_gap_key=gap.gap_key,
+                linked_gap_label=gap.label,
+                fit_score=item["fit_score"],
+                fit_band=_fit_band(item["fit_score"]),
+                why_it_fits=item["why_it_fits"],
+                what_it_improves=item["what_it_improves"],
+                preference_fit_summary=item["preference_fit_summary"],
+                evidence_summary=item["evidence_summary"],
+                suggested_allocation_pct_of_budget=allocation_pct,
+                suggested_allocation_amount=allocation_amount,
+                relative_1y_return_pct=_safe_float(row.get("relative_1y_return_pct")),
+                relative_3y_return_pct=_safe_float(row.get("relative_3y_return_pct")),
+                relative_5y_return_pct=_safe_float(row.get("relative_5y_return_pct")),
+                annualized_volatility_1y=_safe_float(row.get("annualized_volatility_1y")),
+                beta=_safe_float(row.get("beta")),
+                confidence_score=confidence_score,
+                confidence_band=confidence_band,
+            )
+        )
+    return replacement_candidates
+
+
+def replacement_candidates_from_user_preferences(
+    *,
+    diagnosis: PortfolioRiskDiagnosis,
+    preferences: PortfolioPreferences,
+) -> list[ReplacementCandidate]:
+    """Rebuild buy ideas after the user changes buy-side constraints.
+
+    The dashboard should not need to rerun the whole portfolio analysis just to
+    refresh buy ideas after a user changes the budget, vehicle mix, or sector
+    preferences. This helper lets the app keep the diagnosis fixed while
+    recomputing replacement candidates from the updated preferences object.
+    """
+    return _build_replacement_candidates(
+        portfolio_gaps=diagnosis.portfolio_gaps,
+        portfolio_preferences=preferences,
+        holding_action_recommendations=diagnosis.holding_action_recommendations,
+    )
+
+
 def _build_holding_action_recommendations(
     bundle: dict[str, Any],
     holding_action_needs: list[HoldingActionNeed],
@@ -3186,6 +3620,11 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         top_sector_drivers,
         portfolio_action_impact,
     )
+    replacement_candidates = _build_replacement_candidates(
+        portfolio_gaps=portfolio_gaps,
+        portfolio_preferences=portfolio_preferences,
+        holding_action_recommendations=holding_action_recommendations,
+    )
 
     return PortfolioRiskDiagnosis(
         run_id=str(manifest.get("run_id")),
@@ -3210,6 +3649,7 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         portfolio_action_impact=portfolio_action_impact,
         portfolio_gaps=portfolio_gaps,
         portfolio_preferences=portfolio_preferences,
+        replacement_candidates=replacement_candidates,
         supporting_metrics=supporting_metrics,
         macro_context=macro_context,
         holding_fundamentals=holding_fundamentals,
