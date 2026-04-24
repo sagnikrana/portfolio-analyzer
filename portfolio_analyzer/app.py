@@ -3871,6 +3871,7 @@ def build_buy_ideas_html(
     cards = (
         metric_card("Top fit", top_candidate.ticker, top_candidate.linked_gap_label)
         + metric_card("Current budget", money_text(preferences.budget_to_deploy), "Active buy preference object")
+        + metric_card("Ideas shown", str(min(len(candidates), 5)), "Deliberately varied across portfolio jobs")
         + metric_card(
             "Vehicle mix",
             (
@@ -3890,7 +3891,7 @@ def build_buy_ideas_html(
     )
 
     candidate_cards = ""
-    for candidate in candidates[:3]:
+    for candidate in candidates[:5]:
         evidence_html = "".join(
             f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
             for item in candidate.evidence_summary[:4]
@@ -3914,7 +3915,7 @@ def build_buy_ideas_html(
             "<div>"
             f"<div style='font-size:22px;font-weight:800;color:#f8fafc'>{candidate.ticker}"
             f"<span style='font-size:15px;font-weight:500;color:#cbd5e1;margin-left:10px'>({candidate.asset_type} · {candidate.sector})</span></div>"
-            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Role: <strong style='color:#f8fafc'>{candidate.primary_role}</strong> · Confidence: <strong style='color:#f8fafc'>{candidate.confidence_band}</strong></div>"
+            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Role: <strong style='color:#f8fafc'>{candidate.primary_role}</strong> · Confidence: <strong style='color:#f8fafc'>{candidate.confidence_band}</strong> · Source: <strong style='color:#f8fafc'>{candidate.universe_source or 'Known universe mix'}</strong></div>"
             f"{allocation_line}"
             "</div>"
             "<div style='display:flex;gap:8px;flex-wrap:wrap'>"
@@ -3960,6 +3961,7 @@ def build_buy_ideas_frame(candidates: list[ReplacementCandidate]) -> pd.DataFram
                 "Gap Filled",
                 "Fit",
                 "Role",
+                "Source",
                 "Suggested Budget Slice",
                 "1Y vs S&P 500",
                 "3Y vs S&P 500",
@@ -3977,6 +3979,7 @@ def build_buy_ideas_frame(candidates: list[ReplacementCandidate]) -> pd.DataFram
                 "Gap Filled": item.linked_gap_label,
                 "Fit": f"{item.fit_score:.1f}/100 ({item.fit_band})",
                 "Role": item.primary_role,
+                "Source": item.universe_source or "Known universe mix",
                 "Suggested Budget Slice": (
                     f"{money_text(item.suggested_allocation_amount)} ({percent_display(item.suggested_allocation_pct_of_budget)})"
                     if item.suggested_allocation_amount is not None and item.suggested_allocation_pct_of_budget is not None

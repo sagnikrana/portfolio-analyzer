@@ -464,6 +464,7 @@ class ReplacementCandidate(BaseModel):
     what_it_improves: list[str] = Field(default_factory=list)
     preference_fit_summary: str = ""
     evidence_summary: list[str] = Field(default_factory=list)
+    universe_source: str = ""
     suggested_allocation_pct_of_budget: Optional[float] = None
     suggested_allocation_amount: Optional[float] = None
     relative_1y_return_pct: Optional[float] = None
@@ -2806,6 +2807,37 @@ def _fit_band(score: float) -> str:
     return "Strong fit"
 
 
+def _normalized_sector_key(sector: Any) -> str:
+    """Normalize sector labels so portfolio and buy-universe naming can match.
+
+    Different sources use slightly different labels for the same economic area,
+    for example `Technology` versus `Information Technology`. The buy side
+    should compare those as the same sector when applying preferences and
+    crowding penalties.
+    """
+    text = str(sector or "").strip().lower()
+    aliases = {
+        "technology": "information technology",
+        "information technology": "information technology",
+        "financial services": "financials",
+        "financials": "financials",
+        "consumer cyclical": "consumer discretionary",
+        "consumer discretionary": "consumer discretionary",
+        "consumer defensive": "consumer defensive",
+        "consumer staples": "consumer defensive",
+        "health care": "health care",
+        "communication services": "communication services",
+        "industrials": "industrials",
+        "utilities": "utilities",
+        "real estate": "real estate",
+        "energy": "energy",
+        "materials": "materials",
+        "broad market": "broad market",
+        "fixed income": "fixed income",
+    }
+    return aliases.get(text, text)
+
+
 def _replacement_candidate_confidence(score: float, evidence_count: int) -> tuple[float, str]:
     """Estimate confidence for a replacement candidate from fit and evidence."""
     confidence_score = min(1.0, 0.2 + (score / 100.0) * 0.5 + min(evidence_count, 4) * 0.08)
@@ -2816,6 +2848,94 @@ def _replacement_candidate_confidence(score: float, evidence_count: int) -> tupl
     else:
         band = "High"
     return round(confidence_score, 2), band
+
+
+def _candidate_priority_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    """Return a stable sort key for replacement-candidate ranking.
+
+    The larger universe now includes many near-duplicate candidates. A pure
+    fit-score sort tends to over-index on a few almost interchangeable names.
+    This key still respects fit first, but then prefers candidates that:
+
+    - appear in more trusted source universes
+    - have steadier recent volatility when the fit score is otherwise similar
+    - preserve deterministic ordering for review and tests
+    """
+    entry = item["entry"]
+    row = item["row"]
+    volatility = _safe_float(row.get("annualized_volatility_1y"))
+    source_count = int(_safe_float(row.get("source_count")) or entry.source_count or 0)
+    return (
+        -float(item["fit_score"]),
+        -source_count,
+        volatility if volatility is not None else 999.0,
+        entry.asset_type != "ETF",
+        entry.ticker,
+    )
+
+
+def _candidate_diversity_signature(candidate: BuyCandidateUniverseEntry) -> tuple[str, str, str, str]:
+    """Build a compact signature so the buy slate avoids obvious duplicates.
+
+    Examples:
+    - `IVV` and `VOO` share the same broad role and should not both dominate
+      the top of the slate.
+    - a broad-market core ETF and a low-volatility ETF should both be allowed,
+      because they play different jobs in the portfolio.
+    """
+    return (
+        candidate.asset_type,
+        candidate.primary_role,
+        candidate.sector,
+        candidate.style_tilt,
+    )
+
+
+def _candidate_passes_buy_filters(
+    candidate: BuyCandidateUniverseEntry,
+    candidate_row: dict[str, Any],
+    preferences: PortfolioPreferences,
+) -> tuple[bool, list[str]]:
+    """Apply first-pass buy-side quality filters before ranking candidates.
+
+    The bigger universe makes it easier for noisy ideas to sneak into the top
+    list. These filters are intentionally simple and conservative:
+
+    - avoid very high-swing single stocks for moderate-or-lower risk profiles
+    - avoid names that have lagged the S&P 500 across multiple windows
+    - keep extremely rate-sensitive fixed-income ballast from crowding out
+      better first-pass buy ideas when it has badly lagged for years
+    """
+    notes: list[str] = []
+    volatility_1y = _safe_float(candidate_row.get("annualized_volatility_1y"))
+    rel_1y = _safe_float(candidate_row.get("relative_1y_return_pct"))
+    rel_3y = _safe_float(candidate_row.get("relative_3y_return_pct"))
+    rel_5y = _safe_float(candidate_row.get("relative_5y_return_pct"))
+    beta = _safe_float(candidate_row.get("beta"))
+    source_count = int(_safe_float(candidate_row.get("source_count")) or candidate.source_count or 0)
+
+    if candidate.asset_type == "Stock":
+        if preferences.stated_risk_score <= 65 and volatility_1y is not None and volatility_1y >= 0.42:
+            return False, ["Recent volatility is still too high for the current buy profile."]
+        if preferences.stated_risk_score <= 55 and beta is not None and beta >= 1.45:
+            return False, ["This stock still moves much more than the market for the current risk tolerance."]
+        if (
+            rel_1y is not None and rel_1y < -0.10
+            and rel_3y is not None and rel_3y < -0.12
+            and rel_5y is not None and rel_5y < -0.08
+        ):
+            return False, ["It has lagged the S&P 500 across multiple windows, so it is not a strong first-pass add."]
+        if source_count >= 3:
+            notes.append("it also shows up across several trusted source universes")
+    else:
+        if (
+            candidate.sector == "Fixed Income"
+            and rel_3y is not None and rel_3y < -0.45
+            and rel_5y is not None and rel_5y < -0.45
+        ):
+            notes.append("its long-term relative returns are weak, so it should compete mainly as stability ballast, not as a core add")
+
+    return True, notes
 
 
 def _gap_score_for_candidate(
@@ -2839,6 +2959,13 @@ def _gap_score_for_candidate(
     rel_3y = _safe_float(candidate_row.get("relative_3y_return_pct"))
     rel_5y = _safe_float(candidate_row.get("relative_5y_return_pct"))
     beta = _safe_float(candidate_row.get("beta"))
+    candidate_sector_key = _normalized_sector_key(candidate.sector)
+    avoided_sector_keys = {
+        _normalized_sector_key(item) for item in (preferences.inferred_sector_avoidances or [])
+    }
+    preferred_sector_keys = {
+        _normalized_sector_key(item) for item in (preferences.sector_preferences or [])
+    }
 
     if gap.gap_key == "diversified_core":
         if candidate.is_core:
@@ -2846,6 +2973,7 @@ def _gap_score_for_candidate(
             reasons.append("it adds broader, steadier core exposure")
         if candidate.primary_role in {"Core benchmark ballast", "Core diversification"}:
             score += 20
+            reasons.append("its role is already aligned with rebuilding the portfolio's core")
         if candidate.asset_type == "ETF":
             score += 8
         if candidate.sector == "Broad Market":
@@ -2856,17 +2984,23 @@ def _gap_score_for_candidate(
         if rel_5y is not None and rel_5y >= 0:
             score += 6
             evidence.append(f"5Y vs S&P 500: {rel_5y:.1%}")
+        if volatility_1y is not None and volatility_1y <= 0.16:
+            score += 6
+            evidence.append(f"1Y volatility: {volatility_1y:.1%}")
 
     if gap.gap_key == "sector_balance":
-        if candidate.sector not in preferences.inferred_sector_avoidances:
+        if candidate_sector_key not in avoided_sector_keys:
             score += 16
             reasons.append("it does not add more weight to the most crowded current sector")
-        if candidate.sector in (preferences.sector_preferences or []):
+        if candidate_sector_key in preferred_sector_keys:
             score += 18
             reasons.append("it also matches the sector preference you set")
         if candidate.sector == "Broad Market":
             score += 10
             reasons.append("broad-market exposure naturally spreads sector risk")
+        if candidate.is_defensive:
+            score += 8
+            reasons.append("it helps diversify away from the crowded area without adding another high-swing sleeve")
 
     if gap.gap_key == "defensive_ballast":
         if candidate.is_defensive:
@@ -2885,6 +3019,9 @@ def _gap_score_for_candidate(
         if beta is not None and beta <= 1.0:
             score += 8
             evidence.append(f"Beta: {beta:.2f}")
+        if rel_3y is not None and rel_3y >= -0.10:
+            score += 6
+            evidence.append(f"3Y vs S&P 500: {rel_3y:.1%}")
 
     if gap.gap_key == "capital_redeployment_plan":
         if candidate.is_core:
@@ -2914,6 +3051,72 @@ def _gap_score_for_candidate(
     return round(score, 1), _unique_nonempty(reasons), _unique_nonempty(evidence)
 
 
+def _select_replacement_candidate_slate(
+    scored_candidates: list[dict[str, Any]],
+    gaps_to_score: list[PortfolioGap],
+    preferences: PortfolioPreferences,
+) -> list[dict[str, Any]]:
+    """Choose a scan-friendly slate from the scored candidate pool.
+
+    The buy tab should feel useful within a few seconds. That means the top of
+    the slate cannot be five tiny variations of the same broad-market ETF.
+    This selector deliberately aims for:
+
+    - at least one candidate for each of the most important gaps
+    - limited duplication by role/sector/style
+    - a final list that is diverse enough to compare meaningfully
+    """
+    target_count = 5
+    selected: list[dict[str, Any]] = []
+    used_tickers: set[str] = set()
+    used_signatures: set[tuple[str, str, str, str]] = set()
+
+    def can_add(item: dict[str, Any], *, allow_duplicate_gap: bool) -> bool:
+        entry = item["entry"]
+        gap = item["gap"]
+        signature = _candidate_diversity_signature(entry)
+        if entry.ticker in used_tickers:
+            return False
+        if signature in used_signatures:
+            return False
+        if not allow_duplicate_gap and any(existing["gap"].gap_key == gap.gap_key for existing in selected):
+            return False
+        broad_market_count = sum(existing["entry"].sector == "Broad Market" for existing in selected)
+        if broad_market_count >= 2 and entry.sector == "Broad Market" and float(item["fit_score"]) < 80.0:
+            return False
+        same_sector_count = sum(existing["entry"].sector == entry.sector for existing in selected)
+        if (
+            same_sector_count >= 2
+            and entry.sector not in {"Broad Market", "Fixed Income"}
+            and entry.sector not in set(preferences.sector_preferences or [])
+        ):
+            return False
+        return True
+
+    ordered_all = sorted(scored_candidates, key=_candidate_priority_key)
+    for gap in gaps_to_score:
+        gap_matches = [
+            item for item in ordered_all
+            if item["gap"].gap_key == gap.gap_key and float(item["fit_score"]) >= 50.0
+        ]
+        for item in gap_matches:
+            if can_add(item, allow_duplicate_gap=False):
+                selected.append(item)
+                used_tickers.add(item["entry"].ticker)
+                used_signatures.add(_candidate_diversity_signature(item["entry"]))
+                break
+
+    for item in ordered_all:
+        if len(selected) >= target_count:
+            break
+        if can_add(item, allow_duplicate_gap=True):
+            selected.append(item)
+            used_tickers.add(item["entry"].ticker)
+            used_signatures.add(_candidate_diversity_signature(item["entry"]))
+
+    return selected[:target_count]
+
+
 def _preference_penalty_or_bonus(
     candidate: BuyCandidateUniverseEntry,
     preferences: PortfolioPreferences,
@@ -2935,16 +3138,17 @@ def _preference_penalty_or_bonus(
             delta += 8.0
             notes.append("it matches the current single-stock preference")
 
-    preferred_sectors = set(preferences.sector_preferences or [])
+    candidate_sector_key = _normalized_sector_key(candidate.sector)
+    preferred_sectors = {_normalized_sector_key(item) for item in (preferences.sector_preferences or [])}
     if preferred_sectors:
-        if candidate.sector in preferred_sectors:
+        if candidate_sector_key in preferred_sectors:
             delta += 10.0
             notes.append("it falls inside the sectors you prefer")
-        elif candidate.sector != "Broad Market":
+        elif candidate_sector_key != "broad market":
             delta -= 4.0
 
-    avoided_sectors = set(preferences.inferred_sector_avoidances or [])
-    if candidate.sector in avoided_sectors and candidate.sector not in preferred_sectors:
+    avoided_sectors = {_normalized_sector_key(item) for item in (preferences.inferred_sector_avoidances or [])}
+    if candidate_sector_key in avoided_sectors and candidate_sector_key not in preferred_sectors:
         delta -= 18.0
         notes.append("it sits in a sector the current portfolio already leans on heavily")
 
@@ -3015,6 +3219,13 @@ def _build_replacement_candidates(
         preference_adjustment, preference_notes = _preference_penalty_or_bonus(entry, portfolio_preferences)
         if preference_adjustment <= -900:
             continue
+        passes_filters, filter_notes = _candidate_passes_buy_filters(
+            entry,
+            row,
+            portfolio_preferences,
+        )
+        if not passes_filters:
+            continue
 
         best_gap: Optional[PortfolioGap] = None
         best_gap_score = -999.0
@@ -3031,7 +3242,7 @@ def _build_replacement_candidates(
             if total_gap_score > best_gap_score:
                 best_gap = gap
                 best_gap_score = total_gap_score
-                best_gap_reasons = gap_reasons
+                best_gap_reasons = gap_reasons + filter_notes
                 best_gap_evidence = gap_evidence
 
         if best_gap is None:
@@ -3048,6 +3259,14 @@ def _build_replacement_candidates(
         evidence_summary = _unique_nonempty(
             best_gap_evidence
             + [
+                (
+                    f"Known-universe support: appears in {entry.source_count} source list(s)"
+                    if entry.source_count else None
+                ),
+                (
+                    f"Universe source: {entry.universe_source}"
+                    if entry.universe_source else None
+                ),
                 f"Primary role: {entry.primary_role}",
                 f"Sector: {entry.sector}",
                 (
@@ -3088,14 +3307,11 @@ def _build_replacement_candidates(
             }
         )
 
-    scored_candidates.sort(
-        key=lambda item: (
-            -item["fit_score"],
-            item["entry"].asset_type != "ETF",
-            item["entry"].ticker,
-        )
+    top_candidates = _select_replacement_candidate_slate(
+        scored_candidates=scored_candidates,
+        gaps_to_score=gaps_to_score,
+        preferences=portfolio_preferences,
     )
-    top_candidates = scored_candidates[:3]
 
     replacement_candidates: list[ReplacementCandidate] = []
     for rank, item in enumerate(top_candidates):
@@ -3127,6 +3343,7 @@ def _build_replacement_candidates(
                 what_it_improves=item["what_it_improves"],
                 preference_fit_summary=item["preference_fit_summary"],
                 evidence_summary=item["evidence_summary"],
+                universe_source=entry.universe_source,
                 suggested_allocation_pct_of_budget=allocation_pct,
                 suggested_allocation_amount=allocation_amount,
                 relative_1y_return_pct=_safe_float(row.get("relative_1y_return_pct")),
