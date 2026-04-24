@@ -3442,9 +3442,12 @@ def build_portfolio_preferences_frame(preferences: PortfolioPreferences | None) 
             "Current setting": f"{preferences.stated_risk_score:.0f}/100 ({preferences.stated_risk_band})",
         },
         {
-            "Preference": "Suggested max size for a new add",
-            "Current setting": percent_display(preferences.suggested_max_new_position_pct),
+            "Preference": "Max size of any new position",
+            "Current setting": (
+                f"{percent_display(preferences.suggested_max_new_position_pct)} of total portfolio"
+            ),
         },
+        {"Preference": "How that size cap works", "Current setting": preferences.max_new_position_interpretation},
         {"Preference": "ETFs allowed", "Current setting": "Yes" if preferences.allow_etfs else "No"},
         {"Preference": "Single stocks allowed", "Current setting": "Yes" if preferences.allow_single_stocks else "No"},
         {
@@ -3456,6 +3459,14 @@ def build_portfolio_preferences_frame(preferences: PortfolioPreferences | None) 
                 if preferences.single_stocks_preferred is False
                 else "No strong preference"
             ),
+        },
+        {
+            "Preference": "Prefer high-dividend ETFs",
+            "Current setting": "Yes" if preferences.prefer_high_dividend_etfs else "No",
+        },
+        {
+            "Preference": "How many buy ideas to show",
+            "Current setting": str(preferences.buy_idea_limit),
         },
         {"Preference": "Default vehicle tilt", "Current setting": preferences.vehicle_preference_label},
         {
@@ -3498,7 +3509,12 @@ def build_buy_preferences_html(preferences: PortfolioPreferences | None) -> str:
     cards = (
         metric_card("Budget to deploy", money_text(preferences.budget_to_deploy), source_text)
         + metric_card("Risk tolerance", f"{preferences.stated_risk_score:.0f}/100", preferences.stated_risk_band)
-        + metric_card("Max new add", percent_display(preferences.suggested_max_new_position_pct), "Per new position")
+        + metric_card(
+            "Max new position",
+            percent_display(preferences.suggested_max_new_position_pct),
+            "% of total portfolio",
+        )
+        + metric_card("Ideas to show", str(preferences.buy_idea_limit), "How many ranked ideas to surface")
         + metric_card(
             "Vehicle tilt",
             (
@@ -3517,6 +3533,7 @@ def build_buy_preferences_html(preferences: PortfolioPreferences | None) -> str:
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Preferences</div>"
         f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>{render_bold_markers(preferences.constraints_summary)}</div>"
+        f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>{render_bold_markers(preferences.max_new_position_interpretation)}</div>"
         f"<div class='metric-strip' style='margin-top:14px'>{cards}</div>"
         "</div>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
@@ -3867,11 +3884,12 @@ def build_buy_ideas_html(
             "</div>"
         )
 
-    top_candidate = candidates[0]
+    ordered_candidates = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))
+    top_candidate = ordered_candidates[0]
     cards = (
         metric_card("Top fit", top_candidate.ticker, top_candidate.linked_gap_label)
         + metric_card("Current budget", money_text(preferences.budget_to_deploy), "Active buy preference object")
-        + metric_card("Ideas shown", str(min(len(candidates), 5)), "Deliberately varied across portfolio jobs")
+        + metric_card("Ideas shown", str(len(ordered_candidates)), "Ranked by fit and varied by portfolio job")
         + metric_card(
             "Vehicle mix",
             (
@@ -3884,14 +3902,14 @@ def build_buy_ideas_html(
             preferences.vehicle_preference_label,
         )
         + metric_card(
-            "Max new add",
+            "Max new position",
             percent_display(preferences.suggested_max_new_position_pct),
-            "Guardrail for future adds",
+            "% of total portfolio",
         )
     )
 
     candidate_cards = ""
-    for candidate in candidates[:5]:
+    for rank, candidate in enumerate(ordered_candidates, start=1):
         evidence_html = "".join(
             f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
             for item in candidate.evidence_summary[:4]
@@ -3903,9 +3921,10 @@ def build_buy_ideas_html(
         allocation_line = ""
         if candidate.suggested_allocation_amount is not None and candidate.suggested_allocation_pct_of_budget is not None:
             allocation_line = (
-                f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>"
-                f"Suggested starting slice: <strong style='color:#f8fafc'>{money_text(candidate.suggested_allocation_amount)}</strong> "
-                f"({percent_display(candidate.suggested_allocation_pct_of_budget)} of the current buy budget)"
+                f"<div style='padding:8px 12px;border-radius:999px;background:rgba(34,197,94,.16);"
+                f"border:1px solid rgba(34,197,94,.22);color:#bbf7d0;font-size:12px;font-weight:800'>"
+                f"Start with {money_text(candidate.suggested_allocation_amount)} "
+                f"({percent_display(candidate.suggested_allocation_pct_of_budget)} of buy budget)"
                 f"</div>"
             )
         candidate_cards += (
@@ -3913,10 +3932,13 @@ def build_buy_ideas_html(
             "background:rgba(15,23,42,.34);margin-bottom:14px'>"
             "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
             "<div>"
+            "<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
+            f"<div style='padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.16);border:1px solid rgba(59,130,246,.22);color:#bfdbfe;font-size:12px;font-weight:800'>#{rank}</div>"
             f"<div style='font-size:22px;font-weight:800;color:#f8fafc'>{candidate.ticker}"
             f"<span style='font-size:15px;font-weight:500;color:#cbd5e1;margin-left:10px'>({candidate.asset_type} · {candidate.sector})</span></div>"
-            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Role: <strong style='color:#f8fafc'>{candidate.primary_role}</strong> · Confidence: <strong style='color:#f8fafc'>{candidate.confidence_band}</strong> · Source: <strong style='color:#f8fafc'>{candidate.universe_source or 'Known universe mix'}</strong></div>"
             f"{allocation_line}"
+            "</div>"
+            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Role: <strong style='color:#f8fafc'>{candidate.primary_role}</strong> · Confidence: <strong style='color:#f8fafc'>{candidate.confidence_band}</strong> · Source: <strong style='color:#f8fafc'>{candidate.universe_source or 'Known universe mix'}</strong></div>"
             "</div>"
             "<div style='display:flex;gap:8px;flex-wrap:wrap'>"
             f"<div style='padding:8px 12px;border-radius:999px;background:rgba(8,145,178,.18);border:1px solid rgba(34,211,238,.18);color:#a5f3fc;font-size:12px;font-weight:700'>{candidate.fit_score:.1f}/100 fit</div>"
@@ -3956,6 +3978,7 @@ def build_buy_ideas_frame(candidates: list[ReplacementCandidate]) -> pd.DataFram
     if not candidates:
         return pd.DataFrame(
             columns=[
+                "Rank",
                 "Ticker",
                 "Name",
                 "Gap Filled",
@@ -3971,9 +3994,10 @@ def build_buy_ideas_frame(candidates: list[ReplacementCandidate]) -> pd.DataFram
         )
 
     rows: list[dict[str, Any]] = []
-    for item in candidates:
+    for rank, item in enumerate(sorted(candidates, key=lambda candidate: (-candidate.fit_score, candidate.ticker)), start=1):
         rows.append(
             {
+                "Rank": rank,
                 "Ticker": item.ticker,
                 "Name": item.security_name,
                 "Gap Filled": item.linked_gap_label,
@@ -4019,7 +4043,8 @@ def plot_buy_ideas(candidates: list[ReplacementCandidate]) -> go.Figure:
         )
         return fig
 
-    ordered = list(reversed(candidates[:5]))
+    ranked = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))
+    ordered = list(reversed(ranked))
     fig.add_trace(
         go.Bar(
             x=[item.fit_score for item in ordered],
@@ -4052,6 +4077,155 @@ def plot_buy_ideas(candidates: list[ReplacementCandidate]) -> go.Figure:
     return fig
 
 
+def build_buy_idea_ticker_choices(candidates: list[ReplacementCandidate]) -> list[str]:
+    """Return ticker choices for the buy-idea 5Y comparison selector."""
+    return [item.ticker for item in sorted(candidates, key=lambda candidate: (-candidate.fit_score, candidate.ticker))]
+
+
+@lru_cache(maxsize=256)
+def fetch_buy_idea_long_horizon_series(
+    ticker: str,
+    benchmark_symbol: str = BENCHMARK_SYMBOL,
+) -> list[dict[str, Any]]:
+    """Fetch 5Y indexed performance for one buy idea versus the S&P 500.
+
+    This is intentionally cached because the buy tab may be re-rendered several
+    times while the user experiments with preferences. We only need to fetch
+    the market history once per ticker per session.
+    """
+    yahoo_symbol = normalize_ticker_for_yahoo(ticker)
+    start = (pd.Timestamp.today().normalize() - pd.DateOffset(years=5) - pd.Timedelta(days=15)).strftime("%Y-%m-%d")
+    downloaded = yf.download(
+        tickers=[yahoo_symbol, benchmark_symbol],
+        start=start,
+        auto_adjust=False,
+        progress=False,
+        threads=False,
+    )
+    close = extract_close_frame(downloaded, [yahoo_symbol, benchmark_symbol])
+    if close.empty or yahoo_symbol not in close.columns or benchmark_symbol not in close.columns:
+        return []
+    frame = pd.concat(
+        [
+            pd.to_numeric(close[yahoo_symbol], errors="coerce").rename("candidate"),
+            pd.to_numeric(close[benchmark_symbol], errors="coerce").rename("benchmark"),
+        ],
+        axis=1,
+        join="inner",
+    ).dropna()
+    if frame.empty:
+        return []
+    base_candidate = float(frame["candidate"].iloc[0])
+    base_benchmark = float(frame["benchmark"].iloc[0])
+    if base_candidate <= 0 or base_benchmark <= 0:
+        return []
+    frame = frame.copy()
+    frame["candidate_index"] = (frame["candidate"] / base_candidate) * 100.0
+    frame["benchmark_index"] = (frame["benchmark"] / base_benchmark) * 100.0
+    frame.index = pd.to_datetime(frame.index)
+    return [
+        {
+            "date": idx.strftime("%Y-%m-%d"),
+            "candidate_index": round(float(row["candidate_index"]), 4),
+            "benchmark_index": round(float(row["benchmark_index"]), 4),
+        }
+        for idx, row in frame.iterrows()
+    ]
+
+
+def plot_buy_idea_vs_benchmark(
+    selected_ticker: str,
+    candidates_payload: list[dict[str, Any]] | None,
+) -> go.Figure:
+    """Render a 5Y indexed performance chart for the selected buy idea."""
+    fig = go.Figure()
+    candidates_payload = candidates_payload or []
+    if not candidates_payload:
+        fig.add_annotation(
+            text="No buy ideas are available to compare yet.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15, "color": "#e2e8f0"},
+        )
+        fig.update_layout(
+            title="5Y Performance vs S&P 500",
+            height=380,
+            margin={"l": 24, "r": 24, "t": 56, "b": 24},
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(17,24,39,0.55)",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
+    candidate_map = {str(item.get("ticker")): item for item in candidates_payload}
+    chosen_ticker = selected_ticker if selected_ticker in candidate_map else next(iter(candidate_map))
+    series = fetch_buy_idea_long_horizon_series(chosen_ticker)
+    if not series:
+        fig.add_annotation(
+            text=f"No 5Y market history was available for {chosen_ticker}.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15, "color": "#e2e8f0"},
+        )
+        fig.update_layout(
+            title=f"{chosen_ticker} vs S&P 500 over the last 5 years",
+            height=380,
+            margin={"l": 24, "r": 24, "t": 56, "b": 24},
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(17,24,39,0.55)",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
+    frame = pd.DataFrame(series)
+    frame["date"] = pd.to_datetime(frame["date"])
+    fig.add_trace(
+        go.Scatter(
+            x=frame["date"],
+            y=frame["candidate_index"],
+            mode="lines",
+            name=chosen_ticker,
+            line={"color": "#38bdf8", "width": 3},
+            hovertemplate="<b>%{x|%b %d, %Y}</b><br>" + f"{chosen_ticker}: " + "%{y:.1f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=frame["date"],
+            y=frame["benchmark_index"],
+            mode="lines",
+            name="S&P 500",
+            line={"color": "#f59e0b", "width": 2, "dash": "dash"},
+            hovertemplate="<b>%{x|%b %d, %Y}</b><br>S&P 500: %{y:.1f}<extra></extra>",
+        )
+    )
+    fig.add_hline(y=100, line_dash="dot", line_color="rgba(148,163,184,0.45)")
+    fig.update_layout(
+        title=f"{chosen_ticker} vs S&P 500 over the last 5 years",
+        height=420,
+        margin={"l": 40, "r": 24, "t": 56, "b": 36},
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+        hoverlabel=dark_hoverlabel(),
+        xaxis={"gridcolor": "rgba(148,163,184,0.16)"},
+        yaxis={"title": "Indexed value (start = 100)", "gridcolor": "rgba(148,163,184,0.16)"},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
+        font={"color": "#e2e8f0"},
+    )
+    return fig
+
+
 def build_buy_preference_sector_choices(diagnosis: PortfolioRiskDiagnosis) -> list[str]:
     """Return sector choices ordered for the buy-preferences form."""
     ordered: list[str] = []
@@ -4069,6 +4243,14 @@ def build_buy_preference_sector_choices(diagnosis: PortfolioRiskDiagnosis) -> li
     return ordered
 
 
+def update_buy_idea_comparison_chart(
+    selected_ticker: str,
+    buy_candidates_payload: list[dict[str, Any]] | None,
+) -> go.Figure:
+    """Refresh the 5Y comparison chart when the selected buy idea changes."""
+    return plot_buy_idea_vs_benchmark(selected_ticker, buy_candidates_payload)
+
+
 def build_user_portfolio_preferences(
     diagnosis_payload: dict[str, Any] | None,
     budget_to_deploy: float | None,
@@ -4079,7 +4261,9 @@ def build_user_portfolio_preferences(
     allow_etfs: bool,
     allow_single_stocks: bool,
     vehicle_preference: str,
-) -> tuple[str, pd.DataFrame, dict[str, Any], str, go.Figure, pd.DataFrame]:
+    prefer_high_dividend_etfs: bool,
+    buy_idea_limit: int,
+) -> tuple[str, pd.DataFrame, dict[str, Any], list[dict[str, Any]], str, go.Figure, pd.DataFrame, dict[str, Any], go.Figure]:
     """Create a user-defined `PortfolioPreferences` object from tab inputs.
 
     This updates both the preference review surface and the downstream buy ideas
@@ -4104,17 +4288,25 @@ def build_user_portfolio_preferences(
         allow_etfs=allow_etfs,
         allow_single_stocks=allow_single_stocks,
         vehicle_preference=vehicle_preference,
+        prefer_high_dividend_etfs=prefer_high_dividend_etfs,
+        buy_idea_limit=buy_idea_limit,
     )
     candidates = replacement_candidates_from_user_preferences(
         diagnosis=diagnosis,
         preferences=preferences,
     )
+    candidate_payload = [item.model_dump(mode="json") for item in candidates]
+    ticker_choices = build_buy_idea_ticker_choices(candidates)
+    default_ticker = ticker_choices[0] if ticker_choices else None
     return (
         build_buy_preferences_html(preferences),
         build_portfolio_preferences_frame(preferences),
         preferences.model_dump(mode="json"),
+        candidate_payload,
         build_buy_ideas_html(diagnosis, preferences, candidates),
         plot_buy_ideas(candidates),
+        gr.update(choices=ticker_choices, value=default_ticker),
+        plot_buy_idea_vs_benchmark(default_ticker or "", candidate_payload),
         build_buy_ideas_frame(candidates),
     )
 
@@ -4142,7 +4334,7 @@ def build_portfolio_gaps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     quick_cards = (
         metric_card("Top portfolio need", top_gap.label, top_gap.severity_band)
         + metric_card("Capital available", money_text(cash_value), "If current actions are followed")
-        + metric_card("Max new add", percent_display(max_new_position), "Temporary cap for a new position")
+        + metric_card("Max new position", percent_display(max_new_position), "% of total portfolio")
         + metric_card("Avoid stacking into", sector_avoidance, "Current crowded area")
     )
 
@@ -5756,6 +5948,13 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
     )
     buy_ideas_fig = plot_buy_ideas(diagnosis.replacement_candidates)
     buy_ideas_df = build_buy_ideas_frame(diagnosis.replacement_candidates)
+    buy_candidates_payload = [item.model_dump(mode="json") for item in diagnosis.replacement_candidates]
+    buy_idea_ticker_choices = build_buy_idea_ticker_choices(diagnosis.replacement_candidates)
+    buy_idea_default_ticker = buy_idea_ticker_choices[0] if buy_idea_ticker_choices else None
+    buy_idea_comparison_fig = plot_buy_idea_vs_benchmark(
+        buy_idea_default_ticker or "",
+        buy_candidates_payload,
+    )
     buy_preference_sector_choices = build_buy_preference_sector_choices(diagnosis)
     base_preferences = diagnosis.portfolio_preferences
     reinvest_choice = (
@@ -5772,6 +5971,10 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         if base_preferences is not None and base_preferences.single_stocks_preferred is False
         else "Blend"
     )
+    prefer_high_dividend_etfs = (
+        base_preferences.prefer_high_dividend_etfs if base_preferences is not None else False
+    )
+    buy_idea_limit = base_preferences.buy_idea_limit if base_preferences is not None else 10
     eq_fig = plot_equity_curves(market_metrics["timeseries"])
     sector_fig = plot_sector_allocation(market_metrics.get("sector_allocation", []))
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
@@ -5803,6 +6006,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         risk,
         diagnosis.model_dump(mode="json"),
         (base_preferences.model_dump(mode="json") if base_preferences is not None else {}),
+        buy_candidates_payload,
         tables["holdings"],
         tables["attribution"],
         tables["volatility_drivers"],
@@ -5826,6 +6030,8 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         build_portfolio_preferences_frame(diagnosis.portfolio_preferences),
         buy_ideas_html,
         buy_ideas_fig,
+        gr.update(choices=buy_idea_ticker_choices, value=buy_idea_default_ticker),
+        buy_idea_comparison_fig,
         buy_ideas_df,
         gr.update(choices=buy_preference_sector_choices, value=(base_preferences.sector_preferences if base_preferences is not None else [])),
         gr.update(value=(base_preferences.budget_to_deploy if base_preferences is not None else None)),
@@ -5835,6 +6041,8 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         gr.update(value=(base_preferences.allow_etfs if base_preferences is not None else True)),
         gr.update(value=(base_preferences.allow_single_stocks if base_preferences is not None else True)),
         gr.update(value=vehicle_preference),
+        gr.update(value=prefer_high_dividend_etfs),
+        gr.update(value=buy_idea_limit),
         diagnosis_supporting_metrics_df,
         diagnosis_holding_fundamentals_df,
         diagnosis_narrative_evidence_df,
@@ -5986,6 +6194,7 @@ def build_app() -> gr.Blocks:
                 diagnosis_state = gr.State(value={})
                 diagnosis_chart_state = gr.State(value={})
                 buy_preferences_state = gr.State(value={})
+                buy_candidates_state = gr.State(value=[])
                 cards = gr.HTML(label="Summary Cards", elem_classes=["summary-cards-wrap"])
                 with gr.Tabs(selected="overview") as main_tabs:
                     with gr.Tab("Overview", id="overview"):
@@ -6127,7 +6336,8 @@ def build_app() -> gr.Blocks:
                                     maximum=25,
                                     value=8,
                                     step=1,
-                                    label="Max Size For A New Position (%)",
+                                    label="Max size of any new position (% of total portfolio)",
+                                    info="This caps a single new add as a share of the overall portfolio, not just the buy budget.",
                                 )
                                 buy_risk_tolerance = gr.Slider(
                                     minimum=0,
@@ -6149,6 +6359,16 @@ def build_app() -> gr.Blocks:
                                     value="Blend",
                                     label="Preferred Vehicle Mix",
                                 )
+                                buy_prefer_high_dividend_etfs = gr.Checkbox(
+                                    label="Prefer high-dividend ETFs when they still fit",
+                                    value=False,
+                                )
+                                buy_idea_limit = gr.Dropdown(
+                                    label="How many buy ideas should we show?",
+                                    choices=[5, 10, 15, 20],
+                                    value=10,
+                                    info="Use a larger list when you want to explore more alternatives.",
+                                )
                                 apply_buy_preferences_btn = gr.Button("Apply Buy Preferences", variant="primary")
                             with gr.Column(scale=2, min_width=360):
                                 buy_preferences_md = gr.HTML()
@@ -6160,6 +6380,13 @@ def build_app() -> gr.Blocks:
                     with gr.Tab("Buy Ideas", id="buy-ideas"):
                         buy_ideas_md = gr.HTML()
                         buy_ideas_plot = gr.Plot(label="Best Buy Ideas Right Now")
+                        buy_idea_ticker_filter = gr.Dropdown(
+                            label="Compare this buy idea over the last 5 years",
+                            choices=[],
+                            value=None,
+                            interactive=True,
+                        )
+                        buy_idea_comparison_plot = gr.Plot(label="5Y Performance vs S&P 500")
                         buy_ideas_df = gr.Dataframe(
                             label="Replacement Candidate Review",
                             interactive=False,
@@ -6182,6 +6409,7 @@ def build_app() -> gr.Blocks:
                 risk_state,
                 diagnosis_state,
                 buy_preferences_state,
+                buy_candidates_state,
                 holdings_df,
                 attribution_df,
                 volatility_drivers_df,
@@ -6205,6 +6433,8 @@ def build_app() -> gr.Blocks:
                 buy_preferences_df,
                 buy_ideas_md,
                 buy_ideas_plot,
+                buy_idea_ticker_filter,
+                buy_idea_comparison_plot,
                 buy_ideas_df,
                 buy_sector_preferences,
                 buy_budget_to_deploy,
@@ -6214,6 +6444,8 @@ def build_app() -> gr.Blocks:
                 buy_allow_etfs,
                 buy_allow_single_stocks,
                 buy_vehicle_preference,
+                buy_prefer_high_dividend_etfs,
+                buy_idea_limit,
                 diagnosis_supporting_metrics_df,
                 diagnosis_holding_fundamentals_df,
                 diagnosis_narrative_evidence_df,
@@ -6251,15 +6483,26 @@ def build_app() -> gr.Blocks:
                 buy_allow_etfs,
                 buy_allow_single_stocks,
                 buy_vehicle_preference,
+                buy_prefer_high_dividend_etfs,
+                buy_idea_limit,
             ],
             outputs=[
                 buy_preferences_md,
                 buy_preferences_df,
                 buy_preferences_state,
+                buy_candidates_state,
                 buy_ideas_md,
                 buy_ideas_plot,
+                buy_idea_ticker_filter,
+                buy_idea_comparison_plot,
                 buy_ideas_df,
             ],
+        )
+
+        buy_idea_ticker_filter.change(
+            fn=update_buy_idea_comparison_chart,
+            inputs=[buy_idea_ticker_filter, buy_candidates_state],
+            outputs=[buy_idea_comparison_plot],
         )
 
         for metric_key, button in zip(metric_navigation_order(), metric_buttons):

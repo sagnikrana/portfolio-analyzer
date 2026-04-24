@@ -423,9 +423,12 @@ class PortfolioPreferences(BaseModel):
     stated_risk_score: float = 0.0
     stated_risk_band: str = ""
     suggested_max_new_position_pct: Optional[float] = None
+    max_new_position_interpretation: str = ""
     allow_etfs: bool = True
     allow_single_stocks: bool = True
     single_stocks_preferred: Optional[bool] = None
+    prefer_high_dividend_etfs: bool = False
+    buy_idea_limit: int = 10
     vehicle_preference_label: str = ""
     sector_preferences: list[str] = Field(default_factory=list)
     inferred_sector_avoidances: list[str] = Field(default_factory=list)
@@ -2489,12 +2492,12 @@ def _build_portfolio_preferences(
         "Should freed cash be fully reinvested, partly reinvested, or left partly in cash?",
         "Do you prefer ETFs, single stocks, or a blend for new capital?",
         "Are there any sectors you want to emphasize or avoid?",
-        "What is the maximum size you are comfortable giving to a new position?",
+        "What is the maximum size you are comfortable giving to a new position as a share of the total portfolio?",
     ]
 
     constraints_summary = (
         f"Right now the system can assume about ${available_cash_now + action_cash:,.2f} could be available for future adds, "
-        f"but reinvestment rules and sector preferences are still user decisions. Until those are set, the safest default is to favor diversified adds and keep new positions below about {suggested_max_new_position_pct:.0%}."
+        f"but reinvestment rules and sector preferences are still user decisions. Until those are set, the safest default is to favor diversified adds and keep any one new position below about {suggested_max_new_position_pct:.0%} of the total portfolio."
     )
 
     return PortfolioPreferences(
@@ -2506,9 +2509,12 @@ def _build_portfolio_preferences(
         stated_risk_score=stated_risk_score,
         stated_risk_band=stated_risk_band,
         suggested_max_new_position_pct=suggested_max_new_position_pct,
+        max_new_position_interpretation="This cap is measured as a share of the total portfolio, not just the buy budget.",
         allow_etfs=True,
         allow_single_stocks=True,
         single_stocks_preferred=None,
+        prefer_high_dividend_etfs=False,
+        buy_idea_limit=10,
         vehicle_preference_label=vehicle_preference_label,
         sector_preferences=[],
         inferred_sector_avoidances=inferred_sector_avoidances,
@@ -2530,6 +2536,8 @@ def portfolio_preferences_from_user_inputs(
     allow_etfs: bool,
     allow_single_stocks: bool,
     vehicle_preference: str,
+    prefer_high_dividend_etfs: bool,
+    buy_idea_limit: Optional[int],
 ) -> PortfolioPreferences:
     """Create a user-defined `PortfolioPreferences` object from dashboard inputs.
 
@@ -2556,6 +2564,8 @@ def portfolio_preferences_from_user_inputs(
         if max_new_position_pct is not None
         else float(base_preferences.suggested_max_new_position_pct or _suggested_max_new_position_pct(resolved_risk_score))
     )
+    resolved_buy_idea_limit = int(buy_idea_limit or base_preferences.buy_idea_limit or 10)
+    resolved_buy_idea_limit = max(5, min(20, resolved_buy_idea_limit))
 
     cleaned_sector_preferences = [item for item in (sector_preferences or []) if str(item).strip()]
 
@@ -2589,16 +2599,21 @@ def portfolio_preferences_from_user_inputs(
 
     assumption_notes = [
         f"Budget to deploy is set to about ${resolved_budget:,.2f}.",
-        f"New adds should stay at or below about {resolved_max_position_pct:.0%} of the portfolio unless you later override that.",
+        f"New adds should stay at or below about {resolved_max_position_pct:.0%} of the total portfolio unless you later override that.",
+        f"The buy view is currently set to show the top {resolved_buy_idea_limit} ideas.",
     ]
     if base_preferences.inferred_sector_avoidances:
         assumption_notes.append(
             "Current crowded sectors are still treated as lower-priority places for fresh capital unless you explicitly choose them."
         )
+    if prefer_high_dividend_etfs:
+        assumption_notes.append(
+            "High-dividend ETFs will get a boost when they still fit the portfolio gap and performance filters."
+        )
 
     constraints_summary = (
         f"The buy side should currently work with about ${resolved_budget:,.2f}, a stated risk tolerance of {resolved_risk_score:.0f}/100 ({resolved_risk_band}), "
-        f"and a new-position cap near {resolved_max_position_pct:.0%}. "
+        f"and a cap near {resolved_max_position_pct:.0%} of the total portfolio for any one new position. "
         f"{vehicle_preference_label}"
     )
 
@@ -2611,9 +2626,12 @@ def portfolio_preferences_from_user_inputs(
         stated_risk_score=round(resolved_risk_score, 1),
         stated_risk_band=resolved_risk_band,
         suggested_max_new_position_pct=round(resolved_max_position_pct, 4),
+        max_new_position_interpretation="This cap is measured as a share of the total portfolio, not just the buy budget.",
         allow_etfs=allow_etfs,
         allow_single_stocks=allow_single_stocks,
         single_stocks_preferred=single_stocks_preferred,
+        prefer_high_dividend_etfs=prefer_high_dividend_etfs,
+        buy_idea_limit=resolved_buy_idea_limit,
         vehicle_preference_label=vehicle_preference_label,
         sector_preferences=cleaned_sector_preferences,
         inferred_sector_avoidances=base_preferences.inferred_sector_avoidances,
@@ -3066,7 +3084,7 @@ def _select_replacement_candidate_slate(
     - limited duplication by role/sector/style
     - a final list that is diverse enough to compare meaningfully
     """
-    target_count = 5
+    target_count = max(5, int(preferences.buy_idea_limit or 10))
     selected: list[dict[str, Any]] = []
     used_tickers: set[str] = set()
     used_signatures: set[tuple[str, str, str, str]] = set()
@@ -3120,10 +3138,12 @@ def _select_replacement_candidate_slate(
 def _preference_penalty_or_bonus(
     candidate: BuyCandidateUniverseEntry,
     preferences: PortfolioPreferences,
+    candidate_row: Optional[dict[str, Any]] = None,
 ) -> tuple[float, list[str]]:
     """Adjust candidate fit for explicit user constraints."""
     delta = 0.0
     notes: list[str] = []
+    candidate_row = candidate_row or {}
 
     if candidate.asset_type == "ETF":
         if not preferences.allow_etfs:
@@ -3131,6 +3151,18 @@ def _preference_penalty_or_bonus(
         if preferences.single_stocks_preferred is False:
             delta += 8.0
             notes.append("it matches the current ETF preference")
+        if preferences.prefer_high_dividend_etfs:
+            if candidate.is_income or "dividend" in candidate.primary_role.lower() or candidate.style_tilt.lower() == "income":
+                delta += 12.0
+                notes.append("it lines up with the current high-dividend ETF preference")
+                rel_1y = _safe_float(candidate_row.get("relative_1y_return_pct"))
+                rel_3y = _safe_float(candidate_row.get("relative_3y_return_pct"))
+                if rel_1y is not None and rel_1y > -0.08:
+                    delta += 4.0
+                if rel_3y is not None and rel_3y > -0.18:
+                    delta += 4.0
+            else:
+                delta -= 2.0
     else:
         if not preferences.allow_single_stocks:
             return -999.0, ["Single stocks are turned off in the current buy preferences."]
@@ -3165,13 +3197,9 @@ def _candidate_allocation_from_rank(
     if budget_to_deploy is None or budget_to_deploy <= 0 or candidate_count <= 0:
         return None, None
 
-    base_splits = [0.4, 0.35, 0.25]
-    if candidate_count == 1:
-        pct = 1.0
-    elif candidate_count == 2:
-        pct = 0.55 if candidate_rank == 0 else 0.45
-    else:
-        pct = base_splits[min(candidate_rank, 2)]
+    weights = [1.0 / (idx + 1) for idx in range(candidate_count)]
+    total_weight = sum(weights)
+    pct = weights[candidate_rank] / total_weight
     return round(pct, 4), round(float(budget_to_deploy) * pct, 2)
 
 
@@ -3216,7 +3244,11 @@ def _build_replacement_candidates(
         if entry.ticker in actionable_tickers:
             continue
         row = enriched_records.get(entry.ticker, {})
-        preference_adjustment, preference_notes = _preference_penalty_or_bonus(entry, portfolio_preferences)
+        preference_adjustment, preference_notes = _preference_penalty_or_bonus(
+            entry,
+            portfolio_preferences,
+            row,
+        )
         if preference_adjustment <= -900:
             continue
         passes_filters, filter_notes = _candidate_passes_buy_filters(
@@ -3311,7 +3343,8 @@ def _build_replacement_candidates(
         scored_candidates=scored_candidates,
         gaps_to_score=gaps_to_score,
         preferences=portfolio_preferences,
-    )
+    )[: max(1, int(portfolio_preferences.buy_idea_limit or 10))]
+    top_candidates = sorted(top_candidates, key=lambda item: (-float(item["fit_score"]), item["entry"].ticker))
 
     replacement_candidates: list[ReplacementCandidate] = []
     for rank, item in enumerate(top_candidates):
