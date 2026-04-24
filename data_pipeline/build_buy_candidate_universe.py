@@ -11,7 +11,10 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from portfolio_analyzer.buy_candidates import load_buy_candidate_universe
+from portfolio_analyzer.buy_candidates import (
+    build_known_universe_datasets,
+    load_buy_candidate_universe,
+)
 
 RAW_UNIVERSE_PATH = ROOT / "data" / "raw" / "buy_candidate_universe.csv"
 STRUCTURED_DIR = ROOT / "data" / "processed" / "structured"
@@ -67,15 +70,50 @@ def _annualized_volatility(history: pd.Series, trading_days: int = 252) -> float
     return float(returns.std() * (252 ** 0.5))
 
 
+def _download_close_frame(symbols: list[str], batch_size: int = 50) -> pd.DataFrame:
+    """Download adjusted-close history in batches for a larger universe.
+
+    The candidate universe is now big enough that one giant Yahoo request is
+    more fragile than it needs to be. Batching keeps the offline build steadier
+    while still remaining much faster than any app-load fetch path.
+    """
+    close_frames: list[pd.DataFrame] = []
+    for start in range(0, len(symbols), batch_size):
+        batch = symbols[start : start + batch_size]
+        price_history = yf.download(
+            tickers=batch,
+            period="6y",
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            threads=True,
+        )
+        if isinstance(price_history.columns, pd.MultiIndex):
+            close_batch = price_history.get("Close", pd.DataFrame()).copy()
+        else:
+            close_batch = price_history.rename(columns={"Close": batch[0] if len(batch) == 1 else "Close"})
+        if isinstance(close_batch, pd.Series):
+            close_batch = close_batch.to_frame(name=batch[0])
+        close_frames.append(close_batch)
+
+    if not close_frames:
+        return pd.DataFrame()
+    combined = pd.concat(close_frames, axis=1)
+    combined = combined.loc[:, ~combined.columns.duplicated()]
+    return combined.sort_index()
+
+
 def enrich_buy_candidate_universe() -> pd.DataFrame:
     """Build the enriched buy-candidate universe from the curated seed file.
 
     The pipeline intentionally stays lightweight:
-    - read the curated candidate list
+    - refresh the saved known-universe datasets first
+    - read the saved candidate list
     - fetch market history and profile details from Yahoo Finance
     - compute simple comparable features for the future buy engine
     - write both the normalized curated file and the enriched output
     """
+    build_known_universe_datasets()
     entries = load_buy_candidate_universe(RAW_UNIVERSE_PATH)
     if not entries:
         raise FileNotFoundError(f"No buy-candidate universe found at {RAW_UNIVERSE_PATH}")
@@ -86,26 +124,12 @@ def enrich_buy_candidate_universe() -> pd.DataFrame:
     raw_frame.to_csv(RAW_OUTPUT_PATH, index=False)
 
     symbols = sorted({item.market_data_symbol for item in entries} | {BENCHMARK_SYMBOL})
-    price_history = yf.download(
-        tickers=symbols,
-        period="6y",
-        interval="1d",
-        auto_adjust=True,
-        progress=False,
-        threads=False,
-    )
-
-    if isinstance(price_history.columns, pd.MultiIndex):
-        close_frame = price_history.get("Close", pd.DataFrame()).copy()
-    else:
-        close_frame = price_history.rename(columns={"Close": symbols[0] if len(symbols) == 1 else "Close"})
+    close_frame = _download_close_frame(symbols)
 
     benchmark_history = pd.to_numeric(close_frame.get(BENCHMARK_SYMBOL), errors="coerce")
     enriched_rows: list[dict[str, Any]] = []
 
     for item in entries:
-        ticker_obj = yf.Ticker(item.market_data_symbol)
-        info = ticker_obj.info or {}
         history = pd.to_numeric(close_frame.get(item.market_data_symbol), errors="coerce")
 
         stock_1y, benchmark_1y, relative_1y = _window_relative_return(history, benchmark_history, 252)
@@ -121,11 +145,11 @@ def enrich_buy_candidate_universe() -> pd.DataFrame:
             {
                 **item.model_dump(),
                 "current_price": current_price,
-                "market_cap": _safe_float(info.get("marketCap")),
-                "beta": _safe_float(info.get("beta")),
-                "industry": str(info.get("industry") or ""),
-                "country": str(info.get("country") or ""),
-                "currency": str(info.get("currency") or ""),
+                "market_cap": None,
+                "beta": None,
+                "industry": "",
+                "country": item.region,
+                "currency": "USD",
                 "annualized_volatility_1y": annualized_volatility,
                 "stock_1y_return_pct": stock_1y,
                 "benchmark_1y_return_pct": benchmark_1y,

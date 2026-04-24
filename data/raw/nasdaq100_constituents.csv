@@ -1,0 +1,102 @@
+ticker,market_data_symbol,security_name,sector,sub_industry,universe_source
+ADBE,ADBE,Adobe Inc.,Technology,Computer Software,Nasdaq-100
+AMD,AMD,Advanced Micro Devices,Technology,Semiconductors,Nasdaq-100
+ABNB,ABNB,Airbnb,Consumer Discretionary,Diversified Commercial Services,Nasdaq-100
+ALNY,ALNY,Alnylam Pharmaceuticals,Health Care,Biotechnology,Nasdaq-100
+GOOGL,GOOGL,Alphabet Inc. (Class A),Technology,Computer Software,Nasdaq-100
+GOOG,GOOG,Alphabet Inc. (Class C),Technology,Computer Software,Nasdaq-100
+AMZN,AMZN,Amazon,Consumer Discretionary,Catalog/Specialty Distribution,Nasdaq-100
+AEP,AEP,American Electric Power,Utilities,Electric Utilities,Nasdaq-100
+AMGN,AMGN,Amgen,Health Care,Biotechnology,Nasdaq-100
+ADI,ADI,Analog Devices,Technology,Semiconductors,Nasdaq-100
+AAPL,AAPL,Apple Inc.,Technology,Computer Manufacturing,Nasdaq-100
+AMAT,AMAT,Applied Materials,Technology,Semiconductors,Nasdaq-100
+APP,APP,AppLovin,Technology,Computer Software,Nasdaq-100
+ARM,ARM,Arm Holdings,Technology,Semiconductors,Nasdaq-100
+ASML,ASML,ASML Holding,Technology,Industrial Machinery,Nasdaq-100
+ADSK,ADSK,Autodesk,Technology,Computer Software,Nasdaq-100
+ADP,ADP,Automatic Data Processing,Industrials,Diversified Commercial Services,Nasdaq-100
+AXON,AXON,Axon Enterprise,Industrials,Ordnance & Accessories,Nasdaq-100
+BKR,BKR,Baker Hughes,Energy,Oil Equipment & Services,Nasdaq-100
+BKNG,BKNG,Booking Holdings,Consumer Discretionary,Transportation Services,Nasdaq-100
+AVGO,AVGO,Broadcom,Technology,Semiconductors,Nasdaq-100
+CDNS,CDNS,Cadence Design Systems,Technology,Computer Software,Nasdaq-100
+CHTR,CHTR,Charter Communications,Telecommunications,Cable & Other Pay Television Services,Nasdaq-100
+CTAS,CTAS,Cintas,Industrials,Garments & Clothing,Nasdaq-100
+CSCO,CSCO,Cisco,Telecommunications,Computer Communications Equipment,Nasdaq-100
+CCEP,CCEP,Coca-Cola Europacific Partners,Consumer Staples,Soft Drinks,Nasdaq-100
+CTSH,CTSH,Cognizant,Technology,EDP Services,Nasdaq-100
+CMCSA,CMCSA,Comcast,Telecommunications,Cable & Other Pay Television Services,Nasdaq-100
+CEG,CEG,Constellation Energy,Utilities,Electric Utilities,Nasdaq-100
+CPRT,CPRT,Copart,Consumer Discretionary,Retail,Nasdaq-100
+CSGP,CSGP,CoStar Group,Real Estate,Real Estate,Nasdaq-100
+COST,COST,Costco,Consumer Discretionary,Department/Specialty Retail Stores,Nasdaq-100
+CRWD,CRWD,CrowdStrike,Technology,Computer Software,Nasdaq-100
+CSX,CSX,CSX Corporation,Industrials,Railroads,Nasdaq-100
+DDOG,DDOG,Datadog,Technology,Computer Software,Nasdaq-100
+DXCM,DXCM,DexCom,Health Care,Medical/Dental Instruments,Nasdaq-100
+FANG,FANG,Diamondback Energy,Energy,Oil & Gas Production,Nasdaq-100
+DASH,DASH,DoorDash,Technology,EDP Services,Nasdaq-100
+EA,EA,Electronic Arts,Consumer Discretionary,Miscellaneous Amusement & Recreation Services,Nasdaq-100
+EXC,EXC,Exelon,Utilities,Power Generation,Nasdaq-100
+FAST,FAST,Fastenal,Industrials,Construction & Materials,Nasdaq-100
+FER,FER,Ferrovial,Industrials,"Military, Government, Technical",Nasdaq-100
+FTNT,FTNT,Fortinet,Technology,Computer Peripheral Equipment,Nasdaq-100
+GEHC,GEHC,GE HealthCare,Health Care,Medical Electronics,Nasdaq-100
+GILD,GILD,Gilead Sciences,Health Care,Biotechnology,Nasdaq-100
+HON,HON,Honeywell,Industrials,Aerospace,Nasdaq-100
+IDXX,IDXX,Idexx Laboratories,Health Care,Biotechnology,Nasdaq-100
+INSM,INSM,Insmed Incorporated,Health Care,Biotechnology,Nasdaq-100
+INTC,INTC,Intel,Technology,Semiconductors,Nasdaq-100
+INTU,INTU,Intuit,Technology,Computer Software,Nasdaq-100
+ISRG,ISRG,Intuitive Surgical,Health Care,Industrial Specialties,Nasdaq-100
+KDP,KDP,Keurig Dr Pepper,Consumer Staples,Soft Drinks,Nasdaq-100
+KLAC,KLAC,KLA Corporation,Technology,Electronic Components,Nasdaq-100
+KHC,KHC,Kraft Heinz,Consumer Staples,Packaged Foods,Nasdaq-100
+LRCX,LRCX,Lam Research,Technology,Industrial Machinery,Nasdaq-100
+LIN,LIN,Linde plc,Basic Materials,Major Chemicals,Nasdaq-100
+MAR,MAR,Marriott International,Consumer Discretionary,Hotels/Resorts,Nasdaq-100
+MRVL,MRVL,Marvell Technology,Technology,Semiconductors,Nasdaq-100
+MELI,MELI,Mercado Libre,Consumer Discretionary,Catalog/Specialty Distribution,Nasdaq-100
+META,META,Meta Platforms,Technology,Computer Software,Nasdaq-100
+MCHP,MCHP,Microchip Technology,Technology,Semiconductors,Nasdaq-100
+MU,MU,Micron Technology,Technology,Semiconductors,Nasdaq-100
+MSFT,MSFT,Microsoft,Technology,Computer Software,Nasdaq-100
+MSTR,MSTR,MicroStrategy,Technology,Computer Software,Nasdaq-100
+MDLZ,MDLZ,Mondelez International,Consumer Staples,Packaged Foods,Nasdaq-100
+MPWR,MPWR,Monolithic Power Systems,Technology,Semiconductors,Nasdaq-100
+MNST,MNST,Monster Beverage,Consumer Staples,Soft Drinks,Nasdaq-100
+NFLX,NFLX,"Netflix, Inc.",Consumer Discretionary,Consumer Electronics,Nasdaq-100
+NVDA,NVDA,Nvidia,Technology,Semiconductors,Nasdaq-100
+NXPI,NXPI,NXP Semiconductors,Technology,Semiconductors,Nasdaq-100
+ORLY,ORLY,O'Reilly Automotive,Consumer Discretionary,Auto & Home Supply Stores,Nasdaq-100
+ODFL,ODFL,Old Dominion Freight Line,Industrials,Trucking Freight/Courier Services,Nasdaq-100
+PCAR,PCAR,Paccar,Consumer Discretionary,Motor Vehicles,Nasdaq-100
+PLTR,PLTR,Palantir Technologies,Technology,Computer Software,Nasdaq-100
+PANW,PANW,Palo Alto Networks,Technology,Computer Peripheral Equipment,Nasdaq-100
+PAYX,PAYX,Paychex,Industrials,Diversified Commercial Services,Nasdaq-100
+PYPL,PYPL,PayPal,Industrials,Diversified Commercial Services,Nasdaq-100
+PDD,PDD,PDD Holdings,Technology,EDP Services,Nasdaq-100
+PEP,PEP,PepsiCo,Consumer Staples,Soft Drinks,Nasdaq-100
+QCOM,QCOM,Qualcomm,Technology,Broadcasting & Communications Equipment,Nasdaq-100
+REGN,REGN,Regeneron Pharmaceuticals,Health Care,Biotechnology,Nasdaq-100
+ROP,ROP,Roper Technologies,Technology,Computer Software,Nasdaq-100
+ROST,ROST,Ross Stores,Consumer Discretionary,Clothing/Shoe/Accessory Stores,Nasdaq-100
+SNDK,SNDK,Sandisk,Technology,Electronic Components,Nasdaq-100
+STX,STX,Seagate Technology,Technology,Electronic Components,Nasdaq-100
+SHOP,SHOP,Shopify,Technology,Computer Software,Nasdaq-100
+SBUX,SBUX,Starbucks,Consumer Discretionary,Restaurants,Nasdaq-100
+SNPS,SNPS,Synopsys,Technology,Computer Software,Nasdaq-100
+TMUS,TMUS,T-Mobile US,Telecommunications,Telecommunications Service Providers,Nasdaq-100
+TTWO,TTWO,Take-Two Interactive,Consumer Discretionary,Miscellaneous Amusement & Recreation Services,Nasdaq-100
+TSLA,TSLA,"Tesla, Inc.",Consumer Discretionary,Automobiles & Parts,Nasdaq-100
+TXN,TXN,Texas Instruments,Technology,Semiconductors,Nasdaq-100
+TRI,TRI,Thomson Reuters,Technology,Computer Software,Nasdaq-100
+VRSK,VRSK,Verisk Analytics,Industrials,Diversified Commercial Services,Nasdaq-100
+VRTX,VRTX,Vertex Pharmaceuticals,Health Care,Biotechnology,Nasdaq-100
+WMT,WMT,Walmart,Consumer Discretionary,Department/Specialty Retail Stores,Nasdaq-100
+WBD,WBD,Warner Bros. Discovery,Consumer Discretionary,Miscellaneous Amusement & Recreation Services,Nasdaq-100
+WDC,WDC,Western Digital,Technology,Electronic Components,Nasdaq-100
+WDAY,WDAY,"Workday, Inc.",Technology,EDP Services,Nasdaq-100
+XEL,XEL,Xcel Energy,Utilities,Power Generation,Nasdaq-100
+ZS,ZS,Zscaler,Technology,EDP Services,Nasdaq-100

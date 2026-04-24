@@ -1,0 +1,31 @@
+ticker,market_data_symbol,security_name,sector,date_added,universe_source
+MMM,MMM,3M,Industrials,1976-08-09,Dow 30
+AXP,AXP,American Express,Financials,1982-08-30,Dow 30
+AMGN,AMGN,Amgen,Health Care,2020-08-31,Dow 30
+AMZN,AMZN,Amazon,Consumer Discretionary,2024-02-26,Dow 30
+AAPL,AAPL,Apple,Information Technology,2015-03-19,Dow 30
+BA,BA,Boeing,Industrials,1987-03-12,Dow 30
+CAT,CAT,Caterpillar,Industrials,1991-05-06,Dow 30
+CVX,CVX,Chevron,Energy,2008-02-19,Dow 30
+CSCO,CSCO,Cisco,Information Technology,2009-06-08,Dow 30
+KO,KO,Coca-Cola,Consumer Staples,1987-03-12,Dow 30
+DIS,DIS,Disney,Communication Services,1991-05-06,Dow 30
+GS,GS,Goldman Sachs,Financials,2013-09-23,Dow 30
+HD,HD,Home Depot,Consumer Discretionary,1999-11-01,Dow 30
+HON,HON,Honeywell,Industrials,2020-08-31,Dow 30
+IBM,IBM,IBM,Information Technology,1979-06-29,Dow 30
+JNJ,JNJ,Johnson & Johnson,Health Care,1997-03-17,Dow 30
+JPM,JPM,JPMorgan Chase,Financials,1991-05-06,Dow 30
+MCD,MCD,McDonald's,Consumer Discretionary,1985-10-30,Dow 30
+MRK,MRK,Merck,Health Care,1979-06-29,Dow 30
+MSFT,MSFT,Microsoft,Information Technology,1999-11-01,Dow 30
+NKE,NKE,Nike,Consumer Discretionary,2013-09-23,Dow 30
+NVDA,NVDA,Nvidia,Information Technology,2024-11-08,Dow 30
+PG,PG,Procter & Gamble,Consumer Staples,1932-05-26,Dow 30
+CRM,CRM,Salesforce,Information Technology,2020-08-31,Dow 30
+SHW,SHW,Sherwin-Williams,Materials,2024-11-08,Dow 30
+TRV,TRV,"Travelers Companies, Inc.",Financials,2009-06-08,Dow 30
+UNH,UNH,UnitedHealth Group,Health Care,2012-09-24,Dow 30
+VZ,VZ,Verizon,Communication Services,2004-04-08,Dow 30
+V,V,Visa,Financials,2013-09-23,Dow 30
+WMT,WMT,Walmart,Consumer Staples,1997-03-17,Dow 30
