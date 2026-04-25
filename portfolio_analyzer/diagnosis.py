@@ -12,12 +12,14 @@ try:
     from portfolio_analyzer.buy_candidates import (
         BuyCandidateUniverseEntry,
         fetch_candidate_market_metadata,
+        fetch_candidate_news_signals,
         load_buy_candidate_universe,
     )
 except ModuleNotFoundError:
     from buy_candidates import (
         BuyCandidateUniverseEntry,
         fetch_candidate_market_metadata,
+        fetch_candidate_news_signals,
         load_buy_candidate_universe,
     )
 
@@ -456,6 +458,41 @@ class PortfolioRebalancePlan(BaseModel):
     sector_changes: list["RebalanceSectorChange"] = Field(default_factory=list)
 
 
+class NextStepAction(BaseModel):
+    """One concrete user-facing action inside the execution summary.
+
+    The rebalance plan explains *what the portfolio becomes*. This smaller
+    object explains *what the user should do next* in a practical sequence.
+    """
+
+    step_number: int
+    action_stage: str
+    action_type: str
+    ticker: str = ""
+    security_name: str = ""
+    instruction: str
+    amount_text: str = ""
+    why_this_step: str = ""
+    expected_portfolio_change: str = ""
+
+
+class PortfolioNextSteps(BaseModel):
+    """Execution-ready summary built from the current sell, trim, and buy set.
+
+    This object is meant to be the plainest operational layer in the app. It
+    does not add new logic. Instead, it translates the current deterministic
+    recommendations into a sequence the user can actually follow.
+    """
+
+    summary: str = ""
+    execution_sequence: list[str] = Field(default_factory=list)
+    watchouts: list[str] = Field(default_factory=list)
+    projected_cash_after_plan: float = 0.0
+    total_value_to_sell: float = 0.0
+    total_value_to_buy: float = 0.0
+    actions: list["NextStepAction"] = Field(default_factory=list)
+
+
 class PortfolioGap(BaseModel):
     """A portfolio-level gap that should be understood before suggesting buys.
 
@@ -615,6 +652,7 @@ class PortfolioRiskDiagnosis(BaseModel):
     holding_action_recommendations: list[HoldingActionRecommendation] = Field(default_factory=list)
     portfolio_action_impact: Optional[PortfolioActionImpact] = None
     portfolio_rebalance_plan: Optional[PortfolioRebalancePlan] = None
+    portfolio_next_steps: Optional[PortfolioNextSteps] = None
     portfolio_gaps: list[PortfolioGap] = Field(default_factory=list)
     portfolio_preferences: Optional[PortfolioPreferences] = None
     current_holdings: list[CurrentHoldingSnapshot] = Field(default_factory=list)
@@ -638,6 +676,8 @@ PortfolioTraitSnapshot.model_rebuild()
 RebalanceHoldingChange.model_rebuild()
 RebalanceSectorChange.model_rebuild()
 PortfolioRebalancePlan.model_rebuild()
+NextStepAction.model_rebuild()
+PortfolioNextSteps.model_rebuild()
 PortfolioGap.model_rebuild()
 PortfolioPreferences.model_rebuild()
 ReplacementCandidate.model_rebuild()
@@ -2799,6 +2839,146 @@ def _build_portfolio_rebalance_plan(
     )
 
 
+def _build_portfolio_next_steps(
+    *,
+    portfolio_preferences: Optional[PortfolioPreferences],
+    holding_action_recommendations: list[HoldingActionRecommendation],
+    replacement_candidates: list[ReplacementCandidate],
+    portfolio_rebalance_plan: Optional[PortfolioRebalancePlan],
+) -> PortfolioNextSteps:
+    """Translate the current action and buy layers into a user-facing sequence.
+
+    The output here is intentionally execution-first. Users already have the
+    explanation-heavy tabs. This object tells them what to do in order, how
+    much capital is involved, and what portfolio effect each step is meant to
+    produce.
+    """
+    actionable = [item for item in holding_action_recommendations if item.is_actionable]
+    actionable = sorted(
+        actionable,
+        key=lambda item: (
+            -(float(item.value_to_sell or 0.0)),
+            -(float(item.position_reduction_pct or 0.0)),
+            item.ticker,
+        ),
+    )
+    funded_buys = [
+        item for item in sorted(replacement_candidates, key=lambda item: (-float(item.fit_score), item.ticker))
+        if (item.suggested_allocation_amount or 0.0) > 0
+    ]
+
+    actions: list[NextStepAction] = []
+    step_number = 1
+
+    for recommendation in actionable:
+        sell_pct = float(recommendation.position_reduction_pct or 0.0)
+        action_type = "Sell" if sell_pct >= 0.999 else "Trim"
+        if action_type == "Sell":
+            instruction = f"Sell {recommendation.ticker}."
+            amount_text = (
+                f"About ${float(recommendation.value_to_sell or 0.0):,.2f} "
+                + (f"({recommendation.shares_to_sell:.2f} shares)" if recommendation.shares_to_sell is not None else "")
+            ).strip()
+        else:
+            instruction = f"Trim {recommendation.ticker}."
+            amount_text = (
+                f"Roughly {sell_pct:.1%} of the position"
+                + (f" or about ${float(recommendation.value_to_sell):,.2f}" if recommendation.value_to_sell is not None else "")
+            )
+        expected_change = recommendation.portfolio_impact_summary or (
+            "This should reduce the portfolio's exposure to a weaker current holding."
+        )
+        actions.append(
+            NextStepAction(
+                step_number=step_number,
+                action_stage="Reduce current risk",
+                action_type=action_type,
+                ticker=recommendation.ticker,
+                security_name=recommendation.ticker,
+                instruction=instruction,
+                amount_text=amount_text,
+                why_this_step=recommendation.why_it_matters or recommendation.recommendation_summary,
+                expected_portfolio_change=expected_change,
+            )
+        )
+        step_number += 1
+
+    for candidate in funded_buys[: min(5, len(funded_buys))]:
+        actions.append(
+            NextStepAction(
+                step_number=step_number,
+                action_stage="Rebuild with better fits",
+                action_type="Buy",
+                ticker=candidate.ticker,
+                security_name=candidate.security_name,
+                instruction=f"Start a position in {candidate.ticker}.",
+                amount_text=(
+                    f"Suggested starting slice: ${float(candidate.suggested_allocation_amount or 0.0):,.2f}"
+                    + (
+                        f" ({float(candidate.suggested_allocation_pct_of_budget):.1%} of buy budget)"
+                        if candidate.suggested_allocation_pct_of_budget is not None else ""
+                    )
+                ),
+                why_this_step=candidate.why_it_fits,
+                expected_portfolio_change=(
+                    candidate.what_it_improves[0]
+                    if candidate.what_it_improves
+                    else "This should help fill one of the main portfolio gaps."
+                ),
+            )
+        )
+        step_number += 1
+
+    projected_cash = (
+        float(portfolio_rebalance_plan.projected_cash_after_plan)
+        if portfolio_rebalance_plan is not None else 0.0
+    )
+    if projected_cash > 0:
+        actions.append(
+            NextStepAction(
+                step_number=step_number,
+                action_stage="Keep dry powder",
+                action_type="Cash",
+                instruction="Keep the remaining cash unallocated for now.",
+                amount_text=f"Estimated cash left after the current plan: ${projected_cash:,.2f}",
+                why_this_step="The current plan does not need to force every remaining dollar into a new idea immediately.",
+                expected_portfolio_change="This preserves flexibility instead of pushing the last dollars back into the market too quickly.",
+            )
+        )
+
+    total_value_to_sell = round(sum(float(item.value_to_sell or 0.0) for item in actionable), 2)
+    total_value_to_buy = round(sum(float(item.suggested_allocation_amount or 0.0) for item in funded_buys), 2)
+    sequence = _unique_nonempty(
+        [
+            "Start with trims and sells so the portfolio first reduces exposure to weaker current names.",
+            "Then fund the top buy ideas with the suggested starting slices instead of deploying the whole budget at once.",
+            "Leave any remaining cash untouched unless you want to override the current budget assumptions.",
+        ]
+    )
+    watchouts = _unique_nonempty(
+        (
+            [item for recommendation in actionable for item in recommendation.guardrail_notes[:1]]
+            + [item for item in (portfolio_rebalance_plan.plan_assumptions if portfolio_rebalance_plan is not None else [])[:2]]
+            + (portfolio_preferences.unresolved_preferences[:2] if portfolio_preferences is not None else [])
+        )
+    )
+    summary = (
+        f"The current plan has {len(actionable)} sell or trim action(s) and {min(5, len(funded_buys))} funded buy idea(s). "
+        f"That means moving about ${total_value_to_sell:,.2f} out of weaker holdings and about ${total_value_to_buy:,.2f} into better-fit adds, "
+        f"with about ${projected_cash:,.2f} left as cash."
+    )
+
+    return PortfolioNextSteps(
+        summary=summary,
+        execution_sequence=sequence,
+        watchouts=watchouts,
+        projected_cash_after_plan=round(projected_cash, 2),
+        total_value_to_sell=total_value_to_sell,
+        total_value_to_buy=total_value_to_buy,
+        actions=actions,
+    )
+
+
 def portfolio_rebalance_plan_from_user_preferences(
     *,
     diagnosis: PortfolioRiskDiagnosis,
@@ -2814,6 +2994,30 @@ def portfolio_rebalance_plan_from_user_preferences(
         portfolio_preferences=preferences,
         holding_action_recommendations=diagnosis.holding_action_recommendations,
         replacement_candidates=candidates,
+    )
+
+
+def portfolio_next_steps_from_user_preferences(
+    *,
+    diagnosis: PortfolioRiskDiagnosis,
+    preferences: PortfolioPreferences,
+) -> PortfolioNextSteps:
+    """Rebuild the execution summary after the user changes buy preferences."""
+    candidates = replacement_candidates_from_user_preferences(
+        diagnosis=diagnosis,
+        preferences=preferences,
+    )
+    rebalance_plan = _build_portfolio_rebalance_plan(
+        current_holdings=diagnosis.current_holdings,
+        portfolio_preferences=preferences,
+        holding_action_recommendations=diagnosis.holding_action_recommendations,
+        replacement_candidates=candidates,
+    )
+    return _build_portfolio_next_steps(
+        portfolio_preferences=preferences,
+        holding_action_recommendations=diagnosis.holding_action_recommendations,
+        replacement_candidates=candidates,
+        portfolio_rebalance_plan=rebalance_plan,
     )
 
 
@@ -3355,18 +3559,75 @@ def _candidate_passes_buy_filters(
     rel_5y = _safe_float(candidate_row.get("relative_5y_return_pct"))
     beta = _safe_float(candidate_row.get("beta"))
     source_count = int(_safe_float(candidate_row.get("source_count")) or candidate.source_count or 0)
+    trailing_pe = _safe_float(candidate_row.get("trailing_pe"))
+    metadata: Optional[dict[str, Any]] = None
+
+    def get_metadata() -> dict[str, Any]:
+        nonlocal metadata
+        if metadata is None:
+            metadata = fetch_candidate_market_metadata(candidate.market_data_symbol)
+        return metadata
+
+    def count_negative_signals() -> int:
+        signals = fetch_candidate_news_signals(candidate.market_data_symbol, limit=2)
+        return sum(
+            1
+            for item in signals
+            if any(
+                keyword in str(item).lower()
+                for keyword in {
+                    "lawsuit",
+                    "probe",
+                    "investigation",
+                    "downgrade",
+                    "warning",
+                    "miss",
+                    "cuts",
+                    "cut guidance",
+                    "decline",
+                    "headwind",
+                    "weak",
+                    "uncertain",
+                    "pressure",
+                }
+            )
+        )
 
     if candidate.asset_type == "Stock":
+        if trailing_pe is None and (
+            (rel_1y is not None and rel_1y < 0.05)
+            or (rel_3y is not None and rel_3y < 0.05)
+        ):
+            trailing_pe = _safe_float(get_metadata().get("trailing_pe"))
         if preferences.stated_risk_score <= 65 and volatility_1y is not None and volatility_1y >= 0.42:
             return False, ["Recent volatility is still too high for the current buy profile."]
         if preferences.stated_risk_score <= 55 and beta is not None and beta >= 1.45:
             return False, ["This stock still moves much more than the market for the current risk tolerance."]
+        if trailing_pe is not None and trailing_pe >= 45 and (
+            (rel_1y is not None and rel_1y < 0.0) or (rel_3y is not None and rel_3y < 0.0)
+        ):
+            return False, ["Its valuation still looks stretched for a first-pass add while recent relative performance is soft."]
+        if (
+            preferences.stated_risk_score <= 55
+            and trailing_pe is not None and trailing_pe >= 35
+            and beta is not None and beta >= 1.15
+        ):
+            return False, ["It combines a richer valuation with above-market movement, which is too aggressive for the current buy profile."]
         if (
             rel_1y is not None and rel_1y < -0.10
             and rel_3y is not None and rel_3y < -0.12
             and rel_5y is not None and rel_5y < -0.08
         ):
             return False, ["It has lagged the S&P 500 across multiple windows, so it is not a strong first-pass add."]
+        negative_signal_count = (
+            count_negative_signals()
+            if ((rel_1y is not None and rel_1y < 0) or (rel_3y is not None and rel_3y < 0))
+            else 0
+        )
+        if negative_signal_count >= 2 and rel_1y is not None and rel_1y < 0:
+            return False, ["Recent external signals are still cautious, so it is not a clean add right now."]
+        if trailing_pe is not None and trailing_pe >= 28:
+            notes.append("its valuation is on the richer side, so it needs stronger execution to justify the add")
         if source_count >= 3:
             notes.append("it also shows up across several trusted source universes")
     else:
@@ -3376,6 +3637,14 @@ def _candidate_passes_buy_filters(
             and rel_5y is not None and rel_5y < -0.45
         ):
             notes.append("its long-term relative returns are weak, so it should compete mainly as stability ballast, not as a core add")
+        expense_ratio = _safe_float(candidate_row.get("expense_ratio"))
+        if expense_ratio is None:
+            expense_ratio = _safe_float(get_metadata().get("expense_ratio"))
+        if candidate.is_income and preferences.prefer_low_expense_for_dividend_etfs and expense_ratio is not None and expense_ratio > 0.0025:
+            return False, ["Its expense ratio is too high for the current dividend-ETF cost preference."]
+        negative_signal_count = count_negative_signals() if rel_1y is not None and rel_1y < -0.05 else 0
+        if negative_signal_count >= 2 and rel_1y is not None and rel_1y < -0.05:
+            notes.append("recent external signals still look cautious, so this ETF should be treated as a secondary idea")
 
     return True, notes
 
@@ -4371,6 +4640,12 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         holding_action_recommendations=holding_action_recommendations,
         replacement_candidates=replacement_candidates,
     )
+    portfolio_next_steps = _build_portfolio_next_steps(
+        portfolio_preferences=portfolio_preferences,
+        holding_action_recommendations=holding_action_recommendations,
+        replacement_candidates=replacement_candidates,
+        portfolio_rebalance_plan=portfolio_rebalance_plan,
+    )
 
     return PortfolioRiskDiagnosis(
         run_id=str(manifest.get("run_id")),
@@ -4394,6 +4669,7 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         holding_action_recommendations=holding_action_recommendations,
         portfolio_action_impact=portfolio_action_impact,
         portfolio_rebalance_plan=portfolio_rebalance_plan,
+        portfolio_next_steps=portfolio_next_steps,
         portfolio_gaps=portfolio_gaps,
         portfolio_preferences=portfolio_preferences,
         current_holdings=current_holdings,

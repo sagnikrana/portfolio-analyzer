@@ -44,6 +44,7 @@ try:
         PortfolioPreferences,
         PortfolioRiskDiagnosis,
         ReplacementCandidate,
+        portfolio_next_steps_from_user_preferences,
         portfolio_rebalance_plan_from_user_preferences,
         portfolio_preferences_from_user_inputs,
         portfolio_risk_diagnosis_from_saved_artifacts,
@@ -54,6 +55,7 @@ except ModuleNotFoundError:
         PortfolioPreferences,
         PortfolioRiskDiagnosis,
         ReplacementCandidate,
+        portfolio_next_steps_from_user_preferences,
         portfolio_rebalance_plan_from_user_preferences,
         portfolio_preferences_from_user_inputs,
         portfolio_risk_diagnosis_from_saved_artifacts,
@@ -2765,6 +2767,111 @@ def build_rebalance_holdings_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.Data
         )
     return pd.DataFrame(rows)
 
+
+def build_next_steps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
+    """Render an execution-ready summary so the user knows what to do next."""
+    next_steps = diagnosis.portfolio_next_steps
+    if next_steps is None or not next_steps.actions:
+        return (
+            "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Next Steps</div>"
+            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No execution summary is available yet.</div>"
+            "</div>"
+        )
+
+    top_cards = (
+        metric_card("Sell or trim value", money_text(next_steps.total_value_to_sell), "Capital coming out of weaker holdings")
+        + metric_card("Planned buy value", money_text(next_steps.total_value_to_buy), "Capital going into the current buy ideas")
+        + metric_card("Projected cash left", money_text(next_steps.projected_cash_after_plan), "Dry powder left after the current plan")
+    )
+    sequence_html = "".join(
+        f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
+        for item in next_steps.execution_sequence[:3]
+    ) or "<li>No execution sequence was attached.</li>"
+    watchout_html = "".join(
+        f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
+        for item in next_steps.watchouts[:4]
+    ) or "<li>No special watchouts were attached.</li>"
+
+    action_cards = ""
+    for item in next_steps.actions[:8]:
+        ticker_label = f"{item.ticker} " if item.ticker else ""
+        security_tail = f"{item.security_name}" if item.security_name and item.security_name != item.ticker else ""
+        action_cards += (
+            "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
+            "background:rgba(15,23,42,.34);margin-bottom:14px'>"
+            "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
+            "<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
+            f"<div style='padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.16);border:1px solid rgba(59,130,246,.22);color:#bfdbfe;font-size:12px;font-weight:800'>Step {item.step_number}</div>"
+            f"<div style='font-size:18px;font-weight:800;color:#f8fafc'>{item.action_type}</div>"
+            f"<div style='font-size:15px;color:#e2e8f0'>{ticker_label}{security_tail}</div>"
+            "</div>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:#93c5fd;font-size:12px;font-weight:700'>{item.action_stage}</div>"
+            "</div>"
+            f"<div style='font-size:15px;line-height:1.55;color:#f8fafc;margin-top:12px'>{render_bold_markers(item.instruction)}</div>"
+            f"<div style='font-size:14px;line-height:1.55;color:#93c5fd;margin-top:8px'>{render_bold_markers(item.amount_text)}</div>"
+            "<div style='display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);gap:14px;margin-top:14px'>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Why now</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_bold_markers(item.why_this_step)}</div>"
+            "</div>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What this should improve</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_bold_markers(item.expected_portfolio_change)}</div>"
+            "</div>"
+            "</div>"
+            "</div>"
+        )
+
+    return (
+        "<div style='display:flex;flex-direction:column;gap:16px'>"
+        "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Next Steps</div>"
+        f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>{render_bold_markers(next_steps.summary)}</div>"
+        f"<div class='metric-strip' style='margin-top:14px'>{top_cards}</div>"
+        "</div>"
+        "<div style='display:grid;grid-template-columns:minmax(280px,1fr) minmax(280px,1fr);gap:16px'>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:18px;font-weight:800;color:#f8fafc'>Recommended order</div>"
+        f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{sequence_html}</ul>"
+        "</div>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:18px;font-weight:800;color:#f8fafc'>Watchouts</div>"
+        f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{watchout_html}</ul>"
+        "</div>"
+        "</div>"
+        f"{action_cards}"
+        "</div>"
+    )
+
+
+def build_next_steps_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
+    """Convert the execution summary into a compact review table."""
+    next_steps = diagnosis.portfolio_next_steps
+    if next_steps is None or not next_steps.actions:
+        return pd.DataFrame(
+            columns=["Step", "Stage", "Action", "Ticker", "Name", "Instruction", "Amount", "Why Now", "What Improves"]
+        )
+    rows = []
+    for item in next_steps.actions:
+        rows.append(
+            {
+                "Step": item.step_number,
+                "Stage": item.action_stage,
+                "Action": item.action_type,
+                "Ticker": item.ticker or "",
+                "Name": item.security_name or "",
+                "Instruction": item.instruction,
+                "Amount": item.amount_text,
+                "Why Now": item.why_this_step,
+                "What Improves": item.expected_portfolio_change,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def compact_text_snippet(text: Any, limit: int = 120) -> str:
     snippet = str(text or "").replace("\n", " ").replace("\r", " ").strip()
     snippet = " ".join(snippet.split())
@@ -4878,11 +4985,16 @@ def build_user_portfolio_preferences(
         diagnosis=diagnosis,
         preferences=preferences,
     )
+    next_steps = portfolio_next_steps_from_user_preferences(
+        diagnosis=diagnosis,
+        preferences=preferences,
+    )
     diagnosis = diagnosis.model_copy(
         update={
             "portfolio_preferences": preferences,
             "replacement_candidates": candidates,
             "portfolio_rebalance_plan": rebalance_plan,
+            "portfolio_next_steps": next_steps,
         }
     )
     candidate_payload = [item.model_dump(mode="json") for item in candidates]
@@ -4897,6 +5009,8 @@ def build_user_portfolio_preferences(
         build_rebalance_plan_html(diagnosis),
         plot_rebalance_sectors(diagnosis),
         build_rebalance_holdings_frame(diagnosis),
+        build_next_steps_html(diagnosis),
+        build_next_steps_frame(diagnosis),
     )
 
 
@@ -6541,6 +6655,8 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
     rebalance_plan_html = build_rebalance_plan_html(diagnosis)
     rebalance_sectors_fig = plot_rebalance_sectors(diagnosis)
     rebalance_holdings_df = build_rebalance_holdings_frame(diagnosis)
+    next_steps_html = build_next_steps_html(diagnosis)
+    next_steps_df = build_next_steps_frame(diagnosis)
     buy_preference_sector_choices = build_buy_preference_sector_choices(diagnosis)
     base_preferences = diagnosis.portfolio_preferences
     reinvest_choice = (
@@ -6620,6 +6736,8 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         rebalance_plan_html,
         rebalance_sectors_fig,
         rebalance_holdings_df,
+        next_steps_html,
+        next_steps_df,
         gr.update(choices=buy_preference_sector_choices, value=(base_preferences.sector_preferences if base_preferences is not None else [])),
         gr.update(value=(base_preferences.budget_to_deploy if base_preferences is not None else None)),
         gr.update(value=reinvest_choice),
@@ -6986,6 +7104,13 @@ def build_app() -> gr.Blocks:
                             interactive=False,
                             wrap=True,
                         )
+                    with gr.Tab("Next Steps", id="next-steps"):
+                        next_steps_md = gr.HTML()
+                        next_steps_df = gr.Dataframe(
+                            label="Execution Summary",
+                            interactive=False,
+                            wrap=True,
+                        )
                     with gr.Tab("Risk Guide", id="risk-guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
@@ -7031,6 +7156,8 @@ def build_app() -> gr.Blocks:
                 rebalance_plan_md,
                 rebalance_sectors_plot,
                 rebalance_holdings_df,
+                next_steps_md,
+                next_steps_df,
                 buy_sector_preferences,
                 buy_budget_to_deploy,
                 buy_reinvest_choice,
@@ -7092,6 +7219,8 @@ def build_app() -> gr.Blocks:
                 rebalance_plan_md,
                 rebalance_sectors_plot,
                 rebalance_holdings_df,
+                next_steps_md,
+                next_steps_df,
             ],
         )
 
