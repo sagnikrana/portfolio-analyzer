@@ -6696,6 +6696,8 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
     portfolio_gaps_df = build_portfolio_gap_frame(diagnosis)
     portfolio_preferences_df = build_portfolio_preferences_frame(diagnosis.portfolio_preferences)
     buy_preferences_html = build_buy_preferences_html(diagnosis.portfolio_preferences)
+    base_preferences = diagnosis.portfolio_preferences
+    buy_idea_limit = base_preferences.buy_idea_limit if base_preferences is not None else 10
     buy_ideas_html = build_buy_ideas_html(
         diagnosis,
         diagnosis.portfolio_preferences,
@@ -6714,7 +6716,6 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
     next_steps_html = build_next_steps_html(diagnosis)
     next_steps_df = build_next_steps_frame(diagnosis)
     buy_preference_sector_choices = build_buy_preference_sector_choices(diagnosis)
-    base_preferences = diagnosis.portfolio_preferences
     reinvest_choice = (
         "Yes"
         if base_preferences is not None and base_preferences.reinvest_freed_cash is True
@@ -6732,7 +6733,6 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
     include_existing_holdings = (
         base_preferences.include_existing_holdings if base_preferences is not None else False
     )
-    buy_idea_limit = base_preferences.buy_idea_limit if base_preferences is not None else 10
     eq_fig = plot_equity_curves(market_metrics["timeseries"])
     sector_fig = plot_sector_allocation(market_metrics.get("sector_allocation", []))
     dd_fig = plot_drawdowns(market_metrics["timeseries"])
