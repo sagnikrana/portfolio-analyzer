@@ -4937,24 +4937,16 @@ def build_buy_idea_feature_slots(
     ordered = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))
     selected_limit = max(0, min(int(limit), MAX_FEATURED_BUY_IDEA_COUNT))
     featured = ordered[:selected_limit]
+    row_outputs: list[Any] = []
     card_outputs: list[Any] = []
     plot_outputs: list[Any] = []
     for idx in range(MAX_FEATURED_BUY_IDEA_COUNT):
         candidate = featured[idx] if idx < len(featured) else None
         is_visible = candidate is not None
-        card_outputs.append(
-            gr.update(
-                value=build_buy_idea_card_html(diagnosis, candidate, idx + 1) if is_visible else "",
-                visible=is_visible,
-            )
-        )
-        plot_outputs.append(
-            gr.update(
-                value=plot_buy_idea_chart(candidate) if is_visible else go.Figure(),
-                visible=is_visible,
-            )
-        )
-    return [*card_outputs, *plot_outputs]
+        row_outputs.append(gr.update(visible=is_visible))
+        card_outputs.append(build_buy_idea_card_html(diagnosis, candidate, idx + 1) if is_visible else "")
+        plot_outputs.append(plot_buy_idea_chart(candidate) if is_visible else plot_buy_idea_chart(None))
+    return [*row_outputs, *card_outputs, *plot_outputs]
 
 
 def build_buy_preference_sector_choices(diagnosis: PortfolioRiskDiagnosis) -> list[str]:
@@ -7157,18 +7149,17 @@ def build_app() -> gr.Blocks:
                                 )
                     with gr.Tab("Buy Ideas", id="buy-ideas"):
                         buy_ideas_md = gr.HTML()
+                        featured_buy_idea_rows: list[Any] = []
                         featured_buy_idea_cards: list[gr.HTML] = []
                         featured_buy_idea_plots: list[gr.Plot] = []
                         for idx in range(MAX_FEATURED_BUY_IDEA_COUNT):
-                            with gr.Row(equal_height=False):
+                            with gr.Row(equal_height=False, visible=False) as featured_row:
+                                featured_buy_idea_rows.append(featured_row)
                                 with gr.Column(scale=6, min_width=520):
-                                    featured_buy_idea_cards.append(gr.HTML(visible=False))
+                                    featured_buy_idea_cards.append(gr.HTML())
                                 with gr.Column(scale=6, min_width=520):
                                     featured_buy_idea_plots.append(
-                                        gr.Plot(
-                                            label=f"Featured Buy Idea #{idx + 1}: 5Y vs S&P 500",
-                                            visible=False,
-                                        )
+                                        gr.Plot(label=f"Featured Buy Idea #{idx + 1}: 5Y vs S&P 500")
                                     )
                         buy_ideas_df = gr.Dataframe(
                             label="Full Ranked Buy Candidate Review",
@@ -7230,6 +7221,7 @@ def build_app() -> gr.Blocks:
                 buy_preferences_md,
                 buy_preferences_df,
                 buy_ideas_md,
+                *featured_buy_idea_rows,
                 *featured_buy_idea_cards,
                 *featured_buy_idea_plots,
                 buy_ideas_df,
@@ -7294,6 +7286,7 @@ def build_app() -> gr.Blocks:
                 buy_preferences_state,
                 buy_candidates_state,
                 buy_ideas_md,
+                *featured_buy_idea_rows,
                 *featured_buy_idea_cards,
                 *featured_buy_idea_plots,
                 buy_ideas_df,
