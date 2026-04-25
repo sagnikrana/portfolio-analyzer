@@ -4921,11 +4921,11 @@ def build_buy_idea_feature_slots(
     plain string where a `gr.Plot` is expected.
     """
     ordered = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))
-    selected_limit = min(len(ordered), limit)
+    selected_limit = max(0, min(int(limit), MAX_FEATURED_BUY_IDEA_COUNT))
     featured = ordered[:selected_limit]
     card_outputs: list[Any] = []
     plot_outputs: list[Any] = []
-    for idx in range(limit):
+    for idx in range(MAX_FEATURED_BUY_IDEA_COUNT):
         candidate = featured[idx] if idx < len(featured) else None
         is_visible = candidate is not None
         card_outputs.append(
