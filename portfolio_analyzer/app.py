@@ -4905,15 +4905,25 @@ def build_buy_idea_feature_slots(
     candidates: list[ReplacementCandidate],
     limit: int = FEATURED_BUY_IDEA_COUNT,
 ) -> list[Any]:
-    """Build fixed featured buy-idea rows as alternating HTML and plot outputs."""
+    """Build fixed featured buy-idea rows in Gradio output order.
+
+    The `Buy Ideas` tab wires its outputs as:
+    1. all featured HTML cards
+    2. all featured plots
+
+    So this helper must return values in that same grouped order. Returning
+    alternating `card, plot, card, plot` values causes Gradio to receive a
+    plain string where a `gr.Plot` is expected.
+    """
     ordered = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))
     featured = ordered[:limit]
-    outputs: list[Any] = []
+    card_outputs: list[Any] = []
+    plot_outputs: list[Any] = []
     for idx in range(limit):
         candidate = featured[idx] if idx < len(featured) else None
-        outputs.append(build_buy_idea_card_html(diagnosis, candidate, idx + 1))
-        outputs.append(plot_buy_idea_chart(candidate))
-    return outputs
+        card_outputs.append(build_buy_idea_card_html(diagnosis, candidate, idx + 1))
+        plot_outputs.append(plot_buy_idea_chart(candidate))
+    return [*card_outputs, *plot_outputs]
 
 
 def build_buy_preference_sector_choices(diagnosis: PortfolioRiskDiagnosis) -> list[str]:
