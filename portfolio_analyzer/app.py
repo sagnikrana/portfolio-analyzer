@@ -42,6 +42,7 @@ try:
         PortfolioPreferences,
         PortfolioRiskDiagnosis,
         ReplacementCandidate,
+        portfolio_rebalance_plan_from_user_preferences,
         portfolio_preferences_from_user_inputs,
         portfolio_risk_diagnosis_from_saved_artifacts,
         replacement_candidates_from_user_preferences,
@@ -51,6 +52,7 @@ except ModuleNotFoundError:
         PortfolioPreferences,
         PortfolioRiskDiagnosis,
         ReplacementCandidate,
+        portfolio_rebalance_plan_from_user_preferences,
         portfolio_preferences_from_user_inputs,
         portfolio_risk_diagnosis_from_saved_artifacts,
         replacement_candidates_from_user_preferences,
@@ -2478,6 +2480,206 @@ def plot_portfolio_gaps(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
     return fig
 
 
+def build_rebalance_plan_html(diagnosis: PortfolioRiskDiagnosis) -> str:
+    """Render the portfolio rebalance plan as a scan-first before/after summary."""
+    plan = diagnosis.portfolio_rebalance_plan
+    if plan is None or plan.before_snapshot is None or plan.after_snapshot is None:
+        return (
+            "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Portfolio Rebalancing Plan</div>"
+            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No rebalance plan is available yet.</div>"
+            "</div>"
+        )
+
+    before = plan.before_snapshot
+    after = plan.after_snapshot
+    cards = (
+        metric_card("Before invested", money_text(before.invested_value), f"Cash {money_text(before.cash_value)}")
+        + metric_card("After invested", money_text(after.invested_value), f"Cash {money_text(after.cash_value)}")
+        + metric_card("Largest position", f"{before.largest_position_pct_of_invested:.1%} -> {after.largest_position_pct_of_invested:.1%}", "Share of invested sleeve")
+        + metric_card("Top 5 concentration", f"{before.top5_weight_pct_of_invested:.1%} -> {after.top5_weight_pct_of_invested:.1%}", "Share of invested sleeve")
+        + metric_card("Effective holdings", f"{before.effective_holdings:.1f} -> {after.effective_holdings:.1f}", "Broader diversification is usually better")
+    )
+    bullets = "".join(
+        f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
+        for item in plan.improvement_bullets[:5]
+    ) or "<li>No portfolio-wide change bullet was generated.</li>"
+    assumptions = "".join(
+        f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
+        for item in plan.plan_assumptions[:4]
+    ) or "<li>No plan assumptions were attached.</li>"
+    return (
+        "<div style='display:flex;flex-direction:column;gap:16px'>"
+        "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Portfolio Rebalancing Plan</div>"
+        f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>{render_bold_markers(plan.summary)}</div>"
+        f"<div class='metric-strip' style='margin-top:14px'>{cards}</div>"
+        "</div>"
+        "<div style='display:grid;grid-template-columns:minmax(280px,1fr) minmax(280px,1fr);gap:16px'>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:18px;font-weight:800;color:#f8fafc'>What likely improves</div>"
+        f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{bullets}</ul>"
+        "</div>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:18px;font-weight:800;color:#f8fafc'>Plan assumptions</div>"
+        f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{assumptions}</ul>"
+        "</div>"
+        "</div>"
+    )
+
+
+def plot_rebalance_traits(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
+    """Plot core before/after portfolio traits for the rebalance plan."""
+    plan = diagnosis.portfolio_rebalance_plan
+    fig = go.Figure()
+    if plan is None or plan.before_snapshot is None or plan.after_snapshot is None:
+        fig.add_annotation(
+            text="No rebalance trait comparison is available yet.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15, "color": "#e2e8f0"},
+        )
+        fig.update_layout(
+            title="Before vs After Portfolio Traits",
+            height=360,
+            margin={"l": 24, "r": 24, "t": 56, "b": 24},
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(17,24,39,0.55)",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
+    before = plan.before_snapshot
+    after = plan.after_snapshot
+    trait_rows = [
+        ("Invested share of account", before.invested_share_of_account * 100, after.invested_share_of_account * 100),
+        ("Cash share of account", before.cash_share_of_account * 100, after.cash_share_of_account * 100),
+        ("Largest position", before.largest_position_pct_of_invested * 100, after.largest_position_pct_of_invested * 100),
+        ("Top 5 concentration", before.top5_weight_pct_of_invested * 100, after.top5_weight_pct_of_invested * 100),
+        ("Effective holdings", before.effective_holdings, after.effective_holdings),
+        ("Top sector weight", before.top_sector_weight_pct_of_invested * 100, after.top_sector_weight_pct_of_invested * 100),
+    ]
+    labels = [item[0] for item in trait_rows]
+    before_values = [item[1] for item in trait_rows]
+    after_values = [item[2] for item in trait_rows]
+    fig.add_trace(go.Bar(name="Before", x=labels, y=before_values, marker={"color": "#94a3b8"}))
+    fig.add_trace(go.Bar(name="After", x=labels, y=after_values, marker={"color": "#22c55e"}))
+    fig.update_layout(
+        title="Before vs After Portfolio Traits",
+        height=420,
+        margin={"l": 40, "r": 24, "t": 56, "b": 56},
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+        hoverlabel=dark_hoverlabel(),
+        barmode="group",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
+        font={"color": "#e2e8f0"},
+    )
+    fig.update_xaxes(tickangle=-18)
+    fig.update_yaxes(title_text="Value", gridcolor="rgba(148,163,184,0.16)")
+    return fig
+
+
+def plot_rebalance_sectors(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
+    """Plot before/after sector mix for the rebalance plan."""
+    plan = diagnosis.portfolio_rebalance_plan
+    fig = go.Figure()
+    if plan is None or not plan.sector_changes:
+        fig.add_annotation(
+            text="No sector comparison is available yet.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 15, "color": "#e2e8f0"},
+        )
+        fig.update_layout(
+            title="Before vs After Sector Mix",
+            height=360,
+            margin={"l": 24, "r": 24, "t": 56, "b": 24},
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(17,24,39,0.55)",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
+    rows = plan.sector_changes[:8]
+    labels = [item.sector for item in rows]
+    before_values = [item.before_weight_pct_of_invested * 100 for item in rows]
+    after_values = [item.after_weight_pct_of_invested * 100 for item in rows]
+    fig.add_trace(go.Bar(name="Before", x=labels, y=before_values, marker={"color": "#60a5fa"}))
+    fig.add_trace(go.Bar(name="After", x=labels, y=after_values, marker={"color": "#34d399"}))
+    fig.update_layout(
+        title="Before vs After Sector Mix",
+        height=420,
+        margin={"l": 40, "r": 24, "t": 56, "b": 56},
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+        hoverlabel=dark_hoverlabel(),
+        barmode="group",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
+        font={"color": "#e2e8f0"},
+    )
+    fig.update_xaxes(tickangle=-18)
+    fig.update_yaxes(title_text="% of invested sleeve", gridcolor="rgba(148,163,184,0.16)")
+    return fig
+
+
+def build_rebalance_traits_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
+    """Build a compact before/after rebalance trait table."""
+    plan = diagnosis.portfolio_rebalance_plan
+    if plan is None or plan.before_snapshot is None or plan.after_snapshot is None:
+        return pd.DataFrame(columns=["Trait", "Before", "After", "Change"])
+    before = plan.before_snapshot
+    after = plan.after_snapshot
+    rows = [
+        ("Invested value", money_text(before.invested_value), money_text(after.invested_value), money_text(after.invested_value - before.invested_value)),
+        ("Cash value", money_text(before.cash_value), money_text(after.cash_value), money_text(after.cash_value - before.cash_value)),
+        ("Invested share of account", percent_display(before.invested_share_of_account), percent_display(after.invested_share_of_account), percent_display(after.invested_share_of_account - before.invested_share_of_account)),
+        ("Largest position", percent_display(before.largest_position_pct_of_invested), percent_display(after.largest_position_pct_of_invested), percent_display(after.largest_position_pct_of_invested - before.largest_position_pct_of_invested)),
+        ("Top 5 concentration", percent_display(before.top5_weight_pct_of_invested), percent_display(after.top5_weight_pct_of_invested), percent_display(after.top5_weight_pct_of_invested - before.top5_weight_pct_of_invested)),
+        ("Effective holdings", f"{before.effective_holdings:.1f}", f"{after.effective_holdings:.1f}", f"{after.effective_holdings - before.effective_holdings:+.1f}"),
+        ("Top sector", f"{before.top_sector or 'N/A'} ({before.top_sector_weight_pct_of_invested:.1%})", f"{after.top_sector or 'N/A'} ({after.top_sector_weight_pct_of_invested:.1%})", ""),
+    ]
+    return pd.DataFrame(rows, columns=["Trait", "Before", "After", "Change"])
+
+
+def build_rebalance_holdings_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
+    """Build the holding-level before/after rebalance table."""
+    plan = diagnosis.portfolio_rebalance_plan
+    if plan is None or not plan.holding_changes:
+        return pd.DataFrame(
+            columns=["Ticker", "Name", "Action", "Before Value", "After Value", "Value Change", "Before Weight", "After Weight", "Weight Change"]
+        )
+    rows = []
+    for item in plan.holding_changes:
+        rows.append(
+            {
+                "Ticker": item.ticker,
+                "Name": item.security_name,
+                "Action": item.action_label,
+                "Before Value": money_text(item.before_value),
+                "After Value": money_text(item.after_value),
+                "Value Change": money_text(item.value_change),
+                "Before Weight": percent_display(item.before_weight_pct_of_invested),
+                "After Weight": percent_display(item.after_weight_pct_of_invested),
+                "Weight Change": percent_display(item.weight_change_pct_points),
+            }
+        )
+    return pd.DataFrame(rows)
+
 def compact_text_snippet(text: Any, limit: int = 120) -> str:
     snippet = str(text or "").replace("\n", " ").replace("\r", " ").strip()
     snippet = " ".join(snippet.split())
@@ -4503,7 +4705,23 @@ def build_user_portfolio_preferences(
     prefer_low_expense_for_dividend_etfs: bool,
     include_existing_holdings: bool,
     buy_idea_limit: int,
-) -> tuple[str, pd.DataFrame, dict[str, Any], list[dict[str, Any]], str, go.Figure, dict[str, Any], go.Figure, go.Figure, pd.DataFrame]:
+) -> tuple[
+    str,
+    pd.DataFrame,
+    dict[str, Any],
+    list[dict[str, Any]],
+    str,
+    go.Figure,
+    dict[str, Any],
+    go.Figure,
+    go.Figure,
+    pd.DataFrame,
+    str,
+    go.Figure,
+    go.Figure,
+    pd.DataFrame,
+    pd.DataFrame,
+]:
     """Create a user-defined `PortfolioPreferences` object from tab inputs.
 
     This updates both the preference review surface and the downstream buy ideas
@@ -4547,6 +4765,17 @@ def build_user_portfolio_preferences(
         diagnosis=diagnosis,
         preferences=preferences,
     )
+    rebalance_plan = portfolio_rebalance_plan_from_user_preferences(
+        diagnosis=diagnosis,
+        preferences=preferences,
+    )
+    diagnosis = diagnosis.model_copy(
+        update={
+            "portfolio_preferences": preferences,
+            "replacement_candidates": candidates,
+            "portfolio_rebalance_plan": rebalance_plan,
+        }
+    )
     candidate_payload = [item.model_dump(mode="json") for item in candidates]
     ticker_choices = build_buy_idea_ticker_choices(candidates)
     default_ticker = ticker_choices[0] if ticker_choices else None
@@ -4561,6 +4790,11 @@ def build_user_portfolio_preferences(
         plot_buy_idea_vs_benchmark(default_ticker or "", candidate_payload),
         plot_buy_projection(diagnosis, preferences, candidate_payload),
         build_buy_ideas_frame(candidates),
+        build_rebalance_plan_html(diagnosis),
+        plot_rebalance_traits(diagnosis),
+        plot_rebalance_sectors(diagnosis),
+        build_rebalance_traits_frame(diagnosis),
+        build_rebalance_holdings_frame(diagnosis),
     )
 
 
@@ -6213,6 +6447,11 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         diagnosis.portfolio_preferences,
         buy_candidates_payload,
     )
+    rebalance_plan_html = build_rebalance_plan_html(diagnosis)
+    rebalance_traits_fig = plot_rebalance_traits(diagnosis)
+    rebalance_sectors_fig = plot_rebalance_sectors(diagnosis)
+    rebalance_traits_df = build_rebalance_traits_frame(diagnosis)
+    rebalance_holdings_df = build_rebalance_holdings_frame(diagnosis)
     buy_preference_sector_choices = build_buy_preference_sector_choices(diagnosis)
     base_preferences = diagnosis.portfolio_preferences
     reinvest_choice = (
@@ -6292,6 +6531,11 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         buy_idea_comparison_fig,
         buy_projection_fig,
         buy_ideas_df,
+        rebalance_plan_html,
+        rebalance_traits_fig,
+        rebalance_sectors_fig,
+        rebalance_traits_df,
+        rebalance_holdings_df,
         gr.update(choices=buy_preference_sector_choices, value=(base_preferences.sector_preferences if base_preferences is not None else [])),
         gr.update(value=(base_preferences.budget_to_deploy if base_preferences is not None else None)),
         gr.update(value=reinvest_choice),
@@ -6658,6 +6902,22 @@ def build_app() -> gr.Blocks:
                             interactive=False,
                             wrap=True,
                         )
+                    with gr.Tab("Portfolio Rebalancing Plan", id="portfolio-rebalancing-plan"):
+                        rebalance_plan_md = gr.HTML()
+                        with gr.Row(equal_height=False):
+                            rebalance_traits_plot = gr.Plot(label="Before vs After Portfolio Traits")
+                            rebalance_sectors_plot = gr.Plot(label="Before vs After Sector Mix")
+                        with gr.Row(equal_height=False):
+                            rebalance_traits_df = gr.Dataframe(
+                                label="Before vs After Trait Review",
+                                interactive=False,
+                                wrap=True,
+                            )
+                            rebalance_holdings_df = gr.Dataframe(
+                                label="Holding Changes In The Plan",
+                                interactive=False,
+                                wrap=True,
+                            )
                     with gr.Tab("Risk Guide", id="risk-guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
@@ -6703,6 +6963,11 @@ def build_app() -> gr.Blocks:
                 buy_idea_comparison_plot,
                 buy_projection_plot,
                 buy_ideas_df,
+                rebalance_plan_md,
+                rebalance_traits_plot,
+                rebalance_sectors_plot,
+                rebalance_traits_df,
+                rebalance_holdings_df,
                 buy_sector_preferences,
                 buy_budget_to_deploy,
                 buy_reinvest_choice,
@@ -6764,6 +7029,11 @@ def build_app() -> gr.Blocks:
                 buy_idea_comparison_plot,
                 buy_projection_plot,
                 buy_ideas_df,
+                rebalance_plan_md,
+                rebalance_traits_plot,
+                rebalance_sectors_plot,
+                rebalance_traits_df,
+                rebalance_holdings_df,
             ],
         )
 

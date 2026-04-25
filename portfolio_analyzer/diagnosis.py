@@ -385,6 +385,77 @@ class PortfolioActionImpact(BaseModel):
     impact_bullets: list[str] = Field(default_factory=list)
 
 
+class PortfolioTraitSnapshot(BaseModel):
+    """Before/after portfolio traits used in the rebalance-plan comparison view."""
+
+    label: str
+    invested_value: float = 0.0
+    cash_value: float = 0.0
+    total_account_value: float = 0.0
+    invested_share_of_account: float = 0.0
+    cash_share_of_account: float = 0.0
+    largest_position_pct_of_invested: float = 0.0
+    top5_weight_pct_of_invested: float = 0.0
+    effective_holdings: float = 0.0
+    top_sector: str = ""
+    top_sector_weight_pct_of_invested: float = 0.0
+
+
+class RebalanceHoldingChange(BaseModel):
+    """One holding-level change inside the portfolio rebalance plan."""
+
+    ticker: str
+    security_name: str
+    sector: str = ""
+    action_label: str
+    before_value: float = 0.0
+    after_value: float = 0.0
+    value_change: float = 0.0
+    before_weight_pct_of_invested: float = 0.0
+    after_weight_pct_of_invested: float = 0.0
+    weight_change_pct_points: float = 0.0
+    explanation: str = ""
+
+
+class RebalanceSectorChange(BaseModel):
+    """Sector-level before/after comparison for the rebalance plan."""
+
+    sector: str
+    before_value: float = 0.0
+    after_value: float = 0.0
+    before_weight_pct_of_invested: float = 0.0
+    after_weight_pct_of_invested: float = 0.0
+    weight_change_pct_points: float = 0.0
+
+
+class PortfolioRebalancePlan(BaseModel):
+    """Integrated before/after plan combining current sells and proposed adds.
+
+    This object is the first time the project answers the full portfolio-level
+    question:
+
+    - what does the portfolio look like today?
+    - what does it look like if we follow the current sell ideas and buy ideas?
+
+    The plan is still deterministic and explanation-first. It does not try to
+    be a perfect optimizer yet; it creates a reviewable proposal that ties
+    together the action layer and the buy layer in one place.
+    """
+
+    summary: str = ""
+    plan_assumptions: list[str] = Field(default_factory=list)
+    improvement_bullets: list[str] = Field(default_factory=list)
+    before_snapshot: Optional["PortfolioTraitSnapshot"] = None
+    after_snapshot: Optional["PortfolioTraitSnapshot"] = None
+    total_value_to_sell: float = 0.0
+    total_value_to_buy: float = 0.0
+    projected_cash_after_plan: float = 0.0
+    sell_tickers: list[str] = Field(default_factory=list)
+    buy_tickers: list[str] = Field(default_factory=list)
+    holding_changes: list["RebalanceHoldingChange"] = Field(default_factory=list)
+    sector_changes: list["RebalanceSectorChange"] = Field(default_factory=list)
+
+
 class PortfolioGap(BaseModel):
     """A portfolio-level gap that should be understood before suggesting buys.
 
@@ -543,6 +614,7 @@ class PortfolioRiskDiagnosis(BaseModel):
     holding_action_needs: list[HoldingActionNeed] = Field(default_factory=list)
     holding_action_recommendations: list[HoldingActionRecommendation] = Field(default_factory=list)
     portfolio_action_impact: Optional[PortfolioActionImpact] = None
+    portfolio_rebalance_plan: Optional[PortfolioRebalancePlan] = None
     portfolio_gaps: list[PortfolioGap] = Field(default_factory=list)
     portfolio_preferences: Optional[PortfolioPreferences] = None
     current_holdings: list[CurrentHoldingSnapshot] = Field(default_factory=list)
@@ -562,6 +634,10 @@ HoldingRiskContribution.model_rebuild()
 HoldingActionNeed.model_rebuild()
 HoldingActionRecommendation.model_rebuild()
 PortfolioActionImpact.model_rebuild()
+PortfolioTraitSnapshot.model_rebuild()
+RebalanceHoldingChange.model_rebuild()
+RebalanceSectorChange.model_rebuild()
+PortfolioRebalancePlan.model_rebuild()
 PortfolioGap.model_rebuild()
 PortfolioPreferences.model_rebuild()
 ReplacementCandidate.model_rebuild()
@@ -2449,6 +2525,295 @@ def _build_portfolio_action_impact(
     )
 
 
+def _effective_holdings_from_values(position_values: list[float]) -> float:
+    """Estimate effective holdings from positive position values."""
+    positives = [float(value) for value in position_values if float(value or 0.0) > 0]
+    total = sum(positives)
+    if total <= 0:
+        return 0.0
+    weights = [value / total for value in positives]
+    denominator = sum(weight * weight for weight in weights)
+    if denominator <= 0:
+        return 0.0
+    return round(1.0 / denominator, 1)
+
+
+def _sector_mix_from_position_map(position_map: dict[str, dict[str, Any]]) -> dict[str, float]:
+    """Aggregate position values by sector from a holding-value map."""
+    sector_totals: dict[str, float] = {}
+    for item in position_map.values():
+        sector = str(item.get("sector") or "Unclassified").strip() or "Unclassified"
+        sector_totals[sector] = sector_totals.get(sector, 0.0) + float(item.get("value") or 0.0)
+    return sector_totals
+
+
+def _build_trait_snapshot(
+    *,
+    label: str,
+    position_map: dict[str, dict[str, Any]],
+    cash_value: float,
+    total_account_value: float,
+) -> PortfolioTraitSnapshot:
+    """Build one before/after portfolio trait snapshot from holding values."""
+    invested_value = round(sum(float(item.get("value") or 0.0) for item in position_map.values()), 2)
+    total_account_value = round(max(total_account_value, invested_value + max(0.0, cash_value)), 2)
+    positions = sorted(
+        [float(item.get("value") or 0.0) for item in position_map.values() if float(item.get("value") or 0.0) > 0],
+        reverse=True,
+    )
+    largest_pct = (positions[0] / invested_value) if positions and invested_value > 0 else 0.0
+    top5_pct = (sum(positions[:5]) / invested_value) if invested_value > 0 else 0.0
+    sector_mix = _sector_mix_from_position_map(position_map)
+    top_sector = ""
+    top_sector_weight = 0.0
+    if sector_mix and invested_value > 0:
+        top_sector, top_sector_value = max(sector_mix.items(), key=lambda item: item[1])
+        top_sector_weight = top_sector_value / invested_value
+    return PortfolioTraitSnapshot(
+        label=label,
+        invested_value=invested_value,
+        cash_value=round(max(0.0, cash_value), 2),
+        total_account_value=total_account_value,
+        invested_share_of_account=round((invested_value / total_account_value) if total_account_value > 0 else 0.0, 4),
+        cash_share_of_account=round((max(0.0, cash_value) / total_account_value) if total_account_value > 0 else 0.0, 4),
+        largest_position_pct_of_invested=round(largest_pct, 4),
+        top5_weight_pct_of_invested=round(top5_pct, 4),
+        effective_holdings=_effective_holdings_from_values(positions),
+        top_sector=top_sector,
+        top_sector_weight_pct_of_invested=round(top_sector_weight, 4),
+    )
+
+
+def _build_portfolio_rebalance_plan(
+    *,
+    current_holdings: list[CurrentHoldingSnapshot],
+    portfolio_preferences: Optional[PortfolioPreferences],
+    holding_action_recommendations: list[HoldingActionRecommendation],
+    replacement_candidates: list[ReplacementCandidate],
+) -> PortfolioRebalancePlan:
+    """Build the first integrated before/after rebalance-plan object.
+
+    The plan assumes the current sell recommendations are followed and the
+    current ranked buy ideas are funded according to their suggested starting
+    slices. This creates a reviewable proposal that lets the user compare:
+
+    - current portfolio shape
+    - projected portfolio shape after the current plan
+    """
+    if portfolio_preferences is None:
+        return PortfolioRebalancePlan(
+            summary="A rebalance plan could not be built because the portfolio preference object is missing.",
+            plan_assumptions=["Run the portfolio analysis first so the buy-side constraints can be inferred."],
+        )
+
+    total_account_value = float(
+        portfolio_preferences.current_total_portfolio_value
+        or (portfolio_preferences.current_invested_value + portfolio_preferences.available_cash_now)
+        or 0.0
+    )
+    current_cash = float(portfolio_preferences.available_cash_now or 0.0)
+
+    before_positions: dict[str, dict[str, Any]] = {}
+    for holding in current_holdings:
+        before_positions[holding.ticker] = {
+            "ticker": holding.ticker,
+            "name": holding.security_name,
+            "sector": holding.sector or "Unclassified",
+            "value": float(holding.current_value or 0.0),
+        }
+
+    after_positions = {ticker: dict(item) for ticker, item in before_positions.items()}
+    action_map = {item.ticker: item for item in holding_action_recommendations if item.is_actionable}
+    buy_total = 0.0
+
+    for ticker, recommendation in action_map.items():
+        current_value = float(after_positions.get(ticker, {}).get("value", recommendation.current_value or 0.0))
+        reduction_value = float(recommendation.value_to_sell or (current_value * float(recommendation.position_reduction_pct or 0.0)))
+        if ticker not in after_positions:
+            after_positions[ticker] = {
+                "ticker": ticker,
+                "name": ticker,
+                "sector": recommendation.sector or "Unclassified",
+                "value": max(0.0, current_value - reduction_value),
+            }
+        else:
+            after_positions[ticker]["value"] = max(0.0, current_value - reduction_value)
+
+    for candidate in replacement_candidates:
+        allocation = float(candidate.suggested_allocation_amount or 0.0)
+        if allocation <= 0:
+            continue
+        buy_total += allocation
+        entry = after_positions.setdefault(
+            candidate.ticker,
+            {
+                "ticker": candidate.ticker,
+                "name": candidate.security_name,
+                "sector": candidate.sector or "Unclassified",
+                "value": 0.0,
+            },
+        )
+        entry["name"] = candidate.security_name
+        entry["sector"] = candidate.sector or entry.get("sector") or "Unclassified"
+        entry["value"] = float(entry.get("value") or 0.0) + allocation
+
+    before_snapshot = _build_trait_snapshot(
+        label="Before plan",
+        position_map=before_positions,
+        cash_value=current_cash,
+        total_account_value=total_account_value,
+    )
+    projected_cash = max(0.0, current_cash + float(sum(item.value_to_sell or 0.0 for item in action_map.values())) - buy_total)
+    after_snapshot = _build_trait_snapshot(
+        label="After plan",
+        position_map=after_positions,
+        cash_value=projected_cash,
+        total_account_value=total_account_value,
+    )
+
+    invested_before = before_snapshot.invested_value or 1.0
+    invested_after = after_snapshot.invested_value or 1.0
+    candidate_map = {item.ticker: item for item in replacement_candidates}
+
+    holding_changes: list[RebalanceHoldingChange] = []
+    for ticker in sorted(set(before_positions) | set(after_positions)):
+        before_item = before_positions.get(ticker, {})
+        after_item = after_positions.get(ticker, {})
+        before_value = float(before_item.get("value") or 0.0)
+        after_value = float(after_item.get("value") or 0.0)
+        if abs(after_value - before_value) < 1e-6:
+            continue
+        recommendation = action_map.get(ticker)
+        candidate = candidate_map.get(ticker)
+        if before_value > 0 and after_value <= 0:
+            action_label = "Exit"
+        elif before_value > 0 and after_value < before_value and candidate is not None:
+            action_label = "Trim then add back"
+        elif before_value > 0 and after_value < before_value:
+            action_label = recommendation.recommendation_label if recommendation is not None else "Trim"
+        elif before_value <= 0 and after_value > 0:
+            action_label = "New buy"
+        else:
+            action_label = "Add more"
+        explanation = (
+            recommendation.recommendation_summary
+            if recommendation is not None
+            else candidate.why_it_fits
+            if candidate is not None
+            else "Projected holding change in the current rebalance plan."
+        )
+        holding_changes.append(
+            RebalanceHoldingChange(
+                ticker=ticker,
+                security_name=str(after_item.get("name") or before_item.get("name") or ticker),
+                sector=str(after_item.get("sector") or before_item.get("sector") or "Unclassified"),
+                action_label=action_label,
+                before_value=round(before_value, 2),
+                after_value=round(after_value, 2),
+                value_change=round(after_value - before_value, 2),
+                before_weight_pct_of_invested=round(before_value / invested_before, 4) if invested_before > 0 else 0.0,
+                after_weight_pct_of_invested=round(after_value / invested_after, 4) if invested_after > 0 else 0.0,
+                weight_change_pct_points=round(((after_value / invested_after) - (before_value / invested_before)) if invested_before > 0 and invested_after > 0 else 0.0, 4),
+                explanation=explanation,
+            )
+        )
+    holding_changes.sort(key=lambda item: abs(item.value_change), reverse=True)
+
+    before_sector_mix = _sector_mix_from_position_map(before_positions)
+    after_sector_mix = _sector_mix_from_position_map(after_positions)
+    sector_changes: list[RebalanceSectorChange] = []
+    for sector in sorted(set(before_sector_mix) | set(after_sector_mix)):
+        before_value = float(before_sector_mix.get(sector, 0.0))
+        after_value = float(after_sector_mix.get(sector, 0.0))
+        sector_changes.append(
+            RebalanceSectorChange(
+                sector=sector,
+                before_value=round(before_value, 2),
+                after_value=round(after_value, 2),
+                before_weight_pct_of_invested=round(before_value / invested_before, 4) if invested_before > 0 else 0.0,
+                after_weight_pct_of_invested=round(after_value / invested_after, 4) if invested_after > 0 else 0.0,
+                weight_change_pct_points=round(((after_value / invested_after) - (before_value / invested_before)) if invested_before > 0 and invested_after > 0 else 0.0, 4),
+            )
+        )
+    sector_changes.sort(key=lambda item: abs(item.weight_change_pct_points), reverse=True)
+
+    improvement_bullets: list[str] = []
+    if after_snapshot.cash_share_of_account < before_snapshot.cash_share_of_account:
+        improvement_bullets.append(
+            f"More of the account gets put to work: invested share rises from about {before_snapshot.invested_share_of_account:.1%} to about {after_snapshot.invested_share_of_account:.1%}."
+        )
+    if after_snapshot.largest_position_pct_of_invested < before_snapshot.largest_position_pct_of_invested:
+        improvement_bullets.append(
+            f"The largest holding falls from about {before_snapshot.largest_position_pct_of_invested:.1%} of invested assets to about {after_snapshot.largest_position_pct_of_invested:.1%}."
+        )
+    if after_snapshot.top5_weight_pct_of_invested < before_snapshot.top5_weight_pct_of_invested:
+        improvement_bullets.append(
+            f"Top-5 concentration improves from about {before_snapshot.top5_weight_pct_of_invested:.1%} to about {after_snapshot.top5_weight_pct_of_invested:.1%}."
+        )
+    if after_snapshot.effective_holdings > before_snapshot.effective_holdings:
+        improvement_bullets.append(
+            f"Effective holdings rise from about {before_snapshot.effective_holdings:.1f} to about {after_snapshot.effective_holdings:.1f}, which points to broader diversification."
+        )
+    if (
+        after_snapshot.top_sector
+        and before_snapshot.top_sector
+        and after_snapshot.top_sector == before_snapshot.top_sector
+        and after_snapshot.top_sector_weight_pct_of_invested < before_snapshot.top_sector_weight_pct_of_invested
+    ):
+        improvement_bullets.append(
+            f"The most crowded sector ({before_snapshot.top_sector}) gets lighter, falling from about {before_snapshot.top_sector_weight_pct_of_invested:.1%} to about {after_snapshot.top_sector_weight_pct_of_invested:.1%} of invested assets."
+        )
+    if not improvement_bullets:
+        improvement_bullets.append(
+            "The main change is a rotation of capital rather than a dramatic reshaping of the portfolio."
+        )
+
+    sell_tickers = [item.ticker for item in holding_action_recommendations if item.is_actionable]
+    buy_tickers = [item.ticker for item in replacement_candidates if (item.suggested_allocation_amount or 0.0) > 0]
+    assumptions = [
+        "This plan assumes the current sell recommendations are followed as shown in Risk Actions.",
+        "It also assumes the current Buy Ideas budget slices are funded as suggested.",
+        "The comparison is a portfolio-shape preview, not a price forecast.",
+    ]
+    summary = (
+        f"This rebalance plan trims or exits {len(sell_tickers)} holding(s) and funds {len(buy_tickers)} buy idea(s). "
+        f"It moves about ${sum(item.value_to_sell or 0.0 for item in action_map.values()):,.2f} out of current holdings and about ${buy_total:,.2f} into the proposed adds, so you can compare the portfolio before vs after in one view."
+    )
+
+    return PortfolioRebalancePlan(
+        summary=summary,
+        plan_assumptions=assumptions,
+        improvement_bullets=improvement_bullets,
+        before_snapshot=before_snapshot,
+        after_snapshot=after_snapshot,
+        total_value_to_sell=round(sum(item.value_to_sell or 0.0 for item in action_map.values()), 2),
+        total_value_to_buy=round(buy_total, 2),
+        projected_cash_after_plan=round(projected_cash, 2),
+        sell_tickers=sell_tickers,
+        buy_tickers=buy_tickers,
+        holding_changes=holding_changes[:15],
+        sector_changes=sector_changes[:12],
+    )
+
+
+def portfolio_rebalance_plan_from_user_preferences(
+    *,
+    diagnosis: PortfolioRiskDiagnosis,
+    preferences: PortfolioPreferences,
+) -> PortfolioRebalancePlan:
+    """Rebuild the rebalance plan after the user changes buy preferences."""
+    candidates = replacement_candidates_from_user_preferences(
+        diagnosis=diagnosis,
+        preferences=preferences,
+    )
+    return _build_portfolio_rebalance_plan(
+        current_holdings=diagnosis.current_holdings,
+        portfolio_preferences=preferences,
+        holding_action_recommendations=diagnosis.holding_action_recommendations,
+        replacement_candidates=candidates,
+    )
+
+
 def _suggested_max_new_position_pct(stated_risk_score: float) -> float:
     """Infer a simple default cap for new adds from stated risk tolerance.
 
@@ -3997,6 +4362,12 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         holding_action_recommendations=holding_action_recommendations,
         current_holdings=current_holdings,
     )
+    portfolio_rebalance_plan = _build_portfolio_rebalance_plan(
+        current_holdings=current_holdings,
+        portfolio_preferences=portfolio_preferences,
+        holding_action_recommendations=holding_action_recommendations,
+        replacement_candidates=replacement_candidates,
+    )
 
     return PortfolioRiskDiagnosis(
         run_id=str(manifest.get("run_id")),
@@ -4019,6 +4390,7 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         holding_action_needs=holding_action_needs,
         holding_action_recommendations=holding_action_recommendations,
         portfolio_action_impact=portfolio_action_impact,
+        portfolio_rebalance_plan=portfolio_rebalance_plan,
         portfolio_gaps=portfolio_gaps,
         portfolio_preferences=portfolio_preferences,
         current_holdings=current_holdings,
