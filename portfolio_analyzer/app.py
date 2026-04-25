@@ -94,7 +94,7 @@ RECENT_RISK_CHART_DAYS = round(365.25 * 1.5)
 RISK_CHART_START_DATE = "2024-01-01"
 WEEKLY_FLOW_DOMINANCE_LIMIT = 0.25
 MAX_STABLE_WEEKLY_RETURN = 0.75
-FEATURED_BUY_IDEA_COUNT = 4
+MAX_FEATURED_BUY_IDEA_COUNT = 20
 
 
 def _ensure_cache_dir(path: Path) -> None:
@@ -4472,7 +4472,12 @@ def build_buy_ideas_html(
         )
 
     ordered_candidates = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))
-    featured_candidates = ordered_candidates[:FEATURED_BUY_IDEA_COUNT]
+    detailed_count = min(
+        len(ordered_candidates),
+        int(preferences.buy_idea_limit or MAX_FEATURED_BUY_IDEA_COUNT),
+        MAX_FEATURED_BUY_IDEA_COUNT,
+    )
+    featured_candidates = ordered_candidates[:detailed_count]
     top_candidate = ordered_candidates[0]
     top_reference = _candidate_reference_readout(top_candidate)
     summary_chips = "".join(
@@ -4498,8 +4503,8 @@ def build_buy_ideas_html(
                 "border:1px solid rgba(148,163,184,.14);min-width:180px'>"
                 "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Detailed ideas shown</div>"
                 f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:4px'>{len(featured_candidates)}</div>"
-                f"<div style='font-size:12px;color:#cbd5e1;margin-top:4px'>Full ranked list below: {len(ordered_candidates)}</div>"
-                "</div>"
+        f"<div style='font-size:12px;color:#cbd5e1;margin-top:4px'>Full ranked list below: {len(ordered_candidates)}</div>"
+        "</div>"
             ),
             (
                 "<div style='padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.72);"
@@ -4512,8 +4517,8 @@ def build_buy_ideas_html(
         ]
     )
     detail_note = (
-        f"<div style='font-size:12px;color:#cbd5e1;margin-top:12px'>Showing detailed cards for the top {len(featured_candidates)} ideas so the page stays readable.</div>"
-        if len(ordered_candidates) > len(featured_candidates)
+        f"<div style='font-size:12px;color:#cbd5e1;margin-top:12px'>Showing full detail for the top {len(featured_candidates)} selected ideas. The ranked table below still includes the broader list for quick scanning.</div>"
+        if featured_candidates
         else ""
     )
 
@@ -4524,7 +4529,7 @@ def build_buy_ideas_html(
         "<div style='display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap'>"
         "<div>"
         "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Ideas</div>"
-        "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>Top ranked ideas are shown in detail here. The full ranked universe stays in the table below for faster review.</div>"
+        "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>Each selected buy idea is shown with its own full explanation and 5-year chart right beside it.</div>"
         "</div>"
         f"<div style='display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end'>{summary_chips}</div>"
         "</div>"
@@ -4825,7 +4830,7 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
             font={"size": 15, "color": "#e2e8f0"},
         )
         fig.update_layout(
-            height=320,
+            height=520,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
             template="plotly_dark",
             paper_bgcolor="rgba(0,0,0,0)",
@@ -4847,7 +4852,7 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
             font={"size": 12, "color": "#e2e8f0"},
         )
         fig.update_layout(
-            height=320,
+            height=520,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
             template="plotly_dark",
             paper_bgcolor="rgba(0,0,0,0)",
@@ -4883,8 +4888,8 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
 
     fig.update_layout(
         title=f"{candidate.ticker} vs S&P 500 over the last 5 years",
-        height=320,
-        margin={"l": 40, "r": 24, "t": 64, "b": 36},
+        height=520,
+        margin={"l": 54, "r": 26, "t": 68, "b": 44},
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,24,39,0.55)",
@@ -4903,7 +4908,7 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
 def build_buy_idea_feature_slots(
     diagnosis: PortfolioRiskDiagnosis,
     candidates: list[ReplacementCandidate],
-    limit: int = FEATURED_BUY_IDEA_COUNT,
+    limit: int = MAX_FEATURED_BUY_IDEA_COUNT,
 ) -> list[Any]:
     """Build fixed featured buy-idea rows in Gradio output order.
 
@@ -4916,13 +4921,25 @@ def build_buy_idea_feature_slots(
     plain string where a `gr.Plot` is expected.
     """
     ordered = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))
-    featured = ordered[:limit]
+    selected_limit = min(len(ordered), limit)
+    featured = ordered[:selected_limit]
     card_outputs: list[Any] = []
     plot_outputs: list[Any] = []
     for idx in range(limit):
         candidate = featured[idx] if idx < len(featured) else None
-        card_outputs.append(build_buy_idea_card_html(diagnosis, candidate, idx + 1))
-        plot_outputs.append(plot_buy_idea_chart(candidate))
+        is_visible = candidate is not None
+        card_outputs.append(
+            gr.update(
+                value=build_buy_idea_card_html(diagnosis, candidate, idx + 1) if is_visible else "",
+                visible=is_visible,
+            )
+        )
+        plot_outputs.append(
+            gr.update(
+                value=plot_buy_idea_chart(candidate) if is_visible else go.Figure(),
+                visible=is_visible,
+            )
+        )
     return [*card_outputs, *plot_outputs]
 
 
@@ -5028,7 +5045,11 @@ def build_user_portfolio_preferences(
         }
     )
     candidate_payload = [item.model_dump(mode="json") for item in candidates]
-    featured_buy_outputs = build_buy_idea_feature_slots(diagnosis, candidates)
+    featured_buy_outputs = build_buy_idea_feature_slots(
+        diagnosis,
+        candidates,
+        limit=min(int(preferences.buy_idea_limit or MAX_FEATURED_BUY_IDEA_COUNT), MAX_FEATURED_BUY_IDEA_COUNT),
+    )
     return (
         build_buy_preferences_html(preferences),
         build_portfolio_preferences_frame(preferences),
@@ -6680,7 +6701,11 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         diagnosis.portfolio_preferences,
         diagnosis.replacement_candidates,
     )
-    featured_buy_outputs = build_buy_idea_feature_slots(diagnosis, diagnosis.replacement_candidates)
+    featured_buy_outputs = build_buy_idea_feature_slots(
+        diagnosis,
+        diagnosis.replacement_candidates,
+        limit=min(int(buy_idea_limit or MAX_FEATURED_BUY_IDEA_COUNT), MAX_FEATURED_BUY_IDEA_COUNT),
+    )
     buy_ideas_df = build_buy_ideas_frame(diagnosis.replacement_candidates)
     buy_candidates_payload = [item.model_dump(mode="json") for item in diagnosis.replacement_candidates]
     rebalance_plan_html = build_rebalance_plan_html(diagnosis)
@@ -7120,13 +7145,16 @@ def build_app() -> gr.Blocks:
                         buy_ideas_md = gr.HTML()
                         featured_buy_idea_cards: list[gr.HTML] = []
                         featured_buy_idea_plots: list[gr.Plot] = []
-                        for idx in range(FEATURED_BUY_IDEA_COUNT):
+                        for idx in range(MAX_FEATURED_BUY_IDEA_COUNT):
                             with gr.Row(equal_height=False):
-                                with gr.Column(scale=7, min_width=420):
-                                    featured_buy_idea_cards.append(gr.HTML())
-                                with gr.Column(scale=5, min_width=420):
+                                with gr.Column(scale=6, min_width=520):
+                                    featured_buy_idea_cards.append(gr.HTML(visible=False))
+                                with gr.Column(scale=6, min_width=520):
                                     featured_buy_idea_plots.append(
-                                        gr.Plot(label=f"Featured Buy Idea #{idx + 1}: 5Y vs S&P 500")
+                                        gr.Plot(
+                                            label=f"Featured Buy Idea #{idx + 1}: 5Y vs S&P 500",
+                                            visible=False,
+                                        )
                                     )
                         buy_ideas_df = gr.Dataframe(
                             label="Full Ranked Buy Candidate Review",
