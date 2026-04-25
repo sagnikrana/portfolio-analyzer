@@ -2566,15 +2566,6 @@ def build_rebalance_plan_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             "</div>"
         )
 
-    before = plan.before_snapshot
-    after = plan.after_snapshot
-    cards = (
-        metric_card("Before invested", money_text(before.invested_value), f"Cash {money_text(before.cash_value)}")
-        + metric_card("After invested", money_text(after.invested_value), f"Cash {money_text(after.cash_value)}")
-        + metric_card("Largest position", f"{before.largest_position_pct_of_invested:.1%} -> {after.largest_position_pct_of_invested:.1%}", "Share of invested sleeve")
-        + metric_card("Top 5 concentration", f"{before.top5_weight_pct_of_invested:.1%} -> {after.top5_weight_pct_of_invested:.1%}", "Share of invested sleeve")
-        + metric_card("Effective holdings", f"{before.effective_holdings:.1f} -> {after.effective_holdings:.1f}", "Broader diversification is usually better")
-    )
     bullets = "".join(
         f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
         for item in plan.improvement_bullets[:5]
@@ -2589,7 +2580,6 @@ def build_rebalance_plan_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Portfolio Rebalancing Plan</div>"
         f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>{render_bold_markers(plan.summary)}</div>"
-        f"<div class='metric-strip' style='margin-top:14px'>{cards}</div>"
         "</div>"
         "<div style='display:grid;grid-template-columns:minmax(280px,1fr) minmax(280px,1fr);gap:16px'>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
@@ -2677,7 +2667,6 @@ def plot_rebalance_sectors(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
             font={"size": 15, "color": "#e2e8f0"},
         )
         fig.update_layout(
-            title="Before vs After Sector Mix",
             height=360,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
             template="plotly_dark",
@@ -2737,7 +2726,6 @@ def plot_rebalance_sectors(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
         )
     )
     fig.update_layout(
-        title="Before vs After Sector Mix",
         height=560,
         margin={"l": 40, "r": 24, "t": 56, "b": 56},
         template="plotly_dark",
@@ -4376,48 +4364,60 @@ def build_buy_ideas_html(
         )
 
     ordered_candidates = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))
+    featured_candidates = ordered_candidates[:4]
     top_candidate = ordered_candidates[0]
     top_reference = _candidate_reference_readout(top_candidate)
-    cards = (
-        metric_card(
-            "Top fit",
-            top_candidate.ticker,
-            f"{top_reference.get('full_name') or top_candidate.security_name} · {top_candidate.linked_gap_label}",
-        )
-        + metric_card("Current budget", money_text(preferences.budget_to_deploy), "Active buy preference object")
-        + metric_card("Ideas shown", str(len(ordered_candidates)), "Ranked by fit and varied by portfolio job")
-        + metric_card(
-            "Vehicle mix",
-            "ETFs only"
-            if preferences.allow_etfs and not preferences.allow_single_stocks
-            else "Single stocks only"
-            if preferences.allow_single_stocks and not preferences.allow_etfs
-            else "Blend / preference",
-            preferences.vehicle_preference_label,
-        )
-        + metric_card(
-            "Max new position",
-            percent_display(preferences.suggested_max_new_position_pct),
-            "% of total portfolio",
-        )
+    summary_chips = "".join(
+        [
+            (
+                "<div style='padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.72);"
+                "border:1px solid rgba(148,163,184,.14);min-width:180px'>"
+                "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Top fit</div>"
+                f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:4px'>{top_candidate.ticker}</div>"
+                f"<div style='font-size:12px;color:#cbd5e1;margin-top:4px'>{top_reference.get('full_name') or top_candidate.security_name}</div>"
+                "</div>"
+            ),
+            (
+                "<div style='padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.72);"
+                "border:1px solid rgba(148,163,184,.14);min-width:180px'>"
+                "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Current budget</div>"
+                f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:4px'>{money_text(preferences.budget_to_deploy)}</div>"
+                "<div style='font-size:12px;color:#cbd5e1;margin-top:4px'>Active buy preference object</div>"
+                "</div>"
+            ),
+            (
+                "<div style='padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.72);"
+                "border:1px solid rgba(148,163,184,.14);min-width:180px'>"
+                "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Detailed ideas shown</div>"
+                f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:4px'>{len(featured_candidates)}</div>"
+                f"<div style='font-size:12px;color:#cbd5e1;margin-top:4px'>Full ranked list below: {len(ordered_candidates)}</div>"
+                "</div>"
+            ),
+            (
+                "<div style='padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.72);"
+                "border:1px solid rgba(148,163,184,.14);min-width:180px'>"
+                "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Max new position</div>"
+                f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:4px'>{percent_display(preferences.suggested_max_new_position_pct)}</div>"
+                "<div style='font-size:12px;color:#cbd5e1;margin-top:4px'>Share of total portfolio</div>"
+                "</div>"
+            ),
+        ]
     )
-
     candidate_cards = ""
-    for rank, candidate in enumerate(ordered_candidates, start=1):
+    for rank, candidate in enumerate(featured_candidates, start=1):
         reference = _candidate_reference_readout(candidate)
         external_signals = _candidate_external_signals(diagnosis, candidate, limit=2)
+        evidence_items = candidate.evidence_summary[:2]
+        if external_signals:
+            evidence_items.extend(external_signals[:1])
         evidence_html = "".join(
             f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
-            for item in candidate.evidence_summary[:4]
+            for item in evidence_items
         ) or "<li>No extra evidence was attached yet.</li>"
         improvement_html = "".join(
             f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
-            for item in candidate.what_it_improves[:3]
+            for item in candidate.what_it_improves[:2]
         ) or "<li>No improvement notes were attached yet.</li>"
-        signal_html = "".join(
-            f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
-            for item in external_signals
-        ) or "<li>No recent external signal was attached yet.</li>"
         existing_holding_badge = (
             "<div style='padding:8px 12px;border-radius:999px;background:rgba(34,197,94,.14);border:1px solid rgba(34,197,94,.22);color:#bbf7d0;font-size:12px;font-weight:700'>Already in portfolio</div>"
             if candidate.is_existing_holding
@@ -4448,16 +4448,25 @@ def build_buy_ideas_html(
             performance_badges += (
                 f"<div style='padding:8px 12px;border-radius:999px;background:rgba(168,85,247,.14);border:1px solid rgba(168,85,247,.18);color:#ddd6fe;font-size:12px;font-weight:700'>P/E { _pe_text(reference.get('trailing_pe')) }</div>"
             )
+        signal_row = ""
+        if external_signals:
+            signal_row = (
+                "<div style='margin-top:10px;padding:12px 14px;border-radius:14px;background:rgba(30,41,59,.34);"
+                "border:1px solid rgba(148,163,184,.10)'>"
+                "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Recent external signals</div>"
+                f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_bold_markers(external_signals[0])}</div>"
+                "</div>"
+            )
         candidate_cards += (
-            "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
+            "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
             "background:rgba(15,23,42,.34);margin-bottom:14px'>"
             "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
             "<div>"
             "<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
             f"<div style='padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.16);border:1px solid rgba(59,130,246,.22);color:#bfdbfe;font-size:12px;font-weight:800'>#{rank}</div>"
-            f"<div style='font-size:22px;font-weight:800;color:#f8fafc'>{candidate.ticker}</div>"
-            f"<div style='font-size:18px;font-weight:600;color:#e2e8f0'>{reference.get('full_name') or candidate.security_name}</div>"
-            f"<div style='font-size:15px;font-weight:500;color:#cbd5e1'>({candidate.asset_type} · {candidate.sector})</div>"
+            f"<div style='font-size:21px;font-weight:800;color:#f8fafc'>{candidate.ticker}</div>"
+            f"<div style='font-size:16px;font-weight:600;color:#e2e8f0'>{reference.get('full_name') or candidate.security_name}</div>"
+            f"<div style='font-size:14px;font-weight:500;color:#cbd5e1'>({candidate.asset_type} · {candidate.sector})</div>"
             f"{allocation_line}"
             "</div>"
             f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Role: <strong style='color:#f8fafc'>{candidate.primary_role}</strong> · Confidence: <strong style='color:#f8fafc'>{candidate.confidence_band}</strong> · Source: <strong style='color:#f8fafc'>{candidate.universe_source or 'Known universe mix'}</strong></div>"
@@ -4469,32 +4478,40 @@ def build_buy_ideas_html(
             f"{performance_badges}"
             "</div>"
             "</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:14px'>{render_bold_markers(candidate.why_it_fits)}</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:10px'>{render_bold_markers(candidate.preference_fit_summary)}</div>"
-            "<div style='display:grid;grid-template-columns:minmax(240px,1fr) minmax(240px,1fr) minmax(240px,1fr);gap:16px;margin-top:16px'>"
+            f"<div style='font-size:14px;line-height:1.55;color:#e2e8f0;margin-top:12px'>{render_bold_markers(candidate.why_it_fits)}</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:8px'>{render_bold_markers(candidate.preference_fit_summary)}</div>"
+            "<div style='display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);gap:14px;margin-top:14px'>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What this could improve</div>"
             f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{improvement_html}</ul>"
             "</div>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Evidence used</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Why it made the list</div>"
             f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence_html}</ul>"
             "</div>"
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Recent external signals</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{signal_html}</ul>"
             "</div>"
-            "</div>"
+            f"{signal_row}"
             "</div>"
         )
 
+    detail_note = (
+        f"<div style='font-size:12px;color:#cbd5e1;margin-top:12px'>Showing detailed cards for the top {len(featured_candidates)} ideas so the page stays readable.</div>"
+        if len(ordered_candidates) > len(featured_candidates)
+        else ""
+    )
+
     return (
         "<div style='display:flex;flex-direction:column;gap:16px'>"
-        "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap'>"
+        "<div>"
         "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Ideas</div>"
-        "<div style='font-size:15px;color:#93c5fd;margin-top:8px'>This is the first explanation-first buy layer: not \"what should I buy?\" in the abstract, but \"what kind of add would actually help after the current trims?\"</div>"
-        f"<div class='metric-strip' style='margin-top:14px'>{cards}</div>"
+        "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>Top ranked ideas are shown in detail here. The full ranked universe stays in the table below for faster review.</div>"
+        "</div>"
+        f"<div style='display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end'>{summary_chips}</div>"
+        "</div>"
+        f"{detail_note}"
         "</div>"
         f"{candidate_cards}"
         "</div>"
@@ -4673,7 +4690,7 @@ def fetch_buy_idea_long_horizon_series(
     return result
 
 
-def plot_buy_idea_panels(candidates: list[ReplacementCandidate], limit: int = 5) -> go.Figure:
+def plot_buy_idea_panels(candidates: list[ReplacementCandidate], limit: int = 4) -> go.Figure:
     """Render stacked 5Y vs S&P panels for the top ranked buy ideas."""
     fig = go.Figure()
     if not candidates:
@@ -4687,7 +4704,6 @@ def plot_buy_idea_panels(candidates: list[ReplacementCandidate], limit: int = 5)
             font={"size": 15, "color": "#e2e8f0"},
         )
         fig.update_layout(
-            title="Top Buy Ideas Over The Last 5 Years",
             height=380,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
             template="plotly_dark",
@@ -4753,8 +4769,7 @@ def plot_buy_idea_panels(candidates: list[ReplacementCandidate], limit: int = 5)
         showlegend = False
 
     fig.update_layout(
-        title="Top Buy Ideas Over The Last 5 Years",
-        height=max(420, 220 * len(ranked)),
+        height=max(420, 210 * len(ranked)),
         margin={"l": 40, "r": 24, "t": 64, "b": 36},
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -6954,12 +6969,12 @@ def build_app() -> gr.Blocks:
                                 )
                     with gr.Tab("Buy Ideas", id="buy-ideas"):
                         with gr.Row(equal_height=False):
-                            with gr.Column(scale=6, min_width=360):
-                                buy_ideas_md = gr.HTML()
                             with gr.Column(scale=7, min_width=420):
-                                buy_ideas_plot = gr.Plot(label="Top Buy Ideas Over The Last 5 Years")
+                                buy_ideas_md = gr.HTML()
+                            with gr.Column(scale=5, min_width=420):
+                                buy_ideas_plot = gr.Plot(label="Top Ranked Ideas: 5Y vs S&P 500")
                         buy_ideas_df = gr.Dataframe(
-                            label="Replacement Candidate Review",
+                            label="Full Ranked Buy Candidate Review",
                             interactive=False,
                             wrap=True,
                         )
