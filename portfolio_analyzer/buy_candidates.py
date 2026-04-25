@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from io import StringIO
 from pathlib import Path
 from typing import Any, Iterable
@@ -410,6 +411,87 @@ class BuyCandidateUniverseEntry(BaseModel):
     notes: str = ""
     universe_source: str = ""
     source_count: int = 0
+
+
+def _normalize_ratio(value: Any) -> float | None:
+    """Convert raw finance ratios into decimal form when possible."""
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(numeric):
+        return None
+    if numeric > 1:
+        return numeric / 100.0
+    return numeric
+
+
+@lru_cache(maxsize=1024)
+def fetch_candidate_market_metadata(market_data_symbol: str) -> dict[str, Any]:
+    """Fetch lightweight market metadata for one candidate ticker.
+
+    This helper is intentionally cached because the app may repeatedly render
+    the same top ideas while the user tweaks preferences. The data is
+    supplemental, not part of the core offline universe build.
+    """
+    ticker = yf.Ticker(str(market_data_symbol))
+    try:
+        info = ticker.info or {}
+    except Exception:
+        info = {}
+
+    expense_ratio = (
+        _normalize_ratio(info.get("netExpenseRatio"))
+        or _normalize_ratio(info.get("annualReportExpenseRatio"))
+        or _normalize_ratio(info.get("expenseRatio"))
+    )
+    dividend_yield = _normalize_ratio(info.get("yield")) or _normalize_ratio(info.get("dividendYield"))
+    trailing_pe = info.get("trailingPE")
+    forward_pe = info.get("forwardPE")
+    try:
+        trailing_pe = float(trailing_pe) if trailing_pe is not None else None
+    except (TypeError, ValueError):
+        trailing_pe = None
+    try:
+        forward_pe = float(forward_pe) if forward_pe is not None else None
+    except (TypeError, ValueError):
+        forward_pe = None
+
+    return {
+        "full_name": str(info.get("longName") or info.get("shortName") or "").strip(),
+        "expense_ratio": expense_ratio,
+        "dividend_yield": dividend_yield,
+        "trailing_pe": trailing_pe,
+        "forward_pe": forward_pe,
+    }
+
+
+@lru_cache(maxsize=1024)
+def fetch_candidate_news_signals(market_data_symbol: str, limit: int = 2) -> list[str]:
+    """Fetch a few recent human-readable market/news signals for one candidate."""
+    ticker = yf.Ticker(str(market_data_symbol))
+    try:
+        items = ticker.news or []
+    except Exception:
+        return []
+
+    signals: list[str] = []
+    for item in items[: max(1, int(limit))]:
+        content = item.get("content") or {}
+        title = str(content.get("title") or "").strip()
+        summary = str(content.get("summary") or content.get("description") or "").strip()
+        provider = ((content.get("provider") or {}) or {}).get("displayName")
+        if not title:
+            continue
+        signal = title
+        if provider:
+            signal += f" ({provider})"
+        if summary:
+            signal += f" — {summary[:160].strip()}"
+        signals.append(signal)
+    return signals
 
 
 def _normalize_display_ticker(symbol: Any) -> str:

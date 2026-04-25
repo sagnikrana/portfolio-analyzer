@@ -9,9 +9,17 @@ import pandas as pd
 from pydantic import BaseModel, Field
 
 try:
-    from portfolio_analyzer.buy_candidates import BuyCandidateUniverseEntry, load_buy_candidate_universe
+    from portfolio_analyzer.buy_candidates import (
+        BuyCandidateUniverseEntry,
+        fetch_candidate_market_metadata,
+        load_buy_candidate_universe,
+    )
 except ModuleNotFoundError:
-    from buy_candidates import BuyCandidateUniverseEntry, load_buy_candidate_universe
+    from buy_candidates import (
+        BuyCandidateUniverseEntry,
+        fetch_candidate_market_metadata,
+        load_buy_candidate_universe,
+    )
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -417,6 +425,8 @@ class PortfolioPreferences(BaseModel):
 
     available_cash_now: float = 0.0
     available_cash_if_actions_followed: float = 0.0
+    current_invested_value: float = 0.0
+    current_total_portfolio_value: float = 0.0
     budget_to_deploy: Optional[float] = None
     reinvest_freed_cash: Optional[bool] = None
     reinvestment_preference_label: str = ""
@@ -428,7 +438,9 @@ class PortfolioPreferences(BaseModel):
     allow_single_stocks: bool = True
     single_stocks_preferred: Optional[bool] = None
     prefer_high_dividend_etfs: bool = False
+    prefer_low_expense_for_dividend_etfs: bool = False
     buy_idea_limit: int = 10
+    include_existing_holdings: bool = False
     vehicle_preference_label: str = ""
     sector_preferences: list[str] = Field(default_factory=list)
     inferred_sector_avoidances: list[str] = Field(default_factory=list)
@@ -477,6 +489,24 @@ class ReplacementCandidate(BaseModel):
     beta: Optional[float] = None
     confidence_score: float = 0.0
     confidence_band: str = "Low"
+    stock_5y_return_pct: Optional[float] = None
+    expense_ratio: Optional[float] = None
+    dividend_yield: Optional[float] = None
+    trailing_pe: Optional[float] = None
+    is_existing_holding: bool = False
+    external_signal_summary: list[str] = Field(default_factory=list)
+
+
+class CurrentHoldingSnapshot(BaseModel):
+    """Minimal current-holding record used for reinvestment-aware buy ideas."""
+
+    ticker: str
+    security_name: str
+    sector: Optional[str] = None
+    current_weight: Optional[float] = None
+    current_value: Optional[float] = None
+    excess_return_vs_benchmark: Optional[float] = None
+    weighted_avg_buy_date: Optional[str] = None
 
 
 class PortfolioRiskDiagnosis(BaseModel):
@@ -515,6 +545,7 @@ class PortfolioRiskDiagnosis(BaseModel):
     portfolio_action_impact: Optional[PortfolioActionImpact] = None
     portfolio_gaps: list[PortfolioGap] = Field(default_factory=list)
     portfolio_preferences: Optional[PortfolioPreferences] = None
+    current_holdings: list[CurrentHoldingSnapshot] = Field(default_factory=list)
     replacement_candidates: list[ReplacementCandidate] = Field(default_factory=list)
     supporting_metrics: list[RiskMetricObservation] = Field(default_factory=list)
     macro_context: Optional[MacroRegimeSnapshot] = None
@@ -534,6 +565,7 @@ PortfolioActionImpact.model_rebuild()
 PortfolioGap.model_rebuild()
 PortfolioPreferences.model_rebuild()
 ReplacementCandidate.model_rebuild()
+CurrentHoldingSnapshot.model_rebuild()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -2503,6 +2535,8 @@ def _build_portfolio_preferences(
     return PortfolioPreferences(
         available_cash_now=round(available_cash_now, 2),
         available_cash_if_actions_followed=round(available_cash_now + action_cash, 2),
+        current_invested_value=round(_safe_float(headline.get("current_portfolio_value")) or 0.0, 2),
+        current_total_portfolio_value=round(_safe_float(headline.get("total_account_value_estimate")) or 0.0, 2),
         budget_to_deploy=round(available_cash_now + action_cash, 2),
         reinvest_freed_cash=None,
         reinvestment_preference_label="Not set yet — decide whether freed cash should be reinvested or partly left in cash.",
@@ -2514,7 +2548,9 @@ def _build_portfolio_preferences(
         allow_single_stocks=True,
         single_stocks_preferred=None,
         prefer_high_dividend_etfs=False,
+        prefer_low_expense_for_dividend_etfs=False,
         buy_idea_limit=10,
+        include_existing_holdings=False,
         vehicle_preference_label=vehicle_preference_label,
         sector_preferences=[],
         inferred_sector_avoidances=inferred_sector_avoidances,
@@ -2537,7 +2573,9 @@ def portfolio_preferences_from_user_inputs(
     allow_single_stocks: bool,
     vehicle_preference: str,
     prefer_high_dividend_etfs: bool,
+    prefer_low_expense_for_dividend_etfs: bool,
     buy_idea_limit: Optional[int],
+    include_existing_holdings: bool,
 ) -> PortfolioPreferences:
     """Create a user-defined `PortfolioPreferences` object from dashboard inputs.
 
@@ -2579,7 +2617,13 @@ def portfolio_preferences_from_user_inputs(
         reinvest_freed_cash = None
         reinvestment_preference_label = "Reinvestment is still undecided."
 
-    if vehicle_preference == "Prefer ETFs":
+    if vehicle_preference == "ETFs only":
+        single_stocks_preferred = False
+        vehicle_preference_label = "Only ETFs should be considered for future adds."
+    elif vehicle_preference == "Single stocks only":
+        single_stocks_preferred = True
+        vehicle_preference_label = "Only single stocks should be considered for future adds."
+    elif vehicle_preference == "Prefer ETFs":
         single_stocks_preferred = False
         vehicle_preference_label = "Prefer ETFs for future adds."
     elif vehicle_preference == "Prefer single stocks":
@@ -2610,6 +2654,14 @@ def portfolio_preferences_from_user_inputs(
         assumption_notes.append(
             "High-dividend ETFs will get a boost when they still fit the portfolio gap and performance filters."
         )
+    if prefer_low_expense_for_dividend_etfs:
+        assumption_notes.append(
+            "Among dividend ETFs, lower expense ratios get extra priority when possible."
+        )
+    if include_existing_holdings:
+        assumption_notes.append(
+            "Existing holdings are allowed back into the buy universe for reinvestment ideas."
+        )
 
     constraints_summary = (
         f"The buy side should currently work with about ${resolved_budget:,.2f}, a stated risk tolerance of {resolved_risk_score:.0f}/100 ({resolved_risk_band}), "
@@ -2620,6 +2672,8 @@ def portfolio_preferences_from_user_inputs(
     return PortfolioPreferences(
         available_cash_now=base_preferences.available_cash_now,
         available_cash_if_actions_followed=base_preferences.available_cash_if_actions_followed,
+        current_invested_value=base_preferences.current_invested_value,
+        current_total_portfolio_value=base_preferences.current_total_portfolio_value,
         budget_to_deploy=round(float(resolved_budget), 2),
         reinvest_freed_cash=reinvest_freed_cash,
         reinvestment_preference_label=reinvestment_preference_label,
@@ -2631,7 +2685,9 @@ def portfolio_preferences_from_user_inputs(
         allow_single_stocks=allow_single_stocks,
         single_stocks_preferred=single_stocks_preferred,
         prefer_high_dividend_etfs=prefer_high_dividend_etfs,
+        prefer_low_expense_for_dividend_etfs=prefer_low_expense_for_dividend_etfs,
         buy_idea_limit=resolved_buy_idea_limit,
+        include_existing_holdings=include_existing_holdings,
         vehicle_preference_label=vehicle_preference_label,
         sector_preferences=cleaned_sector_preferences,
         inferred_sector_avoidances=base_preferences.inferred_sector_avoidances,
@@ -2956,6 +3012,39 @@ def _candidate_passes_buy_filters(
     return True, notes
 
 
+def _build_current_holdings(bundle: dict[str, Any]) -> list[CurrentHoldingSnapshot]:
+    """Build a compact list of current holdings for reinvestment-aware buy ideas."""
+    positions = bundle["open_positions"].copy()
+    profiles = bundle["company_profiles"].copy()
+    if positions.empty:
+        return []
+
+    profile_lookup: dict[str, str] = {}
+    if not profiles.empty and "symbol" in profiles.columns:
+        profile_lookup = {
+            str(row.get("symbol")): str(row.get("companyName") or row.get("company_name") or row.get("symbol") or "").strip()
+            for row in profiles.to_dict(orient="records")
+        }
+
+    snapshots: list[CurrentHoldingSnapshot] = []
+    for row in positions.to_dict(orient="records"):
+        ticker = str(row.get("ticker") or "").strip()
+        if not ticker:
+            continue
+        snapshots.append(
+            CurrentHoldingSnapshot(
+                ticker=ticker,
+                security_name=profile_lookup.get(ticker) or ticker,
+                sector=row.get("sector"),
+                current_weight=_safe_float(row.get("current_weight")),
+                current_value=_safe_float(row.get("current_value")),
+                excess_return_vs_benchmark=_safe_float(row.get("excess_return_vs_benchmark")),
+                weighted_avg_buy_date=str(row.get("weighted_avg_buy_date") or "").strip() or None,
+            )
+        )
+    return snapshots
+
+
 def _gap_score_for_candidate(
     candidate: BuyCandidateUniverseEntry,
     gap: PortfolioGap,
@@ -3152,9 +3241,28 @@ def _preference_penalty_or_bonus(
             delta += 8.0
             notes.append("it matches the current ETF preference")
         if preferences.prefer_high_dividend_etfs:
+            metadata = fetch_candidate_market_metadata(candidate.market_data_symbol)
+            expense_ratio = _safe_float(candidate_row.get("expense_ratio"))
+            if expense_ratio is None:
+                expense_ratio = _safe_float(metadata.get("expense_ratio"))
+            dividend_yield = _safe_float(candidate_row.get("dividend_yield"))
+            if dividend_yield is None:
+                dividend_yield = _safe_float(metadata.get("dividend_yield"))
             if candidate.is_income or "dividend" in candidate.primary_role.lower() or candidate.style_tilt.lower() == "income":
                 delta += 12.0
                 notes.append("it lines up with the current high-dividend ETF preference")
+                if dividend_yield is not None and dividend_yield >= 0.025:
+                    delta += min(8.0, dividend_yield * 120.0)
+                if preferences.prefer_low_expense_for_dividend_etfs and expense_ratio is not None:
+                    if expense_ratio <= 0.0006:
+                        delta += 12.0
+                        notes.append("its expense ratio is extremely low for a dividend ETF")
+                    elif expense_ratio <= 0.0015:
+                        delta += 6.0
+                        notes.append("its expense ratio is still relatively low")
+                    else:
+                        delta -= 4.0
+                        notes.append("its expense ratio is higher than the low-cost dividend preference")
                 rel_1y = _safe_float(candidate_row.get("relative_1y_return_pct"))
                 rel_3y = _safe_float(candidate_row.get("relative_3y_return_pct"))
                 if rel_1y is not None and rel_1y > -0.08:
@@ -3208,6 +3316,7 @@ def _build_replacement_candidates(
     portfolio_gaps: list[PortfolioGap],
     portfolio_preferences: Optional[PortfolioPreferences],
     holding_action_recommendations: list[HoldingActionRecommendation],
+    current_holdings: Optional[list[CurrentHoldingSnapshot]] = None,
 ) -> list[ReplacementCandidate]:
     """Build the first explanation-first set of buy ideas.
 
@@ -3232,6 +3341,9 @@ def _build_replacement_candidates(
         for item in holding_action_recommendations
         if item.is_actionable
     }
+    current_holding_map = {
+        item.ticker: item for item in (current_holdings or [])
+    }
     gaps_to_score = portfolio_gaps[:3]
     enriched_records = {
         str(row.get("ticker")): row for row in enriched.to_dict(orient="records")
@@ -3242,6 +3354,8 @@ def _build_replacement_candidates(
         if not entry.eligible_for_buy_engine:
             continue
         if entry.ticker in actionable_tickers:
+            continue
+        if not portfolio_preferences.include_existing_holdings and entry.ticker in current_holding_map:
             continue
         row = enriched_records.get(entry.ticker, {})
         preference_adjustment, preference_notes = _preference_penalty_or_bonus(
@@ -3382,8 +3496,13 @@ def _build_replacement_candidates(
                 relative_1y_return_pct=_safe_float(row.get("relative_1y_return_pct")),
                 relative_3y_return_pct=_safe_float(row.get("relative_3y_return_pct")),
                 relative_5y_return_pct=_safe_float(row.get("relative_5y_return_pct")),
+                stock_5y_return_pct=_safe_float(row.get("stock_5y_return_pct")),
                 annualized_volatility_1y=_safe_float(row.get("annualized_volatility_1y")),
                 beta=_safe_float(row.get("beta")),
+                expense_ratio=_safe_float(row.get("expense_ratio")) or _safe_float(fetch_candidate_market_metadata(entry.market_data_symbol).get("expense_ratio")),
+                dividend_yield=_safe_float(row.get("dividend_yield")) or _safe_float(fetch_candidate_market_metadata(entry.market_data_symbol).get("dividend_yield")),
+                trailing_pe=_safe_float(row.get("trailing_pe")) or _safe_float(fetch_candidate_market_metadata(entry.market_data_symbol).get("trailing_pe")),
+                is_existing_holding=entry.ticker in current_holding_map,
                 confidence_score=confidence_score,
                 confidence_band=confidence_band,
             )
@@ -3407,6 +3526,7 @@ def replacement_candidates_from_user_preferences(
         portfolio_gaps=diagnosis.portfolio_gaps,
         portfolio_preferences=preferences,
         holding_action_recommendations=diagnosis.holding_action_recommendations,
+        current_holdings=diagnosis.current_holdings,
     )
 
 
@@ -3864,6 +3984,7 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         portfolio_action_impact,
         top_sector_drivers,
     )
+    current_holdings = _build_current_holdings(bundle)
     portfolio_gaps = _build_portfolio_gaps(
         bundle,
         top_concerns,
@@ -3874,6 +3995,7 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         portfolio_gaps=portfolio_gaps,
         portfolio_preferences=portfolio_preferences,
         holding_action_recommendations=holding_action_recommendations,
+        current_holdings=current_holdings,
     )
 
     return PortfolioRiskDiagnosis(
@@ -3899,6 +4021,7 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
         portfolio_action_impact=portfolio_action_impact,
         portfolio_gaps=portfolio_gaps,
         portfolio_preferences=portfolio_preferences,
+        current_holdings=current_holdings,
         replacement_candidates=replacement_candidates,
         supporting_metrics=supporting_metrics,
         macro_context=macro_context,
