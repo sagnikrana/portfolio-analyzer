@@ -4864,6 +4864,19 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
 
     frame = pd.DataFrame(series)
     frame["date"] = pd.to_datetime(frame["date"])
+    y_min = float(
+        min(
+            pd.to_numeric(frame["candidate_index"], errors="coerce").min(),
+            pd.to_numeric(frame["benchmark_index"], errors="coerce").min(),
+        )
+    )
+    y_max = float(
+        max(
+            pd.to_numeric(frame["candidate_index"], errors="coerce").max(),
+            pd.to_numeric(frame["benchmark_index"], errors="coerce").max(),
+        )
+    )
+    y_padding = max((y_max - y_min) * 0.12, 8.0)
     fig.add_trace(
         go.Scatter(
             x=frame["date"],
@@ -4900,6 +4913,7 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
     fig.update_yaxes(
         title_text="Growth of $100 invested",
         gridcolor="rgba(148,163,184,0.14)",
+        range=[max(0.0, y_min - y_padding), y_max + y_padding],
     )
     fig.update_xaxes(gridcolor="rgba(148,163,184,0.14)")
     return fig
