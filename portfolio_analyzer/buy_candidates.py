@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from functools import lru_cache
 from io import StringIO
 from pathlib import Path
+import time
 from typing import Any, Iterable
 
 import pandas as pd
@@ -16,6 +19,10 @@ REPO_ROOT = APP_DIR.parent
 DATA_DIR = REPO_ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"
 STRUCTURED_DIR = DATA_DIR / "processed" / "structured"
+INTERIM_DIR = DATA_DIR / "interim"
+CACHE_DIR = INTERIM_DIR / "buy_candidate_cache"
+MARKET_METADATA_CACHE_DIR = CACHE_DIR / "market_metadata"
+NEWS_CACHE_DIR = CACHE_DIR / "news"
 
 BUY_CANDIDATE_UNIVERSE_PATH = RAW_DIR / "buy_candidate_universe.csv"
 SP500_CONSTITUENTS_PATH = STRUCTURED_DIR / "sp500_constituents.csv"
@@ -428,6 +435,40 @@ def _normalize_ratio(value: Any) -> float | None:
     return numeric
 
 
+def _ensure_cache_dir(path: Path) -> None:
+    """Create cache directories on demand."""
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _cache_key(*parts: Any) -> str:
+    """Build a stable disk-cache key."""
+    payload = json.dumps(parts, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _cache_is_fresh(path: Path, ttl_seconds: int) -> bool:
+    """Return whether a disk cache file is still fresh enough to reuse."""
+    if not path.exists():
+        return False
+    return (time.time() - path.stat().st_mtime) <= ttl_seconds
+
+
+def _load_json_cache(path: Path, ttl_seconds: int) -> Any | None:
+    """Read a JSON cache file if it exists and is still fresh."""
+    if not _cache_is_fresh(path, ttl_seconds):
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _write_json_cache(path: Path, payload: Any) -> None:
+    """Persist a JSON cache file for reuse across app runs."""
+    _ensure_cache_dir(path.parent)
+    path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+
+
 @lru_cache(maxsize=1024)
 def fetch_candidate_market_metadata(market_data_symbol: str) -> dict[str, Any]:
     """Fetch lightweight market metadata for one candidate ticker.
@@ -436,6 +477,10 @@ def fetch_candidate_market_metadata(market_data_symbol: str) -> dict[str, Any]:
     the same top ideas while the user tweaks preferences. The data is
     supplemental, not part of the core offline universe build.
     """
+    cache_path = MARKET_METADATA_CACHE_DIR / f"{_cache_key('market_metadata', market_data_symbol)}.json"
+    cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 24)
+    if isinstance(cached, dict):
+        return cached
     ticker = yf.Ticker(str(market_data_symbol))
     try:
         info = ticker.info or {}
@@ -459,18 +504,24 @@ def fetch_candidate_market_metadata(market_data_symbol: str) -> dict[str, Any]:
     except (TypeError, ValueError):
         forward_pe = None
 
-    return {
+    payload = {
         "full_name": str(info.get("longName") or info.get("shortName") or "").strip(),
         "expense_ratio": expense_ratio,
         "dividend_yield": dividend_yield,
         "trailing_pe": trailing_pe,
         "forward_pe": forward_pe,
     }
+    _write_json_cache(cache_path, payload)
+    return payload
 
 
 @lru_cache(maxsize=1024)
 def fetch_candidate_news_signals(market_data_symbol: str, limit: int = 2) -> list[str]:
     """Fetch a few recent human-readable market/news signals for one candidate."""
+    cache_path = NEWS_CACHE_DIR / f"{_cache_key('news', market_data_symbol)}.json"
+    cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 6)
+    if isinstance(cached, list):
+        return [str(item) for item in cached[: max(1, int(limit))]]
     ticker = yf.Ticker(str(market_data_symbol))
     try:
         items = ticker.news or []
@@ -491,6 +542,7 @@ def fetch_candidate_news_signals(market_data_symbol: str, limit: int = 2) -> lis
         if summary:
             signal += f" — {summary[:160].strip()}"
         signals.append(signal)
+    _write_json_cache(cache_path, signals)
     return signals
 
 

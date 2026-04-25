@@ -7,6 +7,8 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+import hashlib
+import pickle
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
@@ -68,6 +70,10 @@ STRUCTURED_DIR = PROCESSED_DIR / "structured"
 INTERIM_DIR = DATA_DIR / "interim"
 DIAGNOSIS_DIR = PROCESSED_DIR / "diagnosis"
 DIAGNOSIS_RUNS_DIR = INTERIM_DIR / "diagnosis_runs"
+APP_CACHE_DIR = INTERIM_DIR / "app_cache"
+MARKET_CACHE_DIR = APP_CACHE_DIR / "market_data"
+SECTOR_CACHE_DIR = APP_CACHE_DIR / "sector_labels"
+BUY_SERIES_CACHE_DIR = APP_CACHE_DIR / "buy_series"
 BUY_CANDIDATE_UNIVERSE_PATH = RAW_DIR / "buy_candidate_universe.csv"
 BUY_CANDIDATE_UNIVERSE_ENRICHED_PATH = STRUCTURED_DIR / "buy_candidate_universe_enriched.csv"
 DEFAULT_MODEL_NAME = "gemma:2b"
@@ -86,6 +92,59 @@ RECENT_RISK_CHART_DAYS = round(365.25 * 1.5)
 RISK_CHART_START_DATE = "2024-01-01"
 WEEKLY_FLOW_DOMINANCE_LIMIT = 0.25
 MAX_STABLE_WEEKLY_RETURN = 0.75
+
+
+def _ensure_cache_dir(path: Path) -> None:
+    """Create a cache directory lazily when a cacheable path is used."""
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _cache_key(*parts: Any) -> str:
+    """Build a stable hash key for disk-backed caches."""
+    payload = json.dumps(parts, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _cache_is_fresh(path: Path, ttl_seconds: int) -> bool:
+    """Return whether an on-disk cache file is still fresh enough to reuse."""
+    if not path.exists():
+        return False
+    age_seconds = time.time() - path.stat().st_mtime
+    return age_seconds <= ttl_seconds
+
+
+def _load_pickle_cache(path: Path, ttl_seconds: int) -> Any | None:
+    """Read a cached pickle payload when it exists and is still fresh."""
+    if not _cache_is_fresh(path, ttl_seconds):
+        return None
+    try:
+        with path.open("rb") as handle:
+            return pickle.load(handle)
+    except Exception:
+        return None
+
+
+def _write_pickle_cache(path: Path, payload: Any) -> None:
+    """Persist a pickle payload to disk for reuse across app runs."""
+    _ensure_cache_dir(path.parent)
+    with path.open("wb") as handle:
+        pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def _load_json_cache(path: Path, ttl_seconds: int) -> Any | None:
+    """Read a cached JSON payload when it exists and is still fresh."""
+    if not _cache_is_fresh(path, ttl_seconds):
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _write_json_cache(path: Path, payload: Any) -> None:
+    """Persist a JSON payload to disk for reuse across app runs."""
+    _ensure_cache_dir(path.parent)
+    path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
 
 
 @dataclass
@@ -608,16 +667,24 @@ def normalize_ticker_for_yahoo(symbol: str) -> str:
 
 @lru_cache(maxsize=512)
 def fetch_yahoo_sector_label(yahoo_symbol: str) -> str:
+    cache_path = SECTOR_CACHE_DIR / f"{_cache_key('sector', yahoo_symbol)}.json"
+    cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 24 * 14)
+    if isinstance(cached, dict) and cached.get("sector"):
+        return str(cached["sector"])
     try:
         info = yf.Ticker(yahoo_symbol).info or {}
     except Exception:
         return "Unclassified"
     sector = info.get("sectorDisp") or info.get("sector")
     if sector:
-        return str(sector)
+        sector_text = str(sector)
+        _write_json_cache(cache_path, {"sector": sector_text})
+        return sector_text
     quote_type = str(info.get("quoteType") or "").upper()
     if quote_type in {"ETF", "MUTUALFUND", "INDEX", "FUND"}:
+        _write_json_cache(cache_path, {"sector": "ETF / Fund"})
         return "ETF / Fund"
+    _write_json_cache(cache_path, {"sector": "Unclassified"})
     return "Unclassified"
 
 
@@ -627,6 +694,11 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
     yahoo_tickers = [yahoo_map[symbol] for symbol in tickers]
     history_start = (pd.Timestamp(start_date) - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
     long_horizon_start = (pd.Timestamp.today().normalize() - pd.DateOffset(years=5) - pd.Timedelta(days=15)).strftime("%Y-%m-%d")
+    cache_key = _cache_key("market_data", tickers, benchmark_symbol, history_start, long_horizon_start)
+    cache_path = MARKET_CACHE_DIR / f"{cache_key}.pkl"
+    cached_payload = _load_pickle_cache(cache_path, ttl_seconds=60 * 60 * 12)
+    if isinstance(cached_payload, dict):
+        return cached_payload
 
     if yahoo_tickers:
         ticker_history_raw = yf.download(
@@ -680,7 +752,7 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
     latest_benchmark_price = float(benchmark_close.iloc[-1]) if not benchmark_close.empty else None
     sector_by_ticker = {symbol: fetch_yahoo_sector_label(yahoo_symbol) for symbol, yahoo_symbol in yahoo_map.items()}
 
-    return {
+    result = {
         "ticker_close": ticker_close,
         "latest_prices": latest_prices,
         "benchmark_close": benchmark_close,
@@ -689,6 +761,8 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
         "latest_benchmark_price": latest_benchmark_price,
         "sector_by_ticker": sector_by_ticker,
     }
+    _write_pickle_cache(cache_path, result)
+    return result
 
 
 def next_market_date(index: pd.Index, dt: Any) -> pd.Timestamp:
@@ -4537,6 +4611,10 @@ def fetch_buy_idea_long_horizon_series(
     """
     yahoo_symbol = normalize_ticker_for_yahoo(ticker)
     start = (pd.Timestamp.today().normalize() - pd.DateOffset(years=5) - pd.Timedelta(days=15)).strftime("%Y-%m-%d")
+    cache_path = BUY_SERIES_CACHE_DIR / f"{_cache_key('buy_idea_series', yahoo_symbol, benchmark_symbol, start)}.json"
+    cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 24)
+    if isinstance(cached, list):
+        return cached
     downloaded = yf.download(
         tickers=[yahoo_symbol, benchmark_symbol],
         start=start,
@@ -4565,7 +4643,7 @@ def fetch_buy_idea_long_horizon_series(
     frame["candidate_index"] = (frame["candidate"] / base_candidate) * 100.0
     frame["benchmark_index"] = (frame["benchmark"] / base_benchmark) * 100.0
     frame.index = pd.to_datetime(frame.index)
-    return [
+    result = [
         {
             "date": idx.strftime("%Y-%m-%d"),
             "candidate_index": round(float(row["candidate_index"]), 4),
@@ -4573,6 +4651,8 @@ def fetch_buy_idea_long_horizon_series(
         }
         for idx, row in frame.iterrows()
     ]
+    _write_json_cache(cache_path, result)
+    return result
 
 
 def plot_buy_idea_vs_benchmark(
