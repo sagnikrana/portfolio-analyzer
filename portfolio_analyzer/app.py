@@ -2692,11 +2692,53 @@ def plot_rebalance_sectors(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
     labels = [item.sector for item in rows]
     before_values = [item.before_weight_pct_of_invested * 100 for item in rows]
     after_values = [item.after_weight_pct_of_invested * 100 for item in rows]
-    fig.add_trace(go.Bar(name="Before", x=labels, y=before_values, marker={"color": "#60a5fa"}))
-    fig.add_trace(go.Bar(name="After", x=labels, y=after_values, marker={"color": "#34d399"}))
+    custom = [
+        [
+            money_text(item.before_value),
+            money_text(item.after_value),
+            percent_display(item.before_weight_pct_of_invested),
+            percent_display(item.after_weight_pct_of_invested),
+            percent_display(item.weight_change_pct_points),
+        ]
+        for item in rows
+    ]
+    fig.add_trace(
+        go.Bar(
+            name="Before",
+            x=labels,
+            y=before_values,
+            marker={"color": "#60a5fa"},
+            customdata=custom,
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "Before invested weight: %{customdata[2]}<br>"
+                "Before value: %{customdata[0]}<br>"
+                "After invested weight: %{customdata[3]}<br>"
+                "After value: %{customdata[1]}<br>"
+                "Change: %{customdata[4]}<extra></extra>"
+            ),
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            name="After",
+            x=labels,
+            y=after_values,
+            marker={"color": "#34d399"},
+            customdata=custom,
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "After invested weight: %{customdata[3]}<br>"
+                "After value: %{customdata[1]}<br>"
+                "Before invested weight: %{customdata[2]}<br>"
+                "Before value: %{customdata[0]}<br>"
+                "Change: %{customdata[4]}<extra></extra>"
+            ),
+        )
+    )
     fig.update_layout(
         title="Before vs After Sector Mix",
-        height=420,
+        height=560,
         margin={"l": 40, "r": 24, "t": 56, "b": 56},
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -2709,25 +2751,6 @@ def plot_rebalance_sectors(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
     fig.update_xaxes(tickangle=-18)
     fig.update_yaxes(title_text="% of invested sleeve", gridcolor="rgba(148,163,184,0.16)")
     return fig
-
-
-def build_rebalance_traits_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
-    """Build a compact before/after rebalance trait table."""
-    plan = diagnosis.portfolio_rebalance_plan
-    if plan is None or plan.before_snapshot is None or plan.after_snapshot is None:
-        return pd.DataFrame(columns=["Trait", "Before", "After", "Change"])
-    before = plan.before_snapshot
-    after = plan.after_snapshot
-    rows = [
-        ("Invested value", money_text(before.invested_value), money_text(after.invested_value), money_text(after.invested_value - before.invested_value)),
-        ("Cash value", money_text(before.cash_value), money_text(after.cash_value), money_text(after.cash_value - before.cash_value)),
-        ("Invested share of account", percent_display(before.invested_share_of_account), percent_display(after.invested_share_of_account), percent_display(after.invested_share_of_account - before.invested_share_of_account)),
-        ("Largest position", percent_display(before.largest_position_pct_of_invested), percent_display(after.largest_position_pct_of_invested), percent_display(after.largest_position_pct_of_invested - before.largest_position_pct_of_invested)),
-        ("Top 5 concentration", percent_display(before.top5_weight_pct_of_invested), percent_display(after.top5_weight_pct_of_invested), percent_display(after.top5_weight_pct_of_invested - before.top5_weight_pct_of_invested)),
-        ("Effective holdings", f"{before.effective_holdings:.1f}", f"{after.effective_holdings:.1f}", f"{after.effective_holdings - before.effective_holdings:+.1f}"),
-        ("Top sector", f"{before.top_sector or 'N/A'} ({before.top_sector_weight_pct_of_invested:.1%})", f"{after.top_sector or 'N/A'} ({after.top_sector_weight_pct_of_invested:.1%})", ""),
-    ]
-    return pd.DataFrame(rows, columns=["Trait", "Before", "After", "Change"])
 
 
 def build_rebalance_holdings_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
@@ -4593,11 +4616,6 @@ def plot_buy_ideas(candidates: list[ReplacementCandidate]) -> go.Figure:
     return fig
 
 
-def build_buy_idea_ticker_choices(candidates: list[ReplacementCandidate]) -> list[str]:
-    """Return ticker choices for the buy-idea 5Y comparison selector."""
-    return [item.ticker for item in sorted(candidates, key=lambda candidate: (-candidate.fit_score, candidate.ticker))]
-
-
 @lru_cache(maxsize=256)
 def fetch_buy_idea_long_horizon_series(
     ticker: str,
@@ -4655,16 +4673,12 @@ def fetch_buy_idea_long_horizon_series(
     return result
 
 
-def plot_buy_idea_vs_benchmark(
-    selected_ticker: str,
-    candidates_payload: list[dict[str, Any]] | None,
-) -> go.Figure:
-    """Render a 5Y indexed performance chart for the selected buy idea."""
+def plot_buy_idea_panels(candidates: list[ReplacementCandidate], limit: int = 5) -> go.Figure:
+    """Render stacked 5Y vs S&P panels for the top ranked buy ideas."""
     fig = go.Figure()
-    candidates_payload = candidates_payload or []
-    if not candidates_payload:
+    if not candidates:
         fig.add_annotation(
-            text="No buy ideas are available to compare yet.",
+            text="No buy ideas are available to chart yet.",
             x=0.5,
             y=0.5,
             xref="paper",
@@ -4673,7 +4687,7 @@ def plot_buy_idea_vs_benchmark(
             font={"size": 15, "color": "#e2e8f0"},
         )
         fig.update_layout(
-            title="5Y Performance vs S&P 500",
+            title="Top Buy Ideas Over The Last 5 Years",
             height=380,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
             template="plotly_dark",
@@ -4684,67 +4698,79 @@ def plot_buy_idea_vs_benchmark(
         )
         return fig
 
-    candidate_map = {str(item.get("ticker")): item for item in candidates_payload}
-    chosen_ticker = selected_ticker if selected_ticker in candidate_map else next(iter(candidate_map))
-    series = fetch_buy_idea_long_horizon_series(chosen_ticker)
-    if not series:
-        fig.add_annotation(
-            text=f"No 5Y market history was available for {chosen_ticker}.",
-            x=0.5,
-            y=0.5,
-            xref="paper",
-            yref="paper",
-            showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+    ranked = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))[: max(1, min(limit, len(candidates)))]
+    subplot_titles = [f"{item.ticker} vs S&P 500" for item in ranked]
+    fig = make_subplots(
+        rows=len(ranked),
+        cols=1,
+        shared_xaxes=False,
+        vertical_spacing=0.06,
+        subplot_titles=subplot_titles,
+    )
+    showlegend = True
+    for idx, candidate in enumerate(ranked, start=1):
+        series = fetch_buy_idea_long_horizon_series(candidate.ticker)
+        if not series:
+            fig.add_annotation(
+                text=f"No 5Y history for {candidate.ticker}",
+                x=0.5,
+                y=1 - ((idx - 0.5) / len(ranked)),
+                xref="paper",
+                yref="paper",
+                showarrow=False,
+                font={"size": 12, "color": "#e2e8f0"},
+            )
+            continue
+        frame = pd.DataFrame(series)
+        frame["date"] = pd.to_datetime(frame["date"])
+        fig.add_trace(
+            go.Scatter(
+                x=frame["date"],
+                y=frame["candidate_index"],
+                mode="lines",
+                name=candidate.ticker,
+                line={"color": "#38bdf8", "width": 2.5},
+                hovertemplate="<b>%{x|%b %d, %Y}</b><br>" + f"{candidate.ticker}: " + "%{y:.1f}<extra></extra>",
+                showlegend=showlegend,
+            ),
+            row=idx,
+            col=1,
         )
-        fig.update_layout(
-            title=f"{chosen_ticker} vs S&P 500 over the last 5 years",
-            height=380,
-            margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
-            xaxis={"visible": False},
-            yaxis={"visible": False},
+        fig.add_trace(
+            go.Scatter(
+                x=frame["date"],
+                y=frame["benchmark_index"],
+                mode="lines",
+                name="S&P 500",
+                line={"color": "#f59e0b", "width": 1.8, "dash": "dash"},
+                hovertemplate="<b>%{x|%b %d, %Y}</b><br>S&P 500: %{y:.1f}<extra></extra>",
+                showlegend=showlegend,
+            ),
+            row=idx,
+            col=1,
         )
-        return fig
+        fig.add_hline(y=100, line_dash="dot", line_color="rgba(148,163,184,0.35)", row=idx, col=1)
+        showlegend = False
 
-    frame = pd.DataFrame(series)
-    frame["date"] = pd.to_datetime(frame["date"])
-    fig.add_trace(
-        go.Scatter(
-            x=frame["date"],
-            y=frame["candidate_index"],
-            mode="lines",
-            name=chosen_ticker,
-            line={"color": "#38bdf8", "width": 3},
-            hovertemplate="<b>%{x|%b %d, %Y}</b><br>" + f"{chosen_ticker}: " + "%{y:.1f}<extra></extra>",
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=frame["date"],
-            y=frame["benchmark_index"],
-            mode="lines",
-            name="S&P 500",
-            line={"color": "#f59e0b", "width": 2, "dash": "dash"},
-            hovertemplate="<b>%{x|%b %d, %Y}</b><br>S&P 500: %{y:.1f}<extra></extra>",
-        )
-    )
-    fig.add_hline(y=100, line_dash="dot", line_color="rgba(148,163,184,0.45)")
     fig.update_layout(
-        title=f"{chosen_ticker} vs S&P 500 over the last 5 years",
-        height=420,
-        margin={"l": 40, "r": 24, "t": 56, "b": 36},
+        title="Top Buy Ideas Over The Last 5 Years",
+        height=max(420, 220 * len(ranked)),
+        margin={"l": 40, "r": 24, "t": 64, "b": 36},
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,24,39,0.55)",
         hoverlabel=dark_hoverlabel(),
-        xaxis={"gridcolor": "rgba(148,163,184,0.16)"},
-        yaxis={"title": "Indexed value (start = 100)", "gridcolor": "rgba(148,163,184,0.16)"},
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "xanchor": "right", "x": 1.0},
         font={"color": "#e2e8f0"},
     )
+    for idx in range(1, len(ranked) + 1):
+        fig.update_yaxes(
+            title_text="Index",
+            gridcolor="rgba(148,163,184,0.14)",
+            row=idx,
+            col=1,
+        )
+        fig.update_xaxes(gridcolor="rgba(148,163,184,0.14)", row=idx, col=1)
     return fig
 
 
@@ -4763,14 +4789,6 @@ def build_buy_preference_sector_choices(diagnosis: PortfolioRiskDiagnosis) -> li
             ordered.append(sector)
             seen.add(sector)
     return ordered
-
-
-def update_buy_idea_comparison_chart(
-    selected_ticker: str,
-    buy_candidates_payload: list[dict[str, Any]] | None,
-) -> go.Figure:
-    """Refresh the 5Y comparison chart when the selected buy idea changes."""
-    return plot_buy_idea_vs_benchmark(selected_ticker, buy_candidates_payload)
 
 
 def build_user_portfolio_preferences(
@@ -4792,14 +4810,10 @@ def build_user_portfolio_preferences(
     list[dict[str, Any]],
     str,
     go.Figure,
-    dict[str, Any],
-    go.Figure,
-    go.Figure,
     pd.DataFrame,
     str,
-    go.Figure,
-    go.Figure,
     pd.DataFrame,
+    go.Figure,
     pd.DataFrame,
 ]:
     """Create a user-defined `PortfolioPreferences` object from tab inputs.
@@ -4857,23 +4871,16 @@ def build_user_portfolio_preferences(
         }
     )
     candidate_payload = [item.model_dump(mode="json") for item in candidates]
-    ticker_choices = build_buy_idea_ticker_choices(candidates)
-    default_ticker = ticker_choices[0] if ticker_choices else None
     return (
         build_buy_preferences_html(preferences),
         build_portfolio_preferences_frame(preferences),
         preferences.model_dump(mode="json"),
         candidate_payload,
         build_buy_ideas_html(diagnosis, preferences, candidates),
-        plot_buy_ideas(candidates),
-        gr.update(choices=ticker_choices, value=default_ticker),
-        plot_buy_idea_vs_benchmark(default_ticker or "", candidate_payload),
-        plot_buy_projection(diagnosis, preferences, candidate_payload),
+        plot_buy_idea_panels(candidates),
         build_buy_ideas_frame(candidates),
         build_rebalance_plan_html(diagnosis),
-        plot_rebalance_traits(diagnosis),
         plot_rebalance_sectors(diagnosis),
-        build_rebalance_traits_frame(diagnosis),
         build_rebalance_holdings_frame(diagnosis),
     )
 
@@ -6513,24 +6520,11 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         diagnosis.portfolio_preferences,
         diagnosis.replacement_candidates,
     )
-    buy_ideas_fig = plot_buy_ideas(diagnosis.replacement_candidates)
+    buy_idea_panels_fig = plot_buy_idea_panels(diagnosis.replacement_candidates)
     buy_ideas_df = build_buy_ideas_frame(diagnosis.replacement_candidates)
     buy_candidates_payload = [item.model_dump(mode="json") for item in diagnosis.replacement_candidates]
-    buy_idea_ticker_choices = build_buy_idea_ticker_choices(diagnosis.replacement_candidates)
-    buy_idea_default_ticker = buy_idea_ticker_choices[0] if buy_idea_ticker_choices else None
-    buy_idea_comparison_fig = plot_buy_idea_vs_benchmark(
-        buy_idea_default_ticker or "",
-        buy_candidates_payload,
-    )
-    buy_projection_fig = plot_buy_projection(
-        diagnosis,
-        diagnosis.portfolio_preferences,
-        buy_candidates_payload,
-    )
     rebalance_plan_html = build_rebalance_plan_html(diagnosis)
-    rebalance_traits_fig = plot_rebalance_traits(diagnosis)
     rebalance_sectors_fig = plot_rebalance_sectors(diagnosis)
-    rebalance_traits_df = build_rebalance_traits_frame(diagnosis)
     rebalance_holdings_df = build_rebalance_holdings_frame(diagnosis)
     buy_preference_sector_choices = build_buy_preference_sector_choices(diagnosis)
     base_preferences = diagnosis.portfolio_preferences
@@ -6606,15 +6600,10 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         buy_preferences_html,
         build_portfolio_preferences_frame(diagnosis.portfolio_preferences),
         buy_ideas_html,
-        buy_ideas_fig,
-        gr.update(choices=buy_idea_ticker_choices, value=buy_idea_default_ticker),
-        buy_idea_comparison_fig,
-        buy_projection_fig,
+        buy_idea_panels_fig,
         buy_ideas_df,
         rebalance_plan_html,
-        rebalance_traits_fig,
         rebalance_sectors_fig,
-        rebalance_traits_df,
         rebalance_holdings_df,
         gr.update(choices=buy_preference_sector_choices, value=(base_preferences.sector_preferences if base_preferences is not None else [])),
         gr.update(value=(base_preferences.budget_to_deploy if base_preferences is not None else None)),
@@ -6966,17 +6955,9 @@ def build_app() -> gr.Blocks:
                     with gr.Tab("Buy Ideas", id="buy-ideas"):
                         with gr.Row(equal_height=False):
                             with gr.Column(scale=6, min_width=360):
-                                buy_ideas_plot = gr.Plot(label="Best Buy Ideas Right Now")
+                                buy_ideas_md = gr.HTML()
                             with gr.Column(scale=7, min_width=420):
-                                buy_idea_ticker_filter = gr.Dropdown(
-                                    label="Compare this buy idea over the last 5 years",
-                                    choices=[],
-                                    value=None,
-                                    interactive=True,
-                                )
-                                buy_idea_comparison_plot = gr.Plot(label="5Y Performance vs S&P 500")
-                                buy_projection_plot = gr.Plot(label="Illustrative 5Y Portfolio Scenario")
-                        buy_ideas_md = gr.HTML()
+                                buy_ideas_plot = gr.Plot(label="Top Buy Ideas Over The Last 5 Years")
                         buy_ideas_df = gr.Dataframe(
                             label="Replacement Candidate Review",
                             interactive=False,
@@ -6984,20 +6965,12 @@ def build_app() -> gr.Blocks:
                         )
                     with gr.Tab("Portfolio Rebalancing Plan", id="portfolio-rebalancing-plan"):
                         rebalance_plan_md = gr.HTML()
-                        with gr.Row(equal_height=False):
-                            rebalance_traits_plot = gr.Plot(label="Before vs After Portfolio Traits")
-                            rebalance_sectors_plot = gr.Plot(label="Before vs After Sector Mix")
-                        with gr.Row(equal_height=False):
-                            rebalance_traits_df = gr.Dataframe(
-                                label="Before vs After Trait Review",
-                                interactive=False,
-                                wrap=True,
-                            )
-                            rebalance_holdings_df = gr.Dataframe(
-                                label="Holding Changes In The Plan",
-                                interactive=False,
-                                wrap=True,
-                            )
+                        rebalance_sectors_plot = gr.Plot(label="Before vs After Sector Mix")
+                        rebalance_holdings_df = gr.Dataframe(
+                            label="Holding Changes In The Plan",
+                            interactive=False,
+                            wrap=True,
+                        )
                     with gr.Tab("Risk Guide", id="risk-guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
@@ -7039,14 +7012,9 @@ def build_app() -> gr.Blocks:
                 buy_preferences_df,
                 buy_ideas_md,
                 buy_ideas_plot,
-                buy_idea_ticker_filter,
-                buy_idea_comparison_plot,
-                buy_projection_plot,
                 buy_ideas_df,
                 rebalance_plan_md,
-                rebalance_traits_plot,
                 rebalance_sectors_plot,
-                rebalance_traits_df,
                 rebalance_holdings_df,
                 buy_sector_preferences,
                 buy_budget_to_deploy,
@@ -7105,22 +7073,11 @@ def build_app() -> gr.Blocks:
                 buy_candidates_state,
                 buy_ideas_md,
                 buy_ideas_plot,
-                buy_idea_ticker_filter,
-                buy_idea_comparison_plot,
-                buy_projection_plot,
                 buy_ideas_df,
                 rebalance_plan_md,
-                rebalance_traits_plot,
                 rebalance_sectors_plot,
-                rebalance_traits_df,
                 rebalance_holdings_df,
             ],
-        )
-
-        buy_idea_ticker_filter.change(
-            fn=update_buy_idea_comparison_chart,
-            inputs=[buy_idea_ticker_filter, buy_candidates_state],
-            outputs=[buy_idea_comparison_plot],
         )
 
         for metric_key, button in zip(metric_navigation_order(), metric_buttons):
