@@ -4581,10 +4581,13 @@ def build_buy_idea_card_html(
             f"({percent_display(candidate.suggested_allocation_pct_of_budget)} of buy budget)"
             f"</div>"
         )
-    performance_badges = (
-        f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:#cbd5e1;font-size:12px;font-weight:700'>5Y return {pct_text(candidate.stock_5y_return_pct)}</div>"
-        f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:#93c5fd;font-size:12px;font-weight:700'>5Y vs S&P {pct_text(candidate.relative_5y_return_pct)}</div>"
+    l5y_hero = (
+        "<div style='display:flex;gap:10px;flex-wrap:wrap;margin-top:12px'>"
+        f"<div style='padding:10px 14px;border-radius:14px;background:linear-gradient(135deg, rgba(34,197,94,.22), rgba(8,145,178,.16));border:1px solid rgba(34,197,94,.26);color:#bbf7d0;font-size:13px;font-weight:800'>5Y return: {pct_text(candidate.stock_5y_return_pct)}</div>"
+        f"<div style='padding:10px 14px;border-radius:14px;background:rgba(59,130,246,.16);border:1px solid rgba(96,165,250,.22);color:#bfdbfe;font-size:13px;font-weight:800'>5Y vs S&P 500: {pct_text(candidate.relative_5y_return_pct)}</div>"
+        "</div>"
     )
+    performance_badges = ""
     if candidate.asset_type == "ETF":
         performance_badges += (
             f"<div style='padding:8px 12px;border-radius:999px;background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.18);color:#fde68a;font-size:12px;font-weight:700'>Expense ratio {_expense_ratio_text(reference.get('expense_ratio'))}</div>"
@@ -4628,6 +4631,7 @@ def build_buy_idea_card_html(
         "</div>"
         "</div>"
         f"<div style='font-size:14px;line-height:1.55;color:#e2e8f0;margin-top:12px'>{render_bold_markers(candidate.why_it_fits)}</div>"
+        f"{l5y_hero}"
         f"<div style='font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:8px'>{render_bold_markers(candidate.preference_fit_summary)}</div>"
         "<div style='display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);gap:14px;margin-top:14px'>"
         "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
@@ -4698,6 +4702,54 @@ def build_buy_ideas_frame(candidates: list[ReplacementCandidate]) -> pd.DataFram
             }
         )
     return pd.DataFrame(rows)
+
+
+def build_buy_score_breakdown_frame(candidates: list[ReplacementCandidate]) -> pd.DataFrame:
+    """Show the auditable ingredients behind each buy idea rank."""
+    columns = [
+        "Rank",
+        "Ticker",
+        "Name",
+        "Final Fit",
+        "Portfolio Gap Fit",
+        "5Y Strength",
+        "Growth P/E Bonus",
+        "Preference Adjustment",
+        "Stability Adjustment",
+        "Universe Support",
+        "Linked Gap",
+        "5Y Return",
+        "5Y vs S&P 500",
+        "P/E Ratio",
+        "Why It Ranked Here",
+    ]
+    if not candidates:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, Any]] = []
+    for rank, item in enumerate(sorted(candidates, key=lambda candidate: (-candidate.fit_score, candidate.ticker)), start=1):
+        reference = _candidate_reference_readout(item)
+        breakdown = item.score_breakdown or {}
+        rows.append(
+            {
+                "Rank": rank,
+                "Ticker": item.ticker,
+                "Name": reference.get("full_name") or item.security_name,
+                "Final Fit": f"{item.fit_score:.1f}/100",
+                "Portfolio Gap Fit": number_text(breakdown.get("portfolio_gap_fit"), 1),
+                "5Y Strength": number_text(breakdown.get("five_year_relative_strength"), 1),
+                "Growth P/E Bonus": number_text(breakdown.get("growth_pe_bonus"), 1),
+                "Preference Adjustment": number_text(breakdown.get("explicit_preference_adjustment"), 1),
+                "Stability Adjustment": number_text(breakdown.get("stability_adjustment"), 1),
+                "Universe Support": number_text(breakdown.get("universe_support"), 1),
+                "Linked Gap": item.linked_gap_label,
+                "5Y Return": pct_text(item.stock_5y_return_pct),
+                "5Y vs S&P 500": pct_text(item.relative_5y_return_pct),
+                "P/E Ratio": _pe_text(reference.get("trailing_pe")) if item.asset_type != "ETF" else "N/A",
+                "Why It Ranked Here": item.why_it_fits,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
 
 
 def plot_buy_ideas(candidates: list[ReplacementCandidate]) -> go.Figure:
@@ -4772,9 +4824,9 @@ def fetch_buy_idea_long_horizon_series(
     """
     yahoo_symbol = normalize_ticker_for_yahoo(ticker)
     start = (pd.Timestamp.today().normalize() - pd.DateOffset(years=5) - pd.Timedelta(days=15)).strftime("%Y-%m-%d")
-    cache_path = BUY_SERIES_CACHE_DIR / f"{_cache_key('buy_idea_series', yahoo_symbol, benchmark_symbol, start)}.json"
+    cache_path = BUY_SERIES_CACHE_DIR / f"{_cache_key('buy_idea_series_v3', yahoo_symbol, benchmark_symbol, start)}.json"
     cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 24)
-    if isinstance(cached, list):
+    if isinstance(cached, list) and _valid_buy_idea_series(cached):
         return cached
     downloaded = yf.download(
         tickers=[yahoo_symbol, benchmark_symbol],
@@ -4812,8 +4864,39 @@ def fetch_buy_idea_long_horizon_series(
         }
         for idx, row in frame.iterrows()
     ]
+    if not _valid_buy_idea_series(result):
+        return []
     _write_json_cache(cache_path, result)
     return result
+
+
+def _valid_buy_idea_series(series: list[dict[str, Any]]) -> bool:
+    """Reject stale or malformed cached chart data before it reaches Plotly."""
+    if len(series) < 50:
+        return False
+    required = {"date", "candidate_index", "benchmark_index"}
+    if any(not required.issubset(item.keys()) for item in series[:5]):
+        return False
+    try:
+        candidate_values = [float(item["candidate_index"]) for item in series]
+        benchmark_values = [float(item["benchmark_index"]) for item in series]
+        pd.to_datetime([item["date"] for item in series[:5]])
+    except (TypeError, ValueError):
+        return False
+    if any(not math.isfinite(value) for value in candidate_values + benchmark_values):
+        return False
+    if not (80 <= candidate_values[0] <= 120 and 80 <= benchmark_values[0] <= 120):
+        return False
+    if min(candidate_values + benchmark_values) <= 0:
+        return False
+    max_candidate_gap = max(abs(candidate - benchmark) for candidate, benchmark in zip(candidate_values, benchmark_values))
+    if max_candidate_gap < 0.0001 and max(candidate_values) > 220:
+        return False
+    # A normal five-year growth chart should not explode into a near-vertical line
+    # because of a bad cache payload or malformed price column.
+    if max(candidate_values + benchmark_values) > 1500:
+        return False
+    return True
 
 
 def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
@@ -4830,7 +4913,7 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
             font={"size": 15, "color": "#e2e8f0"},
         )
         fig.update_layout(
-            height=520,
+            height=640,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
             template="plotly_dark",
             paper_bgcolor="rgba(0,0,0,0)",
@@ -4852,7 +4935,7 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
             font={"size": 12, "color": "#e2e8f0"},
         )
         fig.update_layout(
-            height=520,
+            height=640,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
             template="plotly_dark",
             paper_bgcolor="rgba(0,0,0,0)",
@@ -4864,44 +4947,57 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
 
     frame = pd.DataFrame(series)
     frame["date"] = pd.to_datetime(frame["date"])
+    frame["candidate_return_pct"] = pd.to_numeric(frame["candidate_index"], errors="coerce") - 100.0
+    frame["benchmark_return_pct"] = pd.to_numeric(frame["benchmark_index"], errors="coerce") - 100.0
+    frame = frame.dropna(subset=["candidate_return_pct", "benchmark_return_pct"])
+    if frame.empty:
+        return plot_buy_idea_chart(None)
     y_min = float(
         min(
-            pd.to_numeric(frame["candidate_index"], errors="coerce").min(),
-            pd.to_numeric(frame["benchmark_index"], errors="coerce").min(),
+            frame["candidate_return_pct"].min(),
+            frame["benchmark_return_pct"].min(),
         )
     )
     y_max = float(
         max(
-            pd.to_numeric(frame["candidate_index"], errors="coerce").max(),
-            pd.to_numeric(frame["benchmark_index"], errors="coerce").max(),
+            frame["candidate_return_pct"].max(),
+            frame["benchmark_return_pct"].max(),
         )
     )
-    y_padding = max((y_max - y_min) * 0.12, 8.0)
+    y_padding = max((y_max - y_min) * 0.08, 8.0)
+    lower_bound = max(-100.0, min(-10.0, y_min - min(y_padding, 18.0)))
+    latest_candidate_return = float(frame["candidate_return_pct"].iloc[-1])
+    latest_benchmark_return = float(frame["benchmark_return_pct"].iloc[-1])
+    relative_return = latest_candidate_return - latest_benchmark_return
     fig.add_trace(
         go.Scatter(
             x=frame["date"],
-            y=frame["candidate_index"],
+            y=frame["candidate_return_pct"],
             mode="lines",
             name=candidate.ticker,
             line={"color": "#38bdf8", "width": 2.5},
-            hovertemplate="<b>%{x|%b %d, %Y}</b><br>" + f"{candidate.ticker}: " + "%{y:.1f}<extra></extra>",
+            hovertemplate="<b>%{x|%b %d, %Y}</b><br>" + f"{candidate.ticker} return: " + "%{y:.1f}%<extra></extra>",
         )
     )
     fig.add_trace(
         go.Scatter(
             x=frame["date"],
-            y=frame["benchmark_index"],
+            y=frame["benchmark_return_pct"],
             mode="lines",
             name="S&P 500",
             line={"color": "#f59e0b", "width": 1.8, "dash": "dash"},
-            hovertemplate="<b>%{x|%b %d, %Y}</b><br>S&P 500: %{y:.1f}<extra></extra>",
+            hovertemplate="<b>%{x|%b %d, %Y}</b><br>S&P 500 return: %{y:.1f}%<extra></extra>",
         )
     )
-    fig.add_hline(y=100, line_dash="dot", line_color="rgba(148,163,184,0.35)")
+    fig.add_hline(y=0, line_dash="dot", line_color="rgba(148,163,184,0.35)")
 
     fig.update_layout(
-        title=f"{candidate.ticker} vs S&P 500 over the last 5 years",
-        height=520,
+        title=(
+            f"{candidate.ticker} 5Y return: {latest_candidate_return:.1f}% "
+            f"| S&P 500: {latest_benchmark_return:.1f}% "
+            f"| Difference: {relative_return:+.1f}%"
+        ),
+        height=640,
         margin={"l": 54, "r": 26, "t": 68, "b": 44},
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -4911,9 +5007,10 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
         font={"color": "#e2e8f0"},
     )
     fig.update_yaxes(
-        title_text="Growth of $100 invested",
+        title_text="Total return since chart start (%)",
         gridcolor="rgba(148,163,184,0.14)",
-        range=[max(0.0, y_min - y_padding), y_max + y_padding],
+        range=[lower_bound, y_max + y_padding],
+        ticksuffix="%",
     )
     fig.update_xaxes(gridcolor="rgba(148,163,184,0.14)")
     return fig
@@ -5570,6 +5667,19 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
     return fig
 
 
+def _sector_pressure_style(weight_pct: float) -> dict[str, str]:
+    """Map sector weight to a simple visual pressure language."""
+    if weight_pct >= 40:
+        return {"label": "Very crowded", "color": "#ef4444", "bg": "rgba(239,68,68,.16)"}
+    if weight_pct >= 30:
+        return {"label": "Crowded", "color": "#f97316", "bg": "rgba(249,115,22,.16)"}
+    if weight_pct >= 20:
+        return {"label": "Large sleeve", "color": "#f59e0b", "bg": "rgba(245,158,11,.16)"}
+    if weight_pct >= 10:
+        return {"label": "Meaningful", "color": "#38bdf8", "bg": "rgba(56,189,248,.14)"}
+    return {"label": "Small diversifier", "color": "#22c55e", "bg": "rgba(34,197,94,.14)"}
+
+
 def plot_sector_allocation(sector_rows: list[dict[str, Any]]) -> go.Figure:
     fig = go.Figure()
     frame = pd.DataFrame(sector_rows)
@@ -5577,20 +5687,45 @@ def plot_sector_allocation(sector_rows: list[dict[str, Any]]) -> go.Figure:
         frame = frame.copy()
         frame["current_value"] = pd.to_numeric(frame["current_value"], errors="coerce").fillna(0.0)
         frame["weight_pct"] = pd.to_numeric(frame["weight_pct"], errors="coerce").fillna(0.0) * 100
+        frame["excess_return_vs_benchmark"] = pd.to_numeric(
+            frame.get("excess_return_vs_benchmark"),
+            errors="coerce",
+        )
         frame = frame[frame["current_value"] > 0].sort_values("current_value", ascending=False)
+        pressure_styles = [_sector_pressure_style(float(weight)) for weight in frame["weight_pct"]]
+        colors = [style["color"] for style in pressure_styles]
+        pressure_labels = [style["label"] for style in pressure_styles]
+        customdata = [
+            [
+                f"{float(row['weight_pct']):.1f}%",
+                pct_text(parse_float(row.get("excess_return_vs_benchmark"))),
+                pressure_labels[position],
+            ]
+            for position, (_, row) in enumerate(frame.iterrows())
+        ]
         fig.add_trace(
-            go.Pie(
+            go.Treemap(
                 labels=frame["sector"].tolist(),
+                parents=[""] * len(frame),
                 values=frame["current_value"].tolist(),
-                hole=0.46,
-                textinfo="label+percent",
-                textposition="inside",
+                customdata=customdata,
+                texttemplate="<b>%{label}</b><br>%{customdata[0]}",
+                textfont={"size": 18, "color": "#f8fafc"},
+                branchvalues="total",
+                tiling={"packing": "squarify", "pad": 4},
                 hovertemplate=(
-                    "%{label}<br>Current value: $%{value:,.2f}"
-                    "<br>Weight: %{percent}"
+                    "<b>%{label}</b><br>"
+                    "Current value: $%{value:,.2f}<br>"
+                    "Portfolio weight: %{customdata[0]}<br>"
+                    "Weighted return vs S&P 500: %{customdata[1]}<br>"
+                    "Readout: %{customdata[2]}"
                     "<extra></extra>"
                 ),
-                marker={"line": {"color": "rgba(15,23,42,0.95)", "width": 2}},
+                marker={
+                    "colors": colors,
+                    "line": {"color": "rgba(15,23,42,0.96)", "width": 3},
+                },
+                pathbar={"visible": False},
             )
         )
     else:
@@ -5604,15 +5739,15 @@ def plot_sector_allocation(sector_rows: list[dict[str, Any]]) -> go.Figure:
             font={"size": 15, "color": "#e2e8f0"},
         )
     fig.update_layout(
-        title="Current Sector Allocation",
-        height=430,
-        margin={"l": 24, "r": 24, "t": 56, "b": 24},
+        title="Sector Exposure Map",
+        height=520,
+        margin={"l": 24, "r": 24, "t": 60, "b": 24},
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(17,24,39,0.55)",
-        showlegend=True,
-        legend={"orientation": "v", "x": 1.02, "xanchor": "left", "y": 0.5, "yanchor": "middle"},
+        showlegend=False,
         hoverlabel=dark_hoverlabel(),
+        font={"color": "#e2e8f0"},
     )
     return fig
 
@@ -6572,14 +6707,77 @@ def build_sector_overview_markdown(market_metrics: dict[str, Any]) -> str:
     best_sector = market_metrics.get("best_sector_vs_benchmark")
     sector_rows = market_metrics.get("sector_allocation", [])
     if not sector_rows:
-        return "### Sector View\nSector allocation is unavailable for the current portfolio."
-    if not best_sector:
-        return "### Sector View\nSector allocation is available below, but benchmark-relative sector performance could not be estimated yet."
+        return (
+            "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Sector Map</div>"
+            "<div style='font-size:14px;color:#cbd5e1;margin-top:8px'>Sector allocation is unavailable for the current portfolio.</div>"
+            "</div>"
+        )
+
+    frame = pd.DataFrame(sector_rows).copy()
+    frame["current_value"] = pd.to_numeric(frame.get("current_value"), errors="coerce").fillna(0.0)
+    frame["weight_pct"] = pd.to_numeric(frame.get("weight_pct"), errors="coerce").fillna(0.0)
+    frame["excess_return_vs_benchmark"] = pd.to_numeric(
+        frame.get("excess_return_vs_benchmark"),
+        errors="coerce",
+    )
+    frame = frame[frame["current_value"] > 0].sort_values("weight_pct", ascending=False)
+    if frame.empty:
+        return (
+            "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Sector Map</div>"
+            "<div style='font-size:14px;color:#cbd5e1;margin-top:8px'>No positive sector values are available yet.</div>"
+            "</div>"
+        )
+
+    top_row = frame.iloc[0]
+    top_sector = str(top_row.get("sector") or "Unknown")
+    top_weight = float(top_row.get("weight_pct") or 0.0)
+    top_style = _sector_pressure_style(top_weight * 100)
+    top3_weight = float(frame.head(3)["weight_pct"].sum())
+    sector_count = len(frame)
+    best_sector_text = (
+        f"{best_sector['sector']} beat the trade-matched S&P 500 by {pct_text(best_sector['excess_return_vs_benchmark'])}"
+        if best_sector
+        else "Benchmark-relative sector performance is not available yet."
+    )
+    sector_cards = ""
+    for _, row in frame.head(4).iterrows():
+        weight = float(row.get("weight_pct") or 0.0)
+        style = _sector_pressure_style(weight * 100)
+        excess = parse_float(row.get("excess_return_vs_benchmark"))
+        excess_text = pct_text(excess) if excess is not None else "N/A"
+        sector_cards += (
+            "<div style='padding:13px 14px;border-radius:16px;"
+            f"background:{style['bg']};border:1px solid rgba(148,163,184,.14)'>"
+            "<div style='display:flex;justify-content:space-between;gap:10px;align-items:flex-start'>"
+            f"<div style='font-size:15px;font-weight:800;color:#f8fafc'>{row.get('sector')}</div>"
+            f"<div style='font-size:13px;font-weight:800;color:{style['color']}'>{weight:.1%}</div>"
+            "</div>"
+            f"<div style='font-size:12px;color:#cbd5e1;margin-top:5px'>{style['label']} · vs S&P 500: {excess_text}</div>"
+            f"<div style='font-size:12px;color:#94a3b8;margin-top:5px'>{money_text(parse_float(row.get('current_value')))}</div>"
+            "</div>"
+        )
+
     return (
-        "### Sector View\n"
-        f"- Best current sector vs trade-matched S&P 500: `{best_sector['sector']}`\n"
-        f"- Weighted excess return vs benchmark: `{pct_text(best_sector['excess_return_vs_benchmark'])}`\n"
-        f"- Current portfolio weight: `{pct_text(best_sector['weight_pct'])}`\n"
+        "<div style='display:flex;flex-direction:column;gap:14px'>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94));box-shadow:0 18px 48px rgba(2,6,23,.24)'>"
+        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Sector Map</div>"
+        "<div style='font-size:14px;color:#93c5fd;margin-top:7px'>A faster read on where the portfolio is crowded, balanced, or diversified.</div>"
+        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:14px'>"
+        f"<div style='padding:12px;border-radius:14px;background:rgba(15,23,42,.62);border:1px solid rgba(148,163,184,.14)'><div style='font-size:11px;color:#93c5fd;text-transform:uppercase;letter-spacing:.06em;font-weight:800'>Top sector</div><div style='font-size:20px;color:#f8fafc;font-weight:900;margin-top:5px'>{top_sector}</div><div style='font-size:12px;color:{top_style['color']};margin-top:4px'>{top_weight:.1%} · {top_style['label']}</div></div>"
+        f"<div style='padding:12px;border-radius:14px;background:rgba(15,23,42,.62);border:1px solid rgba(148,163,184,.14)'><div style='font-size:11px;color:#93c5fd;text-transform:uppercase;letter-spacing:.06em;font-weight:800'>Top 3 sectors</div><div style='font-size:20px;color:#f8fafc;font-weight:900;margin-top:5px'>{top3_weight:.1%}</div><div style='font-size:12px;color:#cbd5e1;margin-top:4px'>Combined portfolio weight</div></div>"
+        f"<div style='padding:12px;border-radius:14px;background:rgba(15,23,42,.62);border:1px solid rgba(148,163,184,.14)'><div style='font-size:11px;color:#93c5fd;text-transform:uppercase;letter-spacing:.06em;font-weight:800'>Sector count</div><div style='font-size:20px;color:#f8fafc;font-weight:900;margin-top:5px'>{sector_count}</div><div style='font-size:12px;color:#cbd5e1;margin-top:4px'>Positive-value sector sleeves</div></div>"
+        "</div>"
+        f"<div style='font-size:13px;color:#cbd5e1;margin-top:14px'><strong style='color:#f8fafc'>Best relative sector:</strong> {best_sector_text}</div>"
+        "</div>"
+        "<div style='display:grid;grid-template-columns:1fr;gap:10px'>"
+        f"{sector_cards}"
+        "</div>"
+        "</div>"
     )
 
 
@@ -6965,9 +7163,12 @@ def build_app() -> gr.Blocks:
                 cards = gr.HTML(label="Summary Cards", elem_classes=["summary-cards-wrap"])
                 with gr.Tabs(selected="overview") as main_tabs:
                     with gr.Tab("Overview", id="overview"):
-                        sector_overview_md = gr.Markdown()
+                        with gr.Row(equal_height=False):
+                            with gr.Column(scale=7, min_width=520):
+                                sector_plot = gr.Plot(label="Sector Portfolio Map")
+                            with gr.Column(scale=5, min_width=360):
+                                sector_overview_md = gr.HTML()
                         equity_plot = gr.Plot(label="Benchmark")
-                        sector_plot = gr.Plot(label="Sector Allocation")
                     with gr.Tab("Risk", id="risk"):
                         risk_md = gr.HTML()
                         metric_card_components: list[gr.HTML] = []

@@ -587,6 +587,7 @@ class ReplacementCandidate(BaseModel):
     what_it_improves: list[str] = Field(default_factory=list)
     preference_fit_summary: str = ""
     evidence_summary: list[str] = Field(default_factory=list)
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
     universe_source: str = ""
     suggested_allocation_pct_of_budget: Optional[float] = None
     suggested_allocation_amount: Optional[float] = None
@@ -3788,11 +3789,94 @@ def _gap_score_for_candidate(
         score -= 10
 
     if rel_5y is not None and rel_5y > 0:
-        score += min(12.0, rel_5y * 12.0)
+        score += min(22.0, rel_5y * 18.0)
+        evidence.append(f"5Y vs S&P 500: {rel_5y:.1%}")
     elif rel_5y is not None and rel_5y < -0.30:
         score -= 10
 
     return round(score, 1), _unique_nonempty(reasons), _unique_nonempty(evidence)
+
+
+def _growth_pe_bonus(
+    candidate: BuyCandidateUniverseEntry,
+    candidate_row: dict[str, Any],
+) -> tuple[float, list[str]]:
+    """Reward higher-P/E stocks only when performance supports a growth premium.
+
+    A higher P/E ratio can mean the market expects stronger future growth, but it
+    can also mean an expensive stock. This bonus therefore applies only to single
+    stocks, and only when the candidate has not been weak versus the S&P 500 over
+    the medium/longer windows used by the buy engine.
+    """
+    if candidate.asset_type != "Stock":
+        return 0.0, []
+
+    trailing_pe = _safe_float(candidate_row.get("trailing_pe"))
+    rel_1y = _safe_float(candidate_row.get("relative_1y_return_pct"))
+    rel_3y = _safe_float(candidate_row.get("relative_3y_return_pct"))
+    rel_5y = _safe_float(candidate_row.get("relative_5y_return_pct"))
+    if trailing_pe is None or trailing_pe < 18:
+        return 0.0, []
+    if (rel_3y is not None and rel_3y < -0.05) or (rel_5y is not None and rel_5y < -0.05):
+        return 0.0, []
+
+    bonus = 3.0
+    if trailing_pe >= 25:
+        bonus += 3.0
+    if trailing_pe >= 35:
+        bonus += 2.0
+    if rel_1y is not None and rel_1y > 0:
+        bonus += min(3.0, rel_1y * 12.0)
+    if rel_3y is not None and rel_3y > 0:
+        bonus += min(4.0, rel_3y * 8.0)
+    if rel_5y is not None and rel_5y > 0:
+        bonus += min(5.0, rel_5y * 6.0)
+
+    return round(min(14.0, bonus), 1), [f"Growth premium: P/E {trailing_pe:.1f}x with supportive relative performance"]
+
+
+def _buy_score_breakdown(
+    *,
+    gap_score: float,
+    preference_adjustment: float,
+    growth_pe_bonus: float,
+    candidate: BuyCandidateUniverseEntry,
+    candidate_row: dict[str, Any],
+    final_score: float,
+) -> dict[str, float]:
+    """Build an auditable score split for the Buy Score Breakdown tab."""
+    rel_5y = _safe_float(candidate_row.get("relative_5y_return_pct"))
+    volatility_1y = _safe_float(candidate_row.get("annualized_volatility_1y"))
+    beta = _safe_float(candidate_row.get("beta"))
+    source_count = int(_safe_float(candidate_row.get("source_count")) or candidate.source_count or 0)
+
+    l5y_strength = 0.0
+    if rel_5y is not None:
+        l5y_strength = max(-10.0, min(22.0, rel_5y * 18.0 if rel_5y > 0 else rel_5y * 28.0))
+
+    stability = 0.0
+    if volatility_1y is not None:
+        if volatility_1y <= 0.14:
+            stability += 14.0
+        elif volatility_1y <= 0.18:
+            stability += 8.0
+        elif volatility_1y >= 0.35:
+            stability -= 6.0
+    if beta is not None:
+        if beta <= 1.0:
+            stability += 6.0
+        elif beta >= 1.45:
+            stability -= 5.0
+
+    return {
+        "portfolio_gap_fit": round(max(0.0, min(100.0, gap_score)), 1),
+        "explicit_preference_adjustment": round(preference_adjustment, 1),
+        "five_year_relative_strength": round(l5y_strength, 1),
+        "growth_pe_bonus": round(growth_pe_bonus, 1),
+        "stability_adjustment": round(stability, 1),
+        "universe_support": round(min(10.0, source_count * 2.0), 1),
+        "final_fit_score": round(final_score, 1),
+    }
 
 
 def _select_replacement_candidate_slate(
@@ -4014,6 +4098,7 @@ def _build_replacement_candidates(
         best_gap_score = -999.0
         best_gap_reasons: list[str] = []
         best_gap_evidence: list[str] = []
+        best_growth_pe_bonus = 0.0
         for gap in gaps_to_score:
             gap_score, gap_reasons, gap_evidence = _gap_score_for_candidate(
                 entry,
@@ -4021,12 +4106,14 @@ def _build_replacement_candidates(
                 row,
                 portfolio_preferences,
             )
-            total_gap_score = gap_score + preference_adjustment
+            growth_pe_bonus, growth_pe_notes = _growth_pe_bonus(entry, row)
+            total_gap_score = gap_score + preference_adjustment + growth_pe_bonus
             if total_gap_score > best_gap_score:
                 best_gap = gap
                 best_gap_score = total_gap_score
-                best_gap_reasons = gap_reasons + filter_notes
+                best_gap_reasons = gap_reasons + filter_notes + growth_pe_notes
                 best_gap_evidence = gap_evidence
+                best_growth_pe_bonus = growth_pe_bonus
 
         if best_gap is None:
             continue
@@ -4077,16 +4164,25 @@ def _build_replacement_candidates(
             if preference_notes
             else "Fits the current constraints without breaking the vehicle or sector rules already in place."
         )
+        final_fit_score = round(max(0.0, min(100.0, best_gap_score)), 1)
         scored_candidates.append(
             {
                 "entry": entry,
                 "row": row,
                 "gap": best_gap,
-                "fit_score": round(max(0.0, min(100.0, best_gap_score)), 1),
+                "fit_score": final_fit_score,
                 "why_it_fits": why_it_fits,
                 "what_it_improves": what_it_improves,
                 "preference_fit_summary": preference_fit_summary,
                 "evidence_summary": evidence_summary[:5],
+                "score_breakdown": _buy_score_breakdown(
+                    gap_score=best_gap_score - preference_adjustment - best_growth_pe_bonus,
+                    preference_adjustment=preference_adjustment,
+                    growth_pe_bonus=best_growth_pe_bonus,
+                    candidate=entry,
+                    candidate_row=row,
+                    final_score=final_fit_score,
+                ),
             }
         )
 
@@ -4127,6 +4223,7 @@ def _build_replacement_candidates(
                 what_it_improves=item["what_it_improves"],
                 preference_fit_summary=item["preference_fit_summary"],
                 evidence_summary=item["evidence_summary"],
+                score_breakdown=item.get("score_breakdown", {}),
                 universe_source=entry.universe_source,
                 suggested_allocation_pct_of_budget=allocation_pct,
                 suggested_allocation_amount=allocation_amount,
