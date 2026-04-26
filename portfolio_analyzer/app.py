@@ -664,6 +664,32 @@ def extract_close_frame(downloaded: pd.DataFrame, tickers: list[str]) -> pd.Data
     return close.sort_index()
 
 
+def extract_adjusted_close_frame(downloaded: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
+    """Extract adjusted close when available so buy charts match total-return metrics."""
+    if downloaded.empty:
+        return pd.DataFrame(columns=tickers)
+
+    if isinstance(downloaded.columns, pd.MultiIndex):
+        level_zero = downloaded.columns.get_level_values(0)
+        if "Adj Close" in level_zero:
+            close = downloaded["Adj Close"].copy()
+        elif "Close" in level_zero:
+            close = downloaded["Close"].copy()
+        else:
+            close = downloaded.xs("Close", axis=1, level=-1).copy()
+    else:
+        field = "Adj Close" if "Adj Close" in downloaded.columns else "Close"
+        close = downloaded[[field]].copy()
+        close.columns = tickers[:1]
+
+    if isinstance(close, pd.Series):
+        close = close.to_frame(name=tickers[0])
+
+    close = close.apply(pd.to_numeric, errors="coerce")
+    close.index = pd.to_datetime(close.index)
+    return close.sort_index()
+
+
 def normalize_ticker_for_yahoo(symbol: str) -> str:
     return str(symbol).strip().replace(".", "-")
 
@@ -3976,6 +4002,29 @@ def _candidate_reference_readout(candidate: ReplacementCandidate) -> dict[str, A
     }
 
 
+def _candidate_chart_return_summary(candidate: ReplacementCandidate) -> dict[str, float | None]:
+    """Return chart-consistent 5Y return metrics for Buy Ideas display."""
+    series = fetch_buy_idea_long_horizon_series(candidate.ticker)
+    if not series:
+        return {
+            "stock_5y_return_pct": candidate.stock_5y_return_pct,
+            "benchmark_5y_return_pct": (
+                candidate.stock_5y_return_pct - candidate.relative_5y_return_pct
+                if candidate.stock_5y_return_pct is not None and candidate.relative_5y_return_pct is not None
+                else None
+            ),
+            "relative_5y_return_pct": candidate.relative_5y_return_pct,
+        }
+    latest = series[-1]
+    stock_return = (parse_float(latest.get("candidate_index")) or 100.0) / 100.0 - 1.0
+    benchmark_return = (parse_float(latest.get("benchmark_index")) or 100.0) / 100.0 - 1.0
+    return {
+        "stock_5y_return_pct": stock_return,
+        "benchmark_5y_return_pct": benchmark_return,
+        "relative_5y_return_pct": stock_return - benchmark_return,
+    }
+
+
 def _vehicle_preference_value(preferences: PortfolioPreferences | None) -> str:
     """Map a preference object into the single dashboard vehicle selector."""
     if preferences is None:
@@ -4555,6 +4604,7 @@ def build_buy_idea_card_html(
         )
 
     reference = _candidate_reference_readout(candidate)
+    chart_return_summary = _candidate_chart_return_summary(candidate)
     external_signals = _candidate_external_signals(diagnosis, candidate, limit=2)
     evidence_items = candidate.evidence_summary[:2]
     if external_signals:
@@ -4583,8 +4633,8 @@ def build_buy_idea_card_html(
         )
     l5y_hero = (
         "<div style='display:flex;gap:10px;flex-wrap:wrap;margin-top:12px'>"
-        f"<div style='padding:10px 14px;border-radius:14px;background:linear-gradient(135deg, rgba(34,197,94,.22), rgba(8,145,178,.16));border:1px solid rgba(34,197,94,.26);color:#bbf7d0;font-size:13px;font-weight:800'>5Y return: {pct_text(candidate.stock_5y_return_pct)}</div>"
-        f"<div style='padding:10px 14px;border-radius:14px;background:rgba(59,130,246,.16);border:1px solid rgba(96,165,250,.22);color:#bfdbfe;font-size:13px;font-weight:800'>5Y vs S&P 500: {pct_text(candidate.relative_5y_return_pct)}</div>"
+        f"<div style='padding:10px 14px;border-radius:14px;background:linear-gradient(135deg, rgba(34,197,94,.22), rgba(8,145,178,.16));border:1px solid rgba(34,197,94,.26);color:#bbf7d0;font-size:13px;font-weight:800'>5Y return: {pct_text(chart_return_summary.get('stock_5y_return_pct'))}</div>"
+        f"<div style='padding:10px 14px;border-radius:14px;background:rgba(59,130,246,.16);border:1px solid rgba(96,165,250,.22);color:#bfdbfe;font-size:13px;font-weight:800'>5Y vs S&P 500: {pct_text(chart_return_summary.get('relative_5y_return_pct'))}</div>"
         "</div>"
     )
     performance_badges = ""
@@ -4676,6 +4726,7 @@ def build_buy_ideas_frame(candidates: list[ReplacementCandidate]) -> pd.DataFram
     rows: list[dict[str, Any]] = []
     for rank, item in enumerate(sorted(candidates, key=lambda candidate: (-candidate.fit_score, candidate.ticker)), start=1):
         reference = _candidate_reference_readout(item)
+        chart_return_summary = _candidate_chart_return_summary(item)
         rows.append(
             {
                 "Rank": rank,
@@ -4685,8 +4736,8 @@ def build_buy_ideas_frame(candidates: list[ReplacementCandidate]) -> pd.DataFram
                 "Fit": f"{item.fit_score:.1f}/100 ({item.fit_band})",
                 "Role": item.primary_role,
                 "Source": item.universe_source or "Known universe mix",
-                "5Y Return": pct_text(item.stock_5y_return_pct),
-                "5Y vs S&P 500": pct_text(item.relative_5y_return_pct),
+                "5Y Return": pct_text(chart_return_summary.get("stock_5y_return_pct")),
+                "5Y vs S&P 500": pct_text(chart_return_summary.get("relative_5y_return_pct")),
                 "Expense Ratio": _expense_ratio_text(reference.get("expense_ratio")) if item.asset_type == "ETF" else "N/A",
                 "Dividend Yield": percent_display(reference.get("dividend_yield")) if reference.get("dividend_yield") is not None else "N/A",
                 "P/E Ratio": _pe_text(reference.get("trailing_pe")) if item.asset_type != "ETF" else "N/A",
@@ -4824,7 +4875,7 @@ def fetch_buy_idea_long_horizon_series(
     """
     yahoo_symbol = normalize_ticker_for_yahoo(ticker)
     start = (pd.Timestamp.today().normalize() - pd.DateOffset(years=5) - pd.Timedelta(days=15)).strftime("%Y-%m-%d")
-    cache_path = BUY_SERIES_CACHE_DIR / f"{_cache_key('buy_idea_series_v3', yahoo_symbol, benchmark_symbol, start)}.json"
+    cache_path = BUY_SERIES_CACHE_DIR / f"{_cache_key('buy_idea_series_v5_adjusted', yahoo_symbol, benchmark_symbol, start)}.json"
     cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 24)
     if isinstance(cached, list) and _valid_buy_idea_series(cached):
         return cached
@@ -4835,7 +4886,7 @@ def fetch_buy_idea_long_horizon_series(
         progress=False,
         threads=False,
     )
-    close = extract_close_frame(downloaded, [yahoo_symbol, benchmark_symbol])
+    close = extract_adjusted_close_frame(downloaded, [yahoo_symbol, benchmark_symbol])
     if close.empty or yahoo_symbol not in close.columns or benchmark_symbol not in close.columns:
         return []
     frame = pd.concat(
@@ -4901,7 +4952,13 @@ def _valid_buy_idea_series(series: list[dict[str, Any]]) -> bool:
 
 def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
     """Render one 5Y chart next to its corresponding featured buy idea."""
-    fig = go.Figure()
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        column_widths=[0.74, 0.26],
+        specs=[[{"type": "xy"}, {"type": "bar"}]],
+        horizontal_spacing=0.08,
+    )
     if candidate is None:
         fig.add_annotation(
             text="No featured buy idea for this slot.",
@@ -4952,44 +5009,66 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
     frame = frame.dropna(subset=["candidate_return_pct", "benchmark_return_pct"])
     if frame.empty:
         return plot_buy_idea_chart(None)
+    frame = frame.sort_values("date")
+    x_values = [item.to_pydatetime() for item in frame["date"]]
+    candidate_return_values = [float(value) for value in frame["candidate_return_pct"]]
+    benchmark_return_values = [float(value) for value in frame["benchmark_return_pct"]]
     y_min = float(
         min(
-            frame["candidate_return_pct"].min(),
-            frame["benchmark_return_pct"].min(),
+            min(candidate_return_values),
+            min(benchmark_return_values),
         )
     )
     y_max = float(
         max(
-            frame["candidate_return_pct"].max(),
-            frame["benchmark_return_pct"].max(),
+            max(candidate_return_values),
+            max(benchmark_return_values),
         )
     )
     y_padding = max((y_max - y_min) * 0.08, 8.0)
     lower_bound = max(-100.0, min(-10.0, y_min - min(y_padding, 18.0)))
-    latest_candidate_return = float(frame["candidate_return_pct"].iloc[-1])
-    latest_benchmark_return = float(frame["benchmark_return_pct"].iloc[-1])
+    latest_candidate_return = candidate_return_values[-1]
+    latest_benchmark_return = benchmark_return_values[-1]
     relative_return = latest_candidate_return - latest_benchmark_return
     fig.add_trace(
         go.Scatter(
-            x=frame["date"],
-            y=frame["candidate_return_pct"],
+            x=x_values,
+            y=candidate_return_values,
             mode="lines",
             name=candidate.ticker,
             line={"color": "#38bdf8", "width": 2.5},
             hovertemplate="<b>%{x|%b %d, %Y}</b><br>" + f"{candidate.ticker} return: " + "%{y:.1f}%<extra></extra>",
-        )
+        ),
+        row=1,
+        col=1,
     )
     fig.add_trace(
         go.Scatter(
-            x=frame["date"],
-            y=frame["benchmark_return_pct"],
+            x=x_values,
+            y=benchmark_return_values,
             mode="lines",
             name="S&P 500",
             line={"color": "#f59e0b", "width": 1.8, "dash": "dash"},
             hovertemplate="<b>%{x|%b %d, %Y}</b><br>S&P 500 return: %{y:.1f}%<extra></extra>",
-        )
+        ),
+        row=1,
+        col=1,
     )
-    fig.add_hline(y=0, line_dash="dot", line_color="rgba(148,163,184,0.35)")
+    fig.add_trace(
+        go.Bar(
+            x=[candidate.ticker, "S&P 500"],
+            y=[latest_candidate_return, latest_benchmark_return],
+            marker={"color": ["#38bdf8", "#f59e0b"]},
+            text=[f"{latest_candidate_return:.1f}%", f"{latest_benchmark_return:.1f}%"],
+            textposition="outside",
+            showlegend=False,
+            hovertemplate="<b>%{x}</b><br>5Y return: %{y:.1f}%<extra></extra>",
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_hline(y=0, line_dash="dot", line_color="rgba(148,163,184,0.35)", row=1, col=1)
+    fig.add_hline(y=0, line_dash="dot", line_color="rgba(148,163,184,0.35)", row=1, col=2)
 
     fig.update_layout(
         title=(
@@ -5011,8 +5090,29 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
         gridcolor="rgba(148,163,184,0.14)",
         range=[lower_bound, y_max + y_padding],
         ticksuffix="%",
+        row=1,
+        col=1,
     )
-    fig.update_xaxes(gridcolor="rgba(148,163,184,0.14)")
+    bar_upper_bound = max(latest_candidate_return, latest_benchmark_return, 0.0) * 1.25 + 8.0
+    fig.update_yaxes(
+        title_text="Final 5Y return",
+        gridcolor="rgba(148,163,184,0.14)",
+        range=[min(0.0, latest_candidate_return, latest_benchmark_return) - 10.0, bar_upper_bound],
+        ticksuffix="%",
+        row=1,
+        col=2,
+    )
+    fig.update_xaxes(
+        gridcolor="rgba(148,163,184,0.14)",
+        range=[x_values[0], x_values[-1]],
+        row=1,
+        col=1,
+    )
+    fig.update_xaxes(
+        gridcolor="rgba(148,163,184,0.10)",
+        row=1,
+        col=2,
+    )
     return fig
 
 

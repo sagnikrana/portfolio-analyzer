@@ -3714,15 +3714,15 @@ def _gap_score_for_candidate(
 
     if gap.gap_key == "diversified_core":
         if candidate.is_core:
-            score += 26
+            score += 18
             reasons.append("it adds broader, steadier core exposure")
         if candidate.primary_role in {"Core benchmark ballast", "Core diversification"}:
-            score += 20
+            score += 14
             reasons.append("its role is already aligned with rebuilding the portfolio's core")
         if candidate.asset_type == "ETF":
-            score += 8
+            score += 5
         if candidate.sector == "Broad Market":
-            score += 8
+            score += 5
         if rel_3y is not None and rel_3y >= 0:
             score += 6
             evidence.append(f"3Y vs S&P 500: {rel_3y:.1%}")
@@ -3793,6 +3793,14 @@ def _gap_score_for_candidate(
         evidence.append(f"5Y vs S&P 500: {rel_5y:.1%}")
     elif rel_5y is not None and rel_5y < -0.30:
         score -= 10
+
+    if candidate.sector == "Broad Market" and rel_5y is not None:
+        if rel_5y < -0.015:
+            score -= 12
+            reasons.append("it is a diversification tool, but it has trailed the S&P 500 over five years")
+        elif rel_5y < 0.015:
+            score -= 7
+            reasons.append("it is a diversification tool rather than a clear return leader")
 
     return round(score, 1), _unique_nonempty(reasons), _unique_nonempty(evidence)
 
@@ -3911,6 +3919,8 @@ def _select_replacement_candidate_slate(
             return False
         broad_market_count = sum(existing["entry"].sector == "Broad Market" for existing in selected)
         if broad_market_count >= 2 and entry.sector == "Broad Market" and float(item["fit_score"]) < 80.0:
+            return False
+        if broad_market_count >= 1 and entry.sector == "Broad Market" and float(item["fit_score"]) < 82.0:
             return False
         same_sector_count = sum(existing["entry"].sector == entry.sector for existing in selected)
         if (
