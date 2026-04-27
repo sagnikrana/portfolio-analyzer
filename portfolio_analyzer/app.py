@@ -7,6 +7,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+import html
 import hashlib
 import pickle
 from collections import Counter, defaultdict, deque
@@ -76,9 +77,13 @@ APP_CACHE_DIR = INTERIM_DIR / "app_cache"
 MARKET_CACHE_DIR = APP_CACHE_DIR / "market_data"
 SECTOR_CACHE_DIR = APP_CACHE_DIR / "sector_labels"
 BUY_SERIES_CACHE_DIR = APP_CACHE_DIR / "buy_series"
+LLM_EXPLANATION_CACHE_DIR = APP_CACHE_DIR / "llm_explanations"
 BUY_CANDIDATE_UNIVERSE_PATH = RAW_DIR / "buy_candidate_universe.csv"
 BUY_CANDIDATE_UNIVERSE_ENRICHED_PATH = STRUCTURED_DIR / "buy_candidate_universe_enriched.csv"
-DEFAULT_MODEL_NAME = "gemma:2b"
+PRIMARY_LLM_MODEL = "llama3.3:latest"
+FALLBACK_LLM_MODEL = "llama3.1:latest"
+FAST_DEV_LLM_MODEL = "gemma:2b"
+DEFAULT_MODEL_NAME = PRIMARY_LLM_MODEL
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 BENCHMARK_SYMBOL = "^GSPC"
 PROJECTION_YEARS = 18
@@ -1967,6 +1972,285 @@ def call_ollama(
     return content.strip()
 
 
+@lru_cache(maxsize=8)
+def preferred_risk_action_llm_model(base_url: str = OLLAMA_BASE_URL) -> str | None:
+    """Pick the best local Ollama model available for explanation-only text.
+
+    The portfolio math, ranking, and action sizing are already decided by the
+    deterministic diagnosis layer. This selector only chooses a local model for
+    rewriting that evidence into user-friendly language inside the dashboard.
+    """
+    for model_name in (PRIMARY_LLM_MODEL, FALLBACK_LLM_MODEL, FAST_DEV_LLM_MODEL):
+        if ollama_available(model_name, base_url=base_url):
+            return model_name
+    return None
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    """Parse a JSON object from an LLM response, tolerating fenced output."""
+    raw = str(text or "").strip()
+    raw = re.sub(r"^```(?:json)?", "", raw, flags=re.IGNORECASE).strip()
+    raw = re.sub(r"```$", "", raw).strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+        if not match:
+            raise
+        parsed = json.loads(match.group(0))
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _clean_llm_explanation(parsed: dict[str, Any]) -> dict[str, str]:
+    """Keep only the fields the Risk Actions UI knows how to render."""
+    required_keys = [
+        "headline",
+        "plain_english_summary",
+        "why_now",
+        "external_context",
+        "what_improves",
+        "watchout",
+        "confidence_note",
+    ]
+    cleaned: dict[str, str] = {}
+    for key in required_keys:
+        value = parsed.get(key)
+        if isinstance(value, list):
+            value = " ".join(str(item) for item in value if item)
+        cleaned[key] = str(value or "").strip()
+    return cleaned
+
+
+def _risk_action_deterministic_explanation(item: Any) -> dict[str, str]:
+    """Fallback explanation used when Ollama is unavailable or returns invalid JSON."""
+    external_context = (
+        " ".join(item.explicit_sell_modifiers[:2])
+        if getattr(item, "explicit_sell_modifiers", None)
+        else "No extra company-report, news, or macro signal was strong enough to change the action."
+    )
+    watchout = (
+        str(item.guardrail_notes[0])
+        if getattr(item, "guardrail_notes", None)
+        else "This is a portfolio-risk action, not a prediction that the stock cannot recover."
+    )
+    return {
+        "headline": f"{item.recommendation_label} {item.ticker}: the holding has lagged the market while still adding portfolio pressure.",
+        "plain_english_summary": str(item.recommendation_summary or ""),
+        "why_now": str(item.what_changed or item.why_it_matters or ""),
+        "external_context": external_context,
+        "what_improves": str(item.portfolio_impact_summary or ""),
+        "watchout": watchout,
+        "confidence_note": f"Confidence is {item.confidence_band}. The action size still comes from the deterministic risk engine.",
+        "_source": "Rule-based fallback",
+    }
+
+
+def _risk_action_external_context(diagnosis: PortfolioRiskDiagnosis, item: Any) -> dict[str, Any]:
+    """Collect the company, news, filing, and macro context allowed into the LLM prompt."""
+    ticker = str(getattr(item, "ticker", "") or "")
+    narrative_rows: list[dict[str, Any]] = []
+    for evidence in diagnosis.narrative_evidence:
+        if evidence.ticker != ticker:
+            continue
+        narrative_rows.append(
+            {
+                "source_type": evidence.source_type,
+                "date": evidence.document_date,
+                "title": evidence.title,
+                "snippet": compact_text_snippet(evidence.snippet, 260),
+            }
+        )
+
+    fundamentals = next((entry for entry in diagnosis.holding_fundamentals if entry.ticker == ticker), None)
+    macro_context = diagnosis.macro_context
+    return {
+        "narrative_evidence": narrative_rows[:4],
+        "fundamental_snapshot": (
+            {
+                "company_name": fundamentals.company_name,
+                "sector": fundamentals.sector,
+                "beta": fundamentals.beta,
+                "latest_filed_date": fundamentals.latest_filed_date,
+                "signals": fundamentals.signals[:5],
+            }
+            if fundamentals
+            else None
+        ),
+        "macro_context": (
+            {
+                "as_of_date": macro_context.as_of_date,
+                "summary": macro_context.summary,
+                "flags": [humanize_macro_flag(flag) for flag in macro_context.regime_flags[:4]],
+            }
+            if macro_context
+            else None
+        ),
+    }
+
+
+def _risk_action_llm_payload(diagnosis: PortfolioRiskDiagnosis, item: Any) -> dict[str, Any]:
+    """Build a compact, auditable payload for the Risk Actions explanation model."""
+    return make_json_safe(
+        {
+            "ticker": item.ticker,
+            "sector": item.sector,
+            "precomputed_action": {
+                "label": item.recommendation_label,
+                "shares_to_sell": item.shares_to_sell,
+                "value_to_sell": item.value_to_sell,
+                "position_reduction_pct": item.position_reduction_pct,
+                "current_weight": item.current_weight,
+                "target_weight_after_action": item.target_weight_after_action,
+                "confidence_band": item.confidence_band,
+            },
+            "performance_evidence": {
+                "since_buy_window": item.performance_window_label,
+                "holding_return": item.holding_return_pct,
+                "sp500_return_same_window": item.benchmark_return_pct,
+                "relative_vs_sp500_same_window": item.relative_performance_vs_benchmark,
+                "relative_1y": item.relative_1y_return_pct,
+                "relative_3y": item.relative_3y_return_pct,
+                "relative_5y": item.relative_5y_return_pct,
+            },
+            "portfolio_risk_evidence": {
+                "primary_concern": item.linked_primary_concern,
+                "diagnosis_pressure_score": item.diagnosis_pressure_score,
+                "projected_weight_reduction": item.projected_weight_reduction_pct_points,
+                "projected_variance_reduction": item.projected_variance_reduction_pct_points,
+                "projected_lag_reduction": item.projected_relative_drag_reduction_pct_points,
+            },
+            "existing_explanation": {
+                "summary": item.recommendation_summary,
+                "what_changed": item.what_changed,
+                "why_it_matters": item.why_it_matters,
+                "amount_rationale": item.amount_rationale,
+                "portfolio_impact_summary": item.portfolio_impact_summary,
+                "portfolio_impact_bullets": item.portfolio_impact_bullets[:4],
+                "explicit_sell_modifiers": item.explicit_sell_modifiers[:4],
+                "guardrails": item.guardrail_notes[:3],
+            },
+            "external_context": _risk_action_external_context(diagnosis, item),
+        }
+    )
+
+
+def generate_risk_action_llm_explanation(diagnosis: PortfolioRiskDiagnosis, item: Any) -> dict[str, str]:
+    """Generate a cached plain-English Risk Actions explanation with Ollama.
+
+    The LLM is deliberately boxed in: it receives the deterministic action,
+    evidence, and sizing, then rewrites that information for a non-technical
+    investor. It must not change the action label, sell amount, ranking, or
+    confidence. If the local model is unavailable, the dashboard keeps working
+    with a rule-based explanation.
+    """
+    payload = _risk_action_llm_payload(diagnosis, item)
+    model_name = preferred_risk_action_llm_model()
+    if not model_name:
+        return _risk_action_deterministic_explanation(item)
+
+    cache_path = LLM_EXPLANATION_CACHE_DIR / f"risk_action_{_cache_key('risk_action_llm_v1', model_name, payload)}.json"
+    cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 24 * 14)
+    if isinstance(cached, dict) and cached.get("headline"):
+        return {str(key): str(value) for key, value in cached.items()}
+
+    system_prompt = (
+        "You explain portfolio risk actions in plain English. "
+        "Use only the supplied JSON evidence. Do not invent news, fundamentals, prices, or future outcomes. "
+        "Do not change the action, amount, ranking, or confidence. "
+        "Avoid jargon such as beta, market-relative risk, restrictive-rate sensitivity, 10-Q, and 10-K unless you immediately translate it. "
+        "Be specific about what the company reports, news, or macro evidence contributed when that evidence exists. "
+        "Return JSON only."
+    )
+    user_prompt = (
+        "Rewrite this risk action for a regular investor. "
+        "Return exactly these JSON keys: headline, plain_english_summary, why_now, external_context, what_improves, watchout, confidence_note. "
+        "Each value should be one concise sentence. "
+        "If external evidence is thin, say that plainly.\n\n"
+        f"Evidence payload:\n{json.dumps(payload, indent=2)}"
+    )
+
+    try:
+        raw = call_ollama(
+            model_name,
+            [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            temperature=0.1,
+            num_predict=520,
+        )
+        cleaned = _clean_llm_explanation(_extract_json_object(raw))
+        if not cleaned.get("headline") or not cleaned.get("plain_english_summary"):
+            raise ValueError("Ollama response did not include the required explanation fields.")
+        cleaned["_source"] = f"Ollama: {model_name}"
+        _write_json_cache(cache_path, cleaned)
+        return cleaned
+    except Exception:
+        return _risk_action_deterministic_explanation(item)
+
+
+def generate_risk_action_llm_explanations(diagnosis: PortfolioRiskDiagnosis, items: list[Any]) -> dict[str, dict[str, str]]:
+    """Generate one explanation per actionable holding with a single cached Ollama call."""
+    actionable_items = [item for item in items if getattr(item, "is_actionable", False)]
+    fallbacks = {str(item.ticker): _risk_action_deterministic_explanation(item) for item in actionable_items}
+    if not actionable_items:
+        return {}
+
+    model_name = preferred_risk_action_llm_model()
+    if not model_name:
+        return fallbacks
+
+    payload_by_ticker = {str(item.ticker): _risk_action_llm_payload(diagnosis, item) for item in actionable_items}
+    cache_path = LLM_EXPLANATION_CACHE_DIR / f"risk_action_batch_{_cache_key('risk_action_llm_batch_v1', model_name, payload_by_ticker)}.json"
+    cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 24 * 14)
+    if isinstance(cached, dict):
+        return {
+            ticker: _clean_llm_explanation(value) | {"_source": str(value.get("_source", f"Ollama: {model_name}"))}
+            if isinstance(value, dict)
+            else fallbacks.get(ticker, {})
+            for ticker, value in cached.items()
+        }
+
+    system_prompt = (
+        "You explain portfolio risk actions in plain English. "
+        "Use only the supplied JSON evidence. Do not invent news, fundamentals, prices, or future outcomes. "
+        "Do not change any action label, sell amount, ranking, or confidence. "
+        "Avoid jargon such as beta, market-relative risk, restrictive-rate sensitivity, 10-Q, and 10-K unless you immediately translate it. "
+        "Return JSON only."
+    )
+    user_prompt = (
+        "For each ticker, rewrite the risk action for a regular investor. "
+        "Return one JSON object keyed by ticker. Each ticker value must contain exactly these keys: "
+        "headline, plain_english_summary, why_now, external_context, what_improves, watchout, confidence_note. "
+        "Each value should be one concise sentence. "
+        "If external evidence is thin for a ticker, say that plainly.\n\n"
+        f"Evidence payload by ticker:\n{json.dumps(payload_by_ticker, indent=2)}"
+    )
+
+    try:
+        raw = call_ollama(
+            model_name,
+            [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            temperature=0.1,
+            num_predict=1800,
+        )
+        parsed = _extract_json_object(raw)
+        cleaned_by_ticker: dict[str, dict[str, str]] = {}
+        for item in actionable_items:
+            ticker = str(item.ticker)
+            value = parsed.get(ticker)
+            if not isinstance(value, dict):
+                cleaned_by_ticker[ticker] = fallbacks[ticker]
+                continue
+            cleaned = _clean_llm_explanation(value)
+            if not cleaned.get("headline") or not cleaned.get("plain_english_summary"):
+                cleaned_by_ticker[ticker] = fallbacks[ticker]
+                continue
+            cleaned["_source"] = f"Ollama: {model_name}"
+            cleaned_by_ticker[ticker] = cleaned
+        _write_json_cache(cache_path, cleaned_by_ticker)
+        return cleaned_by_ticker
+    except Exception:
+        return fallbacks
+
+
 def pct_text(value: float | None) -> str:
     return "N/A" if value is None or pd.isna(value) else f"{value * 100:.2f}%"
 
@@ -3001,6 +3285,12 @@ def render_bold_markers(text: Any) -> str:
     return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", raw)
 
 
+def render_llm_text(text: Any) -> str:
+    """Safely render LLM text while preserving **bold** markers."""
+    escaped = html.escape(str(text or ""), quote=False)
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+
+
 def short_concern_badge(label: str | None) -> str:
     """Shorter concern label for compact dashboard chips."""
     mapping = {
@@ -3702,6 +3992,7 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         )
 
     cards = ""
+    llm_explanations = generate_risk_action_llm_explanations(diagnosis, actionable)
     for item in actionable:
         if item.recommendation_label == "Sell all shares":
             action_line = (
@@ -3737,6 +4028,36 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             f"<li style='margin-bottom:7px'>{note}</li>"
             for note in item.guardrail_notes[:3]
         ) or "<li>No major guardrails were triggered.</li>"
+        llm_explanation = llm_explanations.get(item.ticker) or _risk_action_deterministic_explanation(item)
+        llm_source = llm_explanation.get("_source", "Explanation layer")
+        plain_english_panel = (
+            "<div style='padding:16px 18px;border-radius:16px;"
+            "background:linear-gradient(135deg, rgba(14,116,144,.22), rgba(30,64,175,.16));"
+            "border:1px solid rgba(125,211,252,.22);margin-top:16px'>"
+            "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
+            "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#7dd3fc;font-weight:800'>Plain-English read</div>"
+            f"<div style='font-size:11px;color:#bfdbfe;border:1px solid rgba(125,211,252,.18);border-radius:999px;padding:5px 9px;background:rgba(15,23,42,.34)'>{render_llm_text(llm_source)}</div>"
+            "</div>"
+            f"<div style='font-size:18px;line-height:1.35;color:#f8fafc;font-weight:800;margin-top:10px'>{render_llm_text(llm_explanation.get('headline'))}</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_llm_text(llm_explanation.get('plain_english_summary'))}</div>"
+            "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px'>"
+            "<div style='padding:12px 14px;border-radius:14px;background:rgba(15,23,42,.38);border:1px solid rgba(125,211,252,.14)'>"
+            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Why now</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_llm_text(llm_explanation.get('why_now'))}</div>"
+            "</div>"
+            "<div style='padding:12px 14px;border-radius:14px;background:rgba(15,23,42,.38);border:1px solid rgba(125,211,252,.14)'>"
+            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Company, news, and market context</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_llm_text(llm_explanation.get('external_context'))}</div>"
+            "</div>"
+            "<div style='padding:12px 14px;border-radius:14px;background:rgba(15,23,42,.38);border:1px solid rgba(125,211,252,.14)'>"
+            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>What should improve</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_llm_text(llm_explanation.get('what_improves'))}</div>"
+            "</div>"
+            "</div>"
+            f"<div style='font-size:12px;line-height:1.55;color:#bfdbfe;margin-top:12px'><strong>Watchout:</strong> {render_llm_text(llm_explanation.get('watchout'))}</div>"
+            f"<div style='font-size:12px;line-height:1.55;color:#94a3b8;margin-top:6px'>{render_llm_text(llm_explanation.get('confidence_note'))}</div>"
+            "</div>"
+        )
 
         cards += (
             "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
@@ -3756,6 +4077,7 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             "<div style='font-size:16px;line-height:1.6;color:#e2e8f0;margin-top:14px'>"
             f"{action_line}"
             "</div>"
+            f"{plain_english_panel}"
             f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:10px'>{render_bold_markers(item.recommendation_summary)}</div>"
             "<div style='display:grid;grid-template-columns:minmax(280px,1.2fr) minmax(250px,1fr);gap:16px;margin-top:16px'>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
