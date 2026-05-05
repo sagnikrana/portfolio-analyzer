@@ -2680,6 +2680,7 @@ def build_diagnosis_summary_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.96))'>"
         "<div style='font-size:22px;font-weight:700;color:#f8fafc'>Diagnosis Snapshot and Alignment</div>"
+        f"{section_provenance_note('Rule-based', 'diagnosis object + portfolio metrics', 'rule')}"
         "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>"
         f"{diagnosis.diagnostic_summary}"
         "</div>"
@@ -2892,6 +2893,7 @@ def build_rebalance_plan_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Portfolio Rebalancing Plan</div>"
+        f"{section_provenance_note('Rule-based', 'sell actions + buy slices + portfolio math', 'rule')}"
         f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>{render_bold_markers(plan.summary)}</div>"
         "</div>"
         "<div style='display:grid;grid-template-columns:minmax(280px,1fr) minmax(280px,1fr);gap:16px'>"
@@ -3140,6 +3142,7 @@ def build_next_steps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Next Steps</div>"
+        f"{section_provenance_note('Rule-based', 'ordered from deterministic action objects', 'rule')}"
         f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>{render_bold_markers(next_steps.summary)}</div>"
         f"<div class='metric-strip' style='margin-top:14px'>{top_cards}</div>"
         "</div>"
@@ -3289,6 +3292,61 @@ def render_llm_text(text: Any) -> str:
     """Safely render LLM text while preserving **bold** markers."""
     escaped = html.escape(str(text or ""), quote=False)
     return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+
+
+def provenance_badge(label: str, detail: str, tone: str = "rule") -> str:
+    """Render a compact provenance badge so users know where text came from."""
+    colors = {
+        "llm": ("rgba(14,165,233,.18)", "rgba(125,211,252,.26)", "#bae6fd"),
+        "rule": ("rgba(59,130,246,.14)", "rgba(96,165,250,.22)", "#bfdbfe"),
+        "data": ("rgba(34,197,94,.14)", "rgba(74,222,128,.22)", "#bbf7d0"),
+        "warn": ("rgba(245,158,11,.14)", "rgba(251,191,36,.22)", "#fde68a"),
+    }
+    bg, border, color = colors.get(tone, colors["rule"])
+    return (
+        f"<div style='display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:999px;"
+        f"background:{bg};border:1px solid {border};color:{color};font-size:11px;font-weight:800;"
+        "letter-spacing:.02em;white-space:normal'>"
+        f"<span>{render_llm_text(label)}</span>"
+        f"<span style='opacity:.72;font-weight:600'>{render_llm_text(detail)}</span>"
+        "</div>"
+    )
+
+
+def explanation_source_badge(source: str | None) -> str:
+    """Return an explicit LLM-vs-rule badge for generated explanations."""
+    source_text = str(source or "Rule-based fallback")
+    if source_text.startswith("Ollama:"):
+        model_name = source_text.replace("Ollama:", "", 1).strip()
+        return provenance_badge("LLM-generated", model_name, "llm")
+    return provenance_badge("Rule-based", "deterministic fallback", "rule")
+
+
+def section_provenance_note(kind: str, detail: str, tone: str = "rule") -> str:
+    """Small reusable provenance row for non-LLM dashboard sections."""
+    return (
+        "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:10px'>"
+        f"{provenance_badge(kind, detail, tone)}"
+        "</div>"
+    )
+
+
+def risk_action_metric(label: str, value: str, detail: str, tone: str = "blue") -> str:
+    """Compact metric tile for the redesigned Risk Actions cards."""
+    tone_map = {
+        "red": ("rgba(127,29,29,.20)", "rgba(248,113,113,.24)", "#fecaca"),
+        "green": ("rgba(6,78,59,.20)", "rgba(74,222,128,.22)", "#bbf7d0"),
+        "blue": ("rgba(30,64,175,.18)", "rgba(96,165,250,.22)", "#bfdbfe"),
+        "amber": ("rgba(120,53,15,.18)", "rgba(251,191,36,.22)", "#fde68a"),
+    }
+    bg, border, color = tone_map.get(tone, tone_map["blue"])
+    return (
+        f"<div style='padding:12px 14px;border-radius:15px;background:{bg};border:1px solid {border};min-height:86px'>"
+        f"<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#93c5fd;font-weight:800'>{label}</div>"
+        f"<div style='font-size:20px;line-height:1.15;color:{color};font-weight:900;margin-top:7px'>{value}</div>"
+        f"<div style='font-size:12px;line-height:1.35;color:#cbd5e1;margin-top:7px'>{detail}</div>"
+        "</div>"
+    )
 
 
 def short_concern_badge(label: str | None) -> str:
@@ -3691,6 +3749,7 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:20px;font-weight:800;color:#f8fafc'>Top Holding Drivers</div>"
+        f"{section_provenance_note('Rule-based', 'reason-code framework + evidence tables', 'rule')}"
         "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>For each holding, start with the main portfolio risk it is feeding, then look at the current action read and the evidence that made the diagnosis flag it.</div>"
         f"<div style='margin-top:14px'>{holding_items}</div>"
         "</div>"
@@ -3848,6 +3907,7 @@ def build_confidence_completeness_html(diagnosis: PortfolioRiskDiagnosis) -> str
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Confidence and Completeness</div>"
+        f"{section_provenance_note('Rule-based', 'evidence coverage checks', 'rule')}"
         f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>Overall diagnosis confidence is <strong>{diagnosis.confidence_band}</strong>.</div>"
         f"<div style='font-size:14px;color:#93c5fd;margin-top:10px'>Coverage check: {coverage_count}/{total_count} evidence sources are currently available.</div>"
         "<div style='font-size:14px;color:#cbd5e1;margin-top:12px'>The system should stay explicit about uncertainty, especially when external evidence is thin or incomplete.</div>"
@@ -3958,6 +4018,7 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
             "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
             "<div style='font-size:20px;font-weight:800;color:#f8fafc'>Risk Actions</div>"
+            f"{section_provenance_note('Rule-based', 'sell/trim gate from relative performance + risk pressure', 'rule')}"
             "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No holdings currently meet the stricter sell / trim rule. The current logic only recommends action when a holding has actually been underperforming the S&P 500 over a meaningful period.</div>"
             "</div>"
         )
@@ -4030,13 +4091,26 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         ) or "<li>No major guardrails were triggered.</li>"
         llm_explanation = llm_explanations.get(item.ticker) or _risk_action_deterministic_explanation(item)
         llm_source = llm_explanation.get("_source", "Explanation layer")
+        amount_value = money_text(item.value_to_sell)
+        amount_detail = (
+            "Full exit recommended"
+            if item.recommendation_label == "Sell all shares"
+            else f"{percent_display(item.position_reduction_pct)} of this position"
+        )
+        action_tone = "red" if item.recommendation_label == "Sell all shares" else "amber"
+        action_tiles = (
+            risk_action_metric("Recommended move", item.recommendation_label, amount_value, action_tone)
+            + risk_action_metric("Why it triggered", percent_display(item.relative_performance_vs_benchmark), "vs S&P 500 over the same holding window", "red")
+            + risk_action_metric("New target weight", percent_display(item.target_weight_after_action), amount_detail, "blue")
+            + risk_action_metric("Confidence", item.confidence_band, "decision strength from available evidence", "green" if item.confidence_band == "High" else "amber")
+        )
         plain_english_panel = (
             "<div style='padding:16px 18px;border-radius:16px;"
             "background:linear-gradient(135deg, rgba(14,116,144,.22), rgba(30,64,175,.16));"
             "border:1px solid rgba(125,211,252,.22);margin-top:16px'>"
             "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
             "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#7dd3fc;font-weight:800'>Plain-English read</div>"
-            f"<div style='font-size:11px;color:#bfdbfe;border:1px solid rgba(125,211,252,.18);border-radius:999px;padding:5px 9px;background:rgba(15,23,42,.34)'>{render_llm_text(llm_source)}</div>"
+            f"{explanation_source_badge(llm_source)}"
             "</div>"
             f"<div style='font-size:18px;line-height:1.35;color:#f8fafc;font-weight:800;margin-top:10px'>{render_llm_text(llm_explanation.get('headline'))}</div>"
             f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_llm_text(llm_explanation.get('plain_english_summary'))}</div>"
@@ -4061,46 +4135,42 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
 
         cards += (
             "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
-            "background:rgba(15,23,42,.34);margin-bottom:14px'>"
+            "background:linear-gradient(180deg, rgba(15,23,42,.66), rgba(15,23,42,.32));margin-bottom:18px'>"
             "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
             "<div>"
             f"<div style='font-size:22px;font-weight:800;color:#f8fafc'>{item.ticker}"
             + (f"<span style='font-size:15px;font-weight:500;color:#cbd5e1;margin-left:10px'>({item.sector})</span>" if item.sector else "")
             + "</div>"
-            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Confidence: <strong style='color:#f8fafc'>{item.confidence_band}</strong> · Since-buy window: <strong style='color:#f8fafc'>{percent_display(item.relative_performance_vs_benchmark)}</strong> versus the S&P 500</div>"
+            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>{short_concern_badge(item.linked_primary_concern)} · same-window S&P 500 comparison</div>"
             "</div>"
             "<div style='display:flex;gap:8px;flex-wrap:wrap'>"
             f"<div style='padding:8px 12px;border-radius:999px;background:rgba(127,29,29,.22);border:1px solid rgba(248,113,113,.22);color:#fca5a5;font-size:12px;font-weight:700'>{item.recommendation_label}</div>"
-            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:#93c5fd;font-size:12px;font-weight:700'>{short_concern_badge(item.linked_primary_concern)}</div>"
+            f"{explanation_source_badge(llm_source)}"
             "</div>"
             "</div>"
-            "<div style='font-size:16px;line-height:1.6;color:#e2e8f0;margin-top:14px'>"
-            f"{action_line}"
-            "</div>"
+            f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:16px'>{action_tiles}</div>"
+            f"<div style='font-size:15px;line-height:1.6;color:#e2e8f0;margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(15,23,42,.38);border:1px solid rgba(148,163,184,.12)'>{action_line}</div>"
             f"{plain_english_panel}"
-            f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:10px'>{render_bold_markers(item.recommendation_summary)}</div>"
-            "<div style='display:grid;grid-template-columns:minmax(280px,1.2fr) minmax(250px,1fr);gap:16px;margin-top:16px'>"
+            "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:16px'>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What changed</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Decision math</div>"
             f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.what_changed)}</div>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Why that matters</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.why_it_matters)}</div>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Why this amount</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.amount_rationale)}</div>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Extra reasoning</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:10px'>{render_bold_markers(item.amount_rationale)}</div>"
             f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{reasoning}</ul>"
             "</div>"
             "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Recent performance vs the S&P 500</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Recent performance check</div>"
             f"<div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px'>{performance_window_chip('1Y', item.relative_1y_return_pct)}{performance_window_chip('3Y', item.relative_3y_return_pct)}{performance_window_chip('5Y', item.relative_5y_return_pct)}</div>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>What likely improves if you do this</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800;margin-top:16px'>What likely improves</div>"
             f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.portfolio_impact_summary)}</div>"
             f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{impacts}</ul>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Extra market and company signals that added pressure</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{modifiers}</ul>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Evidence used</div>"
+            "</div>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.32);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Evidence trail</div>"
             f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence}</ul>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>What kept this from being more aggressive</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800;margin-top:16px'>External pressure signals</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{modifiers}</ul>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800;margin-top:16px'>What kept this from being more aggressive</div>"
             f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{guardrails}</ul>"
             "</div>"
             "</div>"
@@ -4130,6 +4200,10 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Risk Actions</div>"
+        "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:10px'>"
+        f"{provenance_badge('Rule-based action engine', 'decides sell/trim labels and amounts', 'rule')}"
+        f"{provenance_badge('LLM explanation layer', 'only rewrites evidence when Ollama is available', 'llm')}"
+        "</div>"
         "<div style='font-size:14px;color:#93c5fd;margin-top:8px'>This tab is narrower than a full rebalance engine. It focuses on one question: which holdings now have enough underperformance versus the S&P 500, combined with portfolio risk and recent company or market caution signals, to justify trimming or selling.</div>"
         f"<div style='margin-top:16px'>{impact_section}{cards}</div>"
         "</div>"
@@ -4900,6 +4974,7 @@ def build_buy_ideas_html(
         "<div style='display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap'>"
         "<div>"
         "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Ideas</div>"
+        f"{section_provenance_note('Rule-based', 'fit scoring + market data + preference constraints', 'rule')}"
         "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>Each selected buy idea is shown with its own full explanation and 5-year chart right beside it.</div>"
         "</div>"
         f"<div style='display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end'>{summary_chips}</div>"
@@ -5642,6 +5717,7 @@ def build_portfolio_gaps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
         "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Portfolio Gaps</div>"
+        f"{section_provenance_note('Rule-based', 'gap engine after trims and constraints', 'rule')}"
         "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>Why buy anything at all? This view shows what the portfolio still needs after the current trims, before we suggest any names.</div>"
         f"<div class='metric-strip' style='margin-top:14px'>{quick_cards}</div>"
         "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10);margin-top:16px'>"
