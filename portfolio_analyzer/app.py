@@ -102,6 +102,36 @@ MAX_STABLE_WEEKLY_RETURN = 0.75
 MAX_FEATURED_BUY_IDEA_COUNT = 20
 
 
+def empty_dashboard_plot(message: str = "Run analysis to populate this chart") -> go.Figure:
+    """Return a harmless placeholder figure for chart slots before analysis runs.
+
+    Gradio 3.x can visually render empty Plot components as red `Error` badges
+    even when the backend has not failed. Initializing chart slots with a valid
+    Plotly figure keeps the dashboard calm and makes real failures easier to see.
+    """
+    fig = go.Figure()
+    fig.add_annotation(
+        text=message,
+        x=0.5,
+        y=0.5,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        font={"color": "#93c5fd", "size": 16},
+        align="center",
+    )
+    fig.update_layout(
+        height=360,
+        margin={"l": 24, "r": 24, "t": 36, "b": 24},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(17,24,39,0.55)",
+        font={"color": "#e2e8f0"},
+        xaxis={"visible": False},
+        yaxis={"visible": False},
+    )
+    return fig
+
+
 def _ensure_cache_dir(path: Path) -> None:
     """Create a cache directory lazily when a cacheable path is used."""
     path.mkdir(parents=True, exist_ok=True)
@@ -2148,7 +2178,7 @@ def generate_risk_action_llm_explanation(diagnosis: PortfolioRiskDiagnosis, item
     if not model_name:
         return _risk_action_deterministic_explanation(item)
 
-    cache_path = LLM_EXPLANATION_CACHE_DIR / f"risk_action_{_cache_key('risk_action_llm_v1', model_name, payload)}.json"
+    cache_path = LLM_EXPLANATION_CACHE_DIR / f"risk_action_{_cache_key('risk_action_llm_v2', model_name, payload)}.json"
     cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 24 * 14)
     if isinstance(cached, dict) and cached.get("headline"):
         return {str(key): str(value) for key, value in cached.items()}
@@ -2159,12 +2189,16 @@ def generate_risk_action_llm_explanation(diagnosis: PortfolioRiskDiagnosis, item
         "Do not change the action, amount, ranking, or confidence. "
         "Avoid jargon such as beta, market-relative risk, restrictive-rate sensitivity, 10-Q, and 10-K unless you immediately translate it. "
         "Be specific about what the company reports, news, or macro evidence contributed when that evidence exists. "
+        "Do not say vague phrases like 'be cautious of company-specific risk' or 'benchmark lag' without explaining what that means for the investor. "
+        "Prefer concrete language: what happened, why it matters now, what would improve after the trim, and what would change the recommendation later. "
         "Return JSON only."
     )
     user_prompt = (
         "Rewrite this risk action for a regular investor. "
         "Return exactly these JSON keys: headline, plain_english_summary, why_now, external_context, what_improves, watchout, confidence_note. "
-        "Each value should be one concise sentence. "
+        "Each value should be one concise sentence, but include the most important number when it is supplied. "
+        "The headline should be action-oriented and not begin with 'The system recommends'. "
+        "The watchout should be useful and specific: explain what could make the trim too aggressive or what evidence should be monitored next. "
         "If external evidence is thin, say that plainly.\n\n"
         f"Evidence payload:\n{json.dumps(payload, indent=2)}"
     )
@@ -2198,7 +2232,7 @@ def generate_risk_action_llm_explanations(diagnosis: PortfolioRiskDiagnosis, ite
         return fallbacks
 
     payload_by_ticker = {str(item.ticker): _risk_action_llm_payload(diagnosis, item) for item in actionable_items}
-    cache_path = LLM_EXPLANATION_CACHE_DIR / f"risk_action_batch_{_cache_key('risk_action_llm_batch_v1', model_name, payload_by_ticker)}.json"
+    cache_path = LLM_EXPLANATION_CACHE_DIR / f"risk_action_batch_{_cache_key('risk_action_llm_batch_v2', model_name, payload_by_ticker)}.json"
     cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 24 * 14)
     if isinstance(cached, dict):
         return {
@@ -2213,13 +2247,17 @@ def generate_risk_action_llm_explanations(diagnosis: PortfolioRiskDiagnosis, ite
         "Use only the supplied JSON evidence. Do not invent news, fundamentals, prices, or future outcomes. "
         "Do not change any action label, sell amount, ranking, or confidence. "
         "Avoid jargon such as beta, market-relative risk, restrictive-rate sensitivity, 10-Q, and 10-K unless you immediately translate it. "
+        "Do not use vague phrases like 'be cautious of company-specific risk' or 'benchmark lag' without explaining what that means for the investor. "
+        "Prefer concrete language: what happened, why it matters now, what improves after the trim, and what would change the recommendation later. "
         "Return JSON only."
     )
     user_prompt = (
         "For each ticker, rewrite the risk action for a regular investor. "
         "Return one JSON object keyed by ticker. Each ticker value must contain exactly these keys: "
         "headline, plain_english_summary, why_now, external_context, what_improves, watchout, confidence_note. "
-        "Each value should be one concise sentence. "
+        "Each value should be one concise sentence, but include the most important number when it is supplied. "
+        "The headline should be action-oriented and not begin with 'The system recommends'. "
+        "The watchout should be useful and specific: explain what could make the trim too aggressive or what evidence should be monitored next. "
         "If external evidence is thin for a ticker, say that plainly.\n\n"
         f"Evidence payload by ticker:\n{json.dumps(payload_by_ticker, indent=2)}"
     )
@@ -4007,11 +4045,32 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
     return frame.sort_values(["_sort", "Ticker"]).drop(columns=["_sort"]).reset_index(drop=True)
 
 
-def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
+def update_risk_actions_view(
+    diagnosis_payload: dict[str, Any] | None,
+    view_mode: str,
+) -> str:
+    """Re-render Risk Actions when the user switches the radio-button view."""
+    if not diagnosis_payload:
+        return (
+            "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+            "<div style='font-size:20px;font-weight:800;color:#f8fafc'>Risk Actions</div>"
+            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>Run analysis first, then use the view selector to switch between summary and evidence.</div>"
+            "</div>"
+        )
+    diagnosis = PortfolioRiskDiagnosis.model_validate(diagnosis_payload)
+    return build_risk_actions_html(diagnosis, view_mode=view_mode)
+
+
+def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis, view_mode: str = "Action Summary") -> str:
     """Render simple sell/trim guidance backed by relative performance windows."""
     actionable = [item for item in diagnosis.holding_action_recommendations if item.is_actionable]
     held = [item for item in diagnosis.holding_action_recommendations if not item.is_actionable][:4]
     action_impact = diagnosis.portfolio_action_impact
+    normalized_view = str(view_mode or "Action Summary").strip()
+    show_summary = normalized_view == "Action Summary"
+    show_evidence = normalized_view == "Evidence Trail"
+    show_full = normalized_view == "Full Detail"
 
     if not actionable:
         return (
@@ -4132,6 +4191,51 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             f"<div style='font-size:12px;line-height:1.55;color:#94a3b8;margin-top:6px'>{render_llm_text(llm_explanation.get('confidence_note'))}</div>"
             "</div>"
         )
+        decision_math_card = (
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Decision math</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.what_changed)}</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:10px'>{render_bold_markers(item.amount_rationale)}</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{reasoning}</ul>"
+            "</div>"
+        )
+        performance_card = (
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Recent performance check</div>"
+            f"<div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px'>{performance_window_chip('1Y', item.relative_1y_return_pct)}{performance_window_chip('3Y', item.relative_3y_return_pct)}{performance_window_chip('5Y', item.relative_5y_return_pct)}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800;margin-top:16px'>What likely improves</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.portfolio_impact_summary)}</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{impacts}</ul>"
+            "</div>"
+        )
+        evidence_card = (
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.32);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Evidence trail</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence}</ul>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800;margin-top:16px'>External pressure signals</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{modifiers}</ul>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800;margin-top:16px'>What kept this from being more aggressive</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{guardrails}</ul>"
+            "</div>"
+        )
+        if show_summary:
+            detail_section = (
+                "<div style='font-size:12px;color:#93c5fd;margin-top:12px'>"
+                "Switch to Evidence Trail or Full Detail above if you want to inspect the raw evidence behind this recommendation."
+                "</div>"
+            )
+        elif show_evidence:
+            detail_section = (
+                "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:16px'>"
+                f"{evidence_card}"
+                "</div>"
+            )
+        else:
+            detail_section = (
+                "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:16px'>"
+                f"{decision_math_card}{performance_card}{evidence_card}"
+                "</div>"
+            )
 
         cards += (
             "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
@@ -4151,29 +4255,7 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:16px'>{action_tiles}</div>"
             f"<div style='font-size:15px;line-height:1.6;color:#e2e8f0;margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(15,23,42,.38);border:1px solid rgba(148,163,184,.12)'>{action_line}</div>"
             f"{plain_english_panel}"
-            "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:16px'>"
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Decision math</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.what_changed)}</div>"
-            f"<div style='font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:10px'>{render_bold_markers(item.amount_rationale)}</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{reasoning}</ul>"
-            "</div>"
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Recent performance check</div>"
-            f"<div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px'>{performance_window_chip('1Y', item.relative_1y_return_pct)}{performance_window_chip('3Y', item.relative_3y_return_pct)}{performance_window_chip('5Y', item.relative_5y_return_pct)}</div>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800;margin-top:16px'>What likely improves</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.portfolio_impact_summary)}</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{impacts}</ul>"
-            "</div>"
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.32);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Evidence trail</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence}</ul>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800;margin-top:16px'>External pressure signals</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{modifiers}</ul>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800;margin-top:16px'>What kept this from being more aggressive</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{guardrails}</ul>"
-            "</div>"
-            "</div>"
+            f"{detail_section}"
             "</div>"
         )
 
@@ -4203,6 +4285,7 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:10px'>"
         f"{provenance_badge('Rule-based action engine', 'decides sell/trim labels and amounts', 'rule')}"
         f"{provenance_badge('LLM explanation layer', 'only rewrites evidence when Ollama is available', 'llm')}"
+        f"{provenance_badge('Current view', normalized_view, 'data')}"
         "</div>"
         "<div style='font-size:14px;color:#93c5fd;margin-top:8px'>This tab is narrower than a full rebalance engine. It focuses on one question: which holdings now have enough underperformance versus the S&P 500, combined with portfolio risk and recent company or market caution signals, to justify trimming or selling.</div>"
         f"<div style='margin-top:16px'>{impact_section}{cards}</div>"
@@ -4989,6 +5072,7 @@ def build_buy_idea_card_html(
     diagnosis: PortfolioRiskDiagnosis,
     candidate: ReplacementCandidate | None,
     rank: int,
+    view_mode: str = "Quick Read",
 ) -> str:
     """Render one featured buy-idea card for a side-by-side stock/chart row."""
     if candidate is None:
@@ -5000,6 +5084,10 @@ def build_buy_idea_card_html(
             "</div>"
         )
 
+    normalized_view = str(view_mode or "Quick Read").strip()
+    show_quick = normalized_view == "Quick Read"
+    show_evidence = normalized_view == "Evidence Detail"
+    show_full = normalized_view == "Full Detail"
     reference = _candidate_reference_readout(candidate)
     chart_return_summary = _candidate_chart_return_summary(candidate)
     external_signals = _candidate_external_signals(diagnosis, candidate, limit=2)
@@ -5056,6 +5144,28 @@ def build_buy_idea_card_html(
             f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_bold_markers(external_signals[0])}</div>"
             "</div>"
         )
+    detail_section = ""
+    if show_quick:
+        detail_section = (
+            "<div style='font-size:12px;color:#93c5fd;margin-top:12px'>"
+            "Switch to Evidence Detail or Full Detail above if you want to inspect why this idea made the list."
+            "</div>"
+        )
+    else:
+        detail_section = (
+            "<div style='display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);gap:14px;margin-top:14px'>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What this could improve</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{improvement_html}</ul>"
+            "</div>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Why it made the list</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence_html}</ul>"
+            "</div>"
+            "</div>"
+        )
+        if show_full:
+            detail_section += signal_row
     return (
         "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
         "background:rgba(15,23,42,.34)'>"
@@ -5080,17 +5190,7 @@ def build_buy_idea_card_html(
         f"<div style='font-size:14px;line-height:1.55;color:#e2e8f0;margin-top:12px'>{render_bold_markers(candidate.why_it_fits)}</div>"
         f"{l5y_hero}"
         f"<div style='font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:8px'>{render_bold_markers(candidate.preference_fit_summary)}</div>"
-        "<div style='display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);gap:14px;margin-top:14px'>"
-        "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
-        "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What this could improve</div>"
-        f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{improvement_html}</ul>"
-        "</div>"
-        "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
-        "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Why it made the list</div>"
-        f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence_html}</ul>"
-        "</div>"
-        "</div>"
-        f"{signal_row}"
+        f"{detail_section}"
         "</div>"
     )
 
@@ -5517,6 +5617,7 @@ def build_buy_idea_feature_slots(
     diagnosis: PortfolioRiskDiagnosis,
     candidates: list[ReplacementCandidate],
     limit: int = MAX_FEATURED_BUY_IDEA_COUNT,
+    view_mode: str = "Quick Read",
 ) -> list[Any]:
     """Build fixed featured buy-idea rows in Gradio output order.
 
@@ -5538,9 +5639,34 @@ def build_buy_idea_feature_slots(
         candidate = featured[idx] if idx < len(featured) else None
         is_visible = candidate is not None
         row_outputs.append(gr.update(visible=is_visible))
-        card_outputs.append(build_buy_idea_card_html(diagnosis, candidate, idx + 1) if is_visible else "")
+        card_outputs.append(build_buy_idea_card_html(diagnosis, candidate, idx + 1, view_mode=view_mode) if is_visible else "")
         plot_outputs.append(plot_buy_idea_chart(candidate) if is_visible else plot_buy_idea_chart(None))
     return [*row_outputs, *card_outputs, *plot_outputs]
+
+
+def update_buy_ideas_view(
+    diagnosis_payload: dict[str, Any] | None,
+    candidates_payload: list[dict[str, Any]] | None,
+    view_mode: str,
+    buy_idea_limit: int,
+) -> list[Any]:
+    """Re-render featured Buy Ideas when the user switches the explanation depth."""
+    if not diagnosis_payload:
+        empty_rows = [gr.update(visible=False) for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
+        empty_cards = ["" for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
+        empty_plots = [plot_buy_idea_chart(None) for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
+        return [*empty_rows, *empty_cards, *empty_plots]
+    diagnosis = PortfolioRiskDiagnosis.model_validate(diagnosis_payload)
+    candidates = [
+        ReplacementCandidate.model_validate(item)
+        for item in (candidates_payload or [])
+    ]
+    return build_buy_idea_feature_slots(
+        diagnosis,
+        candidates,
+        limit=min(int(buy_idea_limit or MAX_FEATURED_BUY_IDEA_COUNT), MAX_FEATURED_BUY_IDEA_COUNT),
+        view_mode=view_mode,
+    )
 
 
 def build_buy_preference_sector_choices(diagnosis: PortfolioRiskDiagnosis) -> list[str]:
@@ -5572,6 +5698,8 @@ def build_user_portfolio_preferences(
     prefer_low_expense_for_dividend_etfs: bool,
     include_existing_holdings: bool,
     buy_idea_limit: int,
+    buy_ideas_view_mode: str = "Quick Read",
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
 ) -> tuple[
     str,
     pd.DataFrame,
@@ -5591,6 +5719,7 @@ def build_user_portfolio_preferences(
     so the user can immediately see how a new constraint changes the candidate
     set.
     """
+    progress(0.05, desc="Reading current diagnosis and preference inputs...")
     if not diagnosis_payload:
         raise gr.Error("Run analysis first so the buy preferences can inherit the current portfolio context.")
 
@@ -5609,6 +5738,7 @@ def build_user_portfolio_preferences(
         allow_etfs = True
         allow_single_stocks = True
 
+    progress(0.20, desc="Building the active PortfolioPreferences object...")
     preferences = portfolio_preferences_from_user_inputs(
         base_preferences=base_preferences,
         budget_to_deploy=budget_to_deploy,
@@ -5624,14 +5754,17 @@ def build_user_portfolio_preferences(
         buy_idea_limit=buy_idea_limit,
         include_existing_holdings=include_existing_holdings,
     )
+    progress(0.38, desc="Ranking buy candidates against the selected preferences...")
     candidates = replacement_candidates_from_user_preferences(
         diagnosis=diagnosis,
         preferences=preferences,
     )
+    progress(0.58, desc="Previewing the rebalance plan with the updated buy ideas...")
     rebalance_plan = portfolio_rebalance_plan_from_user_preferences(
         diagnosis=diagnosis,
         preferences=preferences,
     )
+    progress(0.70, desc="Creating the updated next-step plan...")
     next_steps = portfolio_next_steps_from_user_preferences(
         diagnosis=diagnosis,
         preferences=preferences,
@@ -5645,11 +5778,14 @@ def build_user_portfolio_preferences(
         }
     )
     candidate_payload = [item.model_dump(mode="json") for item in candidates]
+    progress(0.82, desc="Rendering buy idea cards and 5-year comparison charts...")
     featured_buy_outputs = build_buy_idea_feature_slots(
         diagnosis,
         candidates,
         limit=min(int(preferences.buy_idea_limit or MAX_FEATURED_BUY_IDEA_COUNT), MAX_FEATURED_BUY_IDEA_COUNT),
+        view_mode=buy_ideas_view_mode,
     )
+    progress(1.0, desc="Updated buy preferences are ready.")
     return (
         build_buy_preferences_html(preferences),
         build_portfolio_preferences_frame(preferences),
@@ -7332,8 +7468,15 @@ def resolve_ollama_analysis(
         )
 
 
-def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple[Any, ...]:
+def run_analysis(
+    file_obj: Any,
+    risk_profile: int,
+    dataset_source: str,
+    risk_actions_view_mode: str = "Action Summary",
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+) -> tuple[Any, ...]:
     started_at = time.perf_counter()
+    progress(0.01, desc="Starting analysis and locating the portfolio file...")
     if dataset_source == "Use bundled fake dataset":
         csv_path = REPO_ROOT / "data" / "raw" / "fake_mantis_invest.csv"
     else:
@@ -7341,18 +7484,24 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
             raise gr.Error("Upload a Robinhood CSV export first or switch to the bundled fake dataset.")
         csv_path = Path(file_obj.name)
 
+    progress(0.05, desc="Reading transactions from the uploaded file...")
     transactions = load_transactions(csv_path)
     if transactions.empty:
         raise gr.Error("No valid transaction rows were found in the selected file.")
 
+    progress(0.11, desc="Reconstructing lots, cash flows, and current holdings...")
     lot_data = build_lot_analytics(transactions)
     portfolio_summary = summarize_portfolio(transactions, lot_data)
     traded_symbols = sorted(set(transactions.loc[transactions["Instrument"].ne(""), "Instrument"].tolist()))
+
+    progress(0.20, desc=f"Fetching market history for {len(traded_symbols)} traded symbols...")
     market_data = fetch_market_data(
         traded_symbols=traded_symbols,
         benchmark_symbol=BENCHMARK_SYMBOL,
         start_date=portfolio_summary["date_range"]["start"],
     )
+
+    progress(0.34, desc="Computing performance, drawdown, volatility, and risk metrics...")
     market_metrics = build_market_enriched_metrics(
         df=transactions,
         portfolio_summary=portfolio_summary,
@@ -7362,6 +7511,8 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         projection_years=PROJECTION_YEARS,
         stated_risk_score=risk_profile,
     )
+
+    progress(0.48, desc="Saving diagnosis artifacts so the notebook and dashboard use the same evidence...")
     diagnosis_paths = save_diagnosis_artifacts(
         csv_path=csv_path,
         dataset_source=dataset_source,
@@ -7370,6 +7521,8 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         portfolio_summary=portfolio_summary,
         market_metrics=market_metrics,
     )
+
+    progress(0.56, desc="Building the portfolio diagnosis, action objects, and evidence layers...")
     diagnosis = portfolio_risk_diagnosis_from_saved_artifacts(Path(diagnosis_paths["latest_dir"]))
     tables = format_display_tables(market_metrics)
     sector_overview_md = build_sector_overview_markdown(market_metrics)
@@ -7391,8 +7544,12 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         market_metrics,
         market_data,
     )
-    risk_actions_html = build_risk_actions_html(diagnosis)
+
+    progress(0.66, desc="Preparing Risk Actions and plain-English LLM explanations...")
+    risk_actions_html = build_risk_actions_html(diagnosis, view_mode=risk_actions_view_mode)
     risk_actions_df = build_risk_actions_frame(diagnosis)
+
+    progress(0.75, desc="Finding portfolio gaps and generating buy ideas...")
     portfolio_gaps_html = build_portfolio_gaps_html(diagnosis)
     portfolio_gap_fig = plot_portfolio_gaps(diagnosis)
     portfolio_gaps_df = build_portfolio_gap_frame(diagnosis)
@@ -7409,14 +7566,19 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         diagnosis,
         diagnosis.replacement_candidates,
         limit=min(int(buy_idea_limit or MAX_FEATURED_BUY_IDEA_COUNT), MAX_FEATURED_BUY_IDEA_COUNT),
+        view_mode="Quick Read",
     )
     buy_ideas_df = build_buy_ideas_frame(diagnosis.replacement_candidates)
     buy_candidates_payload = [item.model_dump(mode="json") for item in diagnosis.replacement_candidates]
+
+    progress(0.84, desc="Building the rebalancing plan and next-step checklist...")
     rebalance_plan_html = build_rebalance_plan_html(diagnosis)
     rebalance_sectors_fig = plot_rebalance_sectors(diagnosis)
     rebalance_holdings_df = build_rebalance_holdings_frame(diagnosis)
     next_steps_html = build_next_steps_html(diagnosis)
     next_steps_df = build_next_steps_frame(diagnosis)
+
+    progress(0.91, desc="Rendering charts and dashboard cards...")
     buy_preference_sector_choices = build_buy_preference_sector_choices(diagnosis)
     reinvest_choice = (
         "Yes"
@@ -7458,6 +7620,7 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
 
     risk_md = build_risk_explainer_html(risk)
 
+    progress(1.0, desc="Dashboard ready.")
     return (
         summary_cards,
         sector_overview_md,
@@ -7497,15 +7660,15 @@ def run_analysis(file_obj: Any, risk_profile: int, dataset_source: str) -> tuple
         next_steps_html,
         next_steps_df,
         gr.update(choices=buy_preference_sector_choices, value=(base_preferences.sector_preferences if base_preferences is not None else [])),
-        gr.update(value=(base_preferences.budget_to_deploy if base_preferences is not None else None)),
-        gr.update(value=reinvest_choice),
-        gr.update(value=((base_preferences.suggested_max_new_position_pct or 0.08) * 100 if base_preferences is not None else 8.0)),
-        gr.update(value=(base_preferences.stated_risk_score if base_preferences is not None else risk_profile)),
-        gr.update(value=vehicle_preference),
-        gr.update(value=prefer_high_dividend_etfs),
-        gr.update(value=prefer_low_expense_for_dividend_etfs),
-        gr.update(value=include_existing_holdings),
-        gr.update(value=buy_idea_limit),
+        base_preferences.budget_to_deploy if base_preferences is not None else None,
+        reinvest_choice,
+        (base_preferences.suggested_max_new_position_pct or 0.08) * 100 if base_preferences is not None else 8.0,
+        base_preferences.stated_risk_score if base_preferences is not None else risk_profile,
+        vehicle_preference,
+        prefer_high_dividend_etfs,
+        prefer_low_expense_for_dividend_etfs,
+        include_existing_holdings,
+        buy_idea_limit,
         diagnosis_supporting_metrics_df,
         diagnosis_holding_fundamentals_df,
         diagnosis_narrative_evidence_df,
@@ -7663,10 +7826,16 @@ def build_app() -> gr.Blocks:
                     with gr.Tab("Overview", id="overview"):
                         with gr.Row(equal_height=False):
                             with gr.Column(scale=7, min_width=520):
-                                sector_plot = gr.Plot(label="Sector Portfolio Map")
+                                sector_plot = gr.Plot(
+                                    value=empty_dashboard_plot("Run analysis to see the sector map"),
+                                    label="Sector Portfolio Map",
+                                )
                             with gr.Column(scale=5, min_width=360):
                                 sector_overview_md = gr.HTML()
-                        equity_plot = gr.Plot(label="Benchmark")
+                        equity_plot = gr.Plot(
+                            value=empty_dashboard_plot("Run analysis to compare your portfolio with the S&P 500"),
+                            label="Benchmark",
+                        )
                     with gr.Tab("Risk", id="risk"):
                         risk_md = gr.HTML()
                         metric_card_components: list[gr.HTML] = []
@@ -7686,14 +7855,29 @@ def build_app() -> gr.Blocks:
                                         metric_card_components.append(card)
                                         metric_buttons.append(button)
                         volatility_drivers_df = gr.Dataframe(label="Top Drivers of 2025 Volatility", interactive=False)
-                        recent_volatility_plot = gr.Plot(label="Volatility vs S&P 500")
-                        risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
-                        drawdown_plot = gr.Plot(label="Downside Depth vs S&P 500")
+                        recent_volatility_plot = gr.Plot(
+                            value=empty_dashboard_plot("Run analysis to see volatility versus the S&P 500"),
+                            label="Volatility vs S&P 500",
+                        )
+                        risk_evidence_plot = gr.Plot(
+                            value=empty_dashboard_plot("Run analysis to see the evidence behind top risk signals"),
+                            label="Evidence Behind Top Risk Signals",
+                        )
+                        drawdown_plot = gr.Plot(
+                            value=empty_dashboard_plot("Run analysis to see downside depth versus the S&P 500"),
+                            label="Downside Depth vs S&P 500",
+                        )
                     with gr.Tab("Risk Diagnosis", id="risk-diagnosis"):
                         diagnosis_driver_md = gr.HTML()
                         with gr.Row(equal_height=True):
-                            diagnosis_concern_plot = gr.Plot(label="Top Risk Categories")
-                            diagnosis_sector_plot = gr.Plot(label="Sector Crowding View")
+                            diagnosis_concern_plot = gr.Plot(
+                                value=empty_dashboard_plot("Run analysis to rank the top risk categories"),
+                                label="Top Risk Categories",
+                            )
+                            diagnosis_sector_plot = gr.Plot(
+                                value=empty_dashboard_plot("Run analysis to see sector crowding"),
+                                label="Sector Crowding View",
+                            )
                         diagnosis_stock_filter = gr.Dropdown(
                             label="Risk Lens",
                             choices=["Portfolio"],
@@ -7702,13 +7886,25 @@ def build_app() -> gr.Blocks:
                             info="View these risk charts for the full portfolio or a single stock. Stocks are ordered by diagnosis risk.",
                         )
                         with gr.Row(equal_height=True):
-                            diagnosis_recent_volatility_plot = gr.Plot(label="Volatility vs S&P 500")
-                            diagnosis_market_sensitivity_plot = gr.Plot(label="Market Sensitivity vs S&P 500")
+                            diagnosis_recent_volatility_plot = gr.Plot(
+                                value=empty_dashboard_plot("Run analysis to see volatility for this risk lens"),
+                                label="Volatility vs S&P 500",
+                            )
+                            diagnosis_market_sensitivity_plot = gr.Plot(
+                                value=empty_dashboard_plot("Run analysis to see market sensitivity"),
+                                label="Market Sensitivity vs S&P 500",
+                            )
                         with gr.Row(equal_height=True):
-                            diagnosis_drawdown_plot = gr.Plot(label="Downside Depth vs S&P 500")
+                            diagnosis_drawdown_plot = gr.Plot(
+                                value=empty_dashboard_plot("Run analysis to see downside depth"),
+                                label="Downside Depth vs S&P 500",
+                            )
                         diagnosis_macro_md = gr.HTML()
                         with gr.Accordion("Detailed Evidence", open=False):
-                            diagnosis_risk_evidence_plot = gr.Plot(label="Evidence Behind Top Risk Signals")
+                            diagnosis_risk_evidence_plot = gr.Plot(
+                                value=empty_dashboard_plot("Run analysis to see detailed risk evidence"),
+                                label="Evidence Behind Top Risk Signals",
+                            )
                             diagnosis_supporting_metrics_df = gr.Dataframe(
                                 label="Supporting Evidence",
                                 interactive=False,
@@ -7732,6 +7928,12 @@ def build_app() -> gr.Blocks:
                         with gr.Accordion("Diagnosis Snapshot and Alignment", open=False):
                             diagnosis_summary_md = gr.HTML()
                     with gr.Tab("Risk Actions", id="risk-actions"):
+                        risk_actions_view = gr.Radio(
+                            choices=["Action Summary", "Evidence Trail", "Full Detail"],
+                            value="Action Summary",
+                            label="Choose how much explanation to show",
+                            info="Use Summary for a quick read, Evidence Trail for source checks, and Full Detail for review/debugging.",
+                        )
                         risk_actions_md = gr.HTML()
                         risk_actions_df = gr.Dataframe(
                             label="Recommendation Detail",
@@ -7740,7 +7942,10 @@ def build_app() -> gr.Blocks:
                         )
                     with gr.Tab("Portfolio Gaps", id="portfolio-gaps"):
                         portfolio_gaps_md = gr.HTML()
-                        portfolio_gap_plot = gr.Plot(label="What The Portfolio Still Needs Most")
+                        portfolio_gap_plot = gr.Plot(
+                            value=empty_dashboard_plot("Run analysis to see what the portfolio still needs most"),
+                            label="What The Portfolio Still Needs Most",
+                        )
                         portfolio_gaps_df = gr.Dataframe(
                             label="Gap Quick Read",
                             interactive=False,
@@ -7847,6 +8052,12 @@ def build_app() -> gr.Blocks:
                                     wrap=True,
                                 )
                     with gr.Tab("Buy Ideas", id="buy-ideas"):
+                        buy_ideas_view = gr.Radio(
+                            choices=["Quick Read", "Evidence Detail", "Full Detail"],
+                            value="Quick Read",
+                            label="Choose how much buy-idea explanation to show",
+                            info="Quick Read keeps the card short. Evidence Detail adds the reason trail. Full Detail also shows recent external signals.",
+                        )
                         buy_ideas_md = gr.HTML()
                         featured_buy_idea_rows: list[Any] = []
                         featured_buy_idea_cards: list[gr.HTML] = []
@@ -7858,7 +8069,10 @@ def build_app() -> gr.Blocks:
                                     featured_buy_idea_cards.append(gr.HTML())
                                 with gr.Column(scale=6, min_width=520):
                                     featured_buy_idea_plots.append(
-                                        gr.Plot(label=f"Featured Buy Idea #{idx + 1}: 5Y vs S&P 500")
+                                        gr.Plot(
+                                            value=empty_dashboard_plot("Apply analysis to see this buy idea chart"),
+                                            label=f"Featured Buy Idea #{idx + 1}: 5Y vs S&P 500",
+                                        )
                                     )
                         buy_ideas_df = gr.Dataframe(
                             label="Full Ranked Buy Candidate Review",
@@ -7867,7 +8081,10 @@ def build_app() -> gr.Blocks:
                         )
                     with gr.Tab("Portfolio Rebalancing Plan", id="portfolio-rebalancing-plan"):
                         rebalance_plan_md = gr.HTML()
-                        rebalance_sectors_plot = gr.Plot(label="Before vs After Sector Mix")
+                        rebalance_sectors_plot = gr.Plot(
+                            value=empty_dashboard_plot("Run analysis to compare before and after sector mix"),
+                            label="Before vs After Sector Mix",
+                        )
                         rebalance_holdings_df = gr.Dataframe(
                             label="Holding Changes In The Plan",
                             interactive=False,
@@ -7888,7 +8105,7 @@ def build_app() -> gr.Blocks:
 
         analyze_btn.click(
             fn=run_analysis,
-            inputs=[upload, risk_profile, dataset_source],
+            inputs=[upload, risk_profile, dataset_source, risk_actions_view],
             outputs=[
                 cards,
                 sector_overview_md,
@@ -7964,6 +8181,22 @@ def build_app() -> gr.Blocks:
             ],
         )
 
+        risk_actions_view.change(
+            fn=update_risk_actions_view,
+            inputs=[diagnosis_state, risk_actions_view],
+            outputs=[risk_actions_md],
+        )
+
+        buy_ideas_view.change(
+            fn=update_buy_ideas_view,
+            inputs=[diagnosis_state, buy_candidates_state, buy_ideas_view, buy_idea_limit],
+            outputs=[
+                *featured_buy_idea_rows,
+                *featured_buy_idea_cards,
+                *featured_buy_idea_plots,
+            ],
+        )
+
         apply_buy_preferences_btn.click(
             fn=build_user_portfolio_preferences,
             inputs=[
@@ -7978,6 +8211,7 @@ def build_app() -> gr.Blocks:
                 buy_prefer_low_expense_for_dividend_etfs,
                 buy_include_existing_holdings,
                 buy_idea_limit,
+                buy_ideas_view,
             ],
             outputs=[
                 buy_preferences_md,
@@ -8008,10 +8242,10 @@ def build_app() -> gr.Blocks:
 
 
 def launch_app() -> None:
-    app = build_app()
-    # Default to local launch so the dashboard reliably binds to 7861 without
+    app = build_app().queue()
+    # Default to local launch so the dashboard reliably binds to the configured port without
     # depending on Gradio's share tunnel port allocation.
-    app.launch(server_name="127.0.0.1", server_port=7862, share=True)
+    app.launch(server_name="127.0.0.1", server_port=7863, share=True)
 
 
 if __name__ == "__main__":
