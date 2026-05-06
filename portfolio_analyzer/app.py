@@ -85,6 +85,7 @@ FALLBACK_LLM_MODEL = "llama3.1:latest"
 FAST_DEV_LLM_MODEL = "gemma:2b"
 DEFAULT_MODEL_NAME = PRIMARY_LLM_MODEL
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+RISK_ACTION_LLM_TIMEOUT_SECONDS = 25
 BENCHMARK_SYMBOL = "^GSPC"
 PROJECTION_YEARS = 18
 SHORT_HOLD_TARGET_DAYS = round(365.25 * 1.5)
@@ -124,12 +125,17 @@ def empty_dashboard_plot(message: str = "Run analysis to populate this chart") -
         height=360,
         margin={"l": 24, "r": 24, "t": 36, "b": 24},
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
-        font={"color": "#e2e8f0"},
+        plot_bgcolor="rgba(248,250,252,0.92)",
+        font={"color": "#0f172a"},
         xaxis={"visible": False},
         yaxis={"visible": False},
     )
     return fig
+
+
+def noop_progress(*_args: Any, **_kwargs: Any) -> None:
+    """No-op progress callback used while Gradio queue progress is disabled."""
+    return None
 
 
 def _ensure_cache_dir(path: Path) -> None:
@@ -1964,6 +1970,7 @@ def call_ollama(
     base_url: str = OLLAMA_BASE_URL,
     temperature: float = 0.2,
     num_predict: int = 1400,
+    timeout_seconds: int = 60,
 ) -> str:
     payload = {
         "model": model,
@@ -1979,7 +1986,7 @@ def call_ollama(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=600) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             body = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
@@ -2010,7 +2017,7 @@ def preferred_risk_action_llm_model(base_url: str = OLLAMA_BASE_URL) -> str | No
     deterministic diagnosis layer. This selector only chooses a local model for
     rewriting that evidence into user-friendly language inside the dashboard.
     """
-    for model_name in (PRIMARY_LLM_MODEL, FALLBACK_LLM_MODEL, FAST_DEV_LLM_MODEL):
+    for model_name in (FALLBACK_LLM_MODEL, FAST_DEV_LLM_MODEL, PRIMARY_LLM_MODEL):
         if ollama_available(model_name, base_url=base_url):
             return model_name
     return None
@@ -2209,6 +2216,7 @@ def generate_risk_action_llm_explanation(diagnosis: PortfolioRiskDiagnosis, item
             [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             temperature=0.1,
             num_predict=520,
+            timeout_seconds=RISK_ACTION_LLM_TIMEOUT_SECONDS,
         )
         cleaned = _clean_llm_explanation(_extract_json_object(raw))
         if not cleaned.get("headline") or not cleaned.get("plain_english_summary"):
@@ -2267,7 +2275,8 @@ def generate_risk_action_llm_explanations(diagnosis: PortfolioRiskDiagnosis, ite
             model_name,
             [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             temperature=0.1,
-            num_predict=1800,
+            num_predict=900,
+            timeout_seconds=RISK_ACTION_LLM_TIMEOUT_SECONDS,
         )
         parsed = _extract_json_object(raw)
         cleaned_by_ticker: dict[str, dict[str, str]] = {}
@@ -2345,14 +2354,14 @@ def format_display_dataframe(
 
 
 def metric_card(label: str, value: str, subtitle: str = "") -> str:
-    subtitle_md = f"<div style='color:#cbd5e1;font-size:12px'>{subtitle}</div>" if subtitle else ""
+    subtitle_md = f"<div style='color:#475569;font-size:12px'>{subtitle}</div>" if subtitle else ""
     return (
         "<div class='metric-card' style='padding:18px 18px;border:1px solid rgba(148,163,184,.18);"
-        "border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.98), rgba(15,23,42,.94));"
+        "border-radius:18px;background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));"
         "min-height:120px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;"
-        "box-shadow:0 16px 40px rgba(2,6,23,.24)'>"
-        f"<div class='metric-card-label' style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em;line-height:1.25'>{label}</div>"
-        f"<div class='metric-card-value' style='font-size:28px;font-weight:700;margin-top:8px;line-height:1.15;word-break:break-word;color:#f8fafc'>{value}</div>"
+        "box-shadow:0 16px 36px rgba(15,23,42,.08)'>"
+        f"<div class='metric-card-label' style='font-size:12px;color:#2563eb;text-transform:uppercase;letter-spacing:.08em;line-height:1.25'>{label}</div>"
+        f"<div class='metric-card-value' style='font-size:28px;font-weight:700;margin-top:8px;line-height:1.15;word-break:break-word;color:#0f172a'>{value}</div>"
         f"{subtitle_md}</div>"
     )
 
@@ -2630,36 +2639,117 @@ def build_risk_guide_html(risk: dict[str, Any], focused_metric: str | None = Non
 def build_risk_explainer_html(risk: dict[str, Any]) -> str:
     dimension_scores = risk["dimension_scores"]
 
-    def render_dimension_card(title: str, score: float, subtitle: str) -> str:
+    def render_dimension_card(title: str, score: float, subtitle: str, emphasis: str) -> str:
         return (
-            "<div style='padding:14px 16px;border:1px solid rgba(148,163,184,.16);"
-            "border-radius:14px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.92));"
+            "<div style='padding:18px 18px;border:1px solid rgba(148,163,184,.18);"
+            "border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.98), rgba(15,23,42,.92));"
             "box-shadow:0 8px 24px rgba(2,6,23,.18)'>"
             f"<div style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em'>{title}</div>"
-            f"<div style='font-size:28px;font-weight:700;color:#f8fafc;margin-top:8px'>{score:.1f}</div>"
-            f"<div style='font-size:12px;color:#cbd5e1;margin-top:6px'>{subtitle}</div>"
+            f"<div style='font-size:34px;font-weight:800;color:#f8fafc;margin-top:10px'>{score:.1f}/100</div>"
+            f"<div style='font-size:13px;color:#93c5fd;margin-top:6px'>{score_readout(score)}</div>"
+            f"<div style='font-size:14px;color:#e2e8f0;margin-top:12px'>{emphasis}</div>"
+            f"<div style='font-size:12px;color:#94a3b8;margin-top:8px'>{subtitle}</div>"
             "</div>"
         )
 
-    observed_vs_stated = (
-        "about in line with your stated risk"
-        if abs(risk["difference_vs_stated"]) < 8
-        else "higher than your stated risk"
-        if risk["difference_vs_stated"] > 0
-        else "lower than your stated risk"
+    risk_summary = (
+        f"Observed portfolio risk is {risk['score']}/100 ({risk['band']}). "
+        f"Use this tab as the quick risk snapshot; use Risk Diagnosis and Risk Actions for why and what to do."
     )
-    observed_subtitle = f"{risk['band']} · {observed_vs_stated}"
-    market_subtitle = f"Relative to S&P 500 · Confidence: {risk['confidence_band']}"
+    market_confidence = f"Confidence: {risk['confidence_band']}"
 
     return (
         "<div style='display:grid;gap:16px'>"
-        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px'>"
-        f"{render_dimension_card('Observed Risk', risk['score'], observed_subtitle)}"
-        f"{render_dimension_card('Concentration', dimension_scores['concentration_risk'], 'How much a few holdings can dominate outcomes')}"
-        f"{render_dimension_card('Behavior', dimension_scores['behavioral_risk'], 'How patient or active your investing style looks')}"
-        f"{render_dimension_card('Market', dimension_scores['market_risk'], market_subtitle)}"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:24px;font-weight:800;color:#f8fafc'>Risk Snapshot</div>"
+        f"<div style='font-size:14px;color:#cbd5e1;margin-top:8px'>{risk_summary}</div>"
         "</div>"
-        "<div style='font-size:12px;color:#60a5fa'>Each metric card below summarizes what the score is trying to say. Detailed explanations live in the Risk Guide section below.</div>"
+        "<div style='display:grid;grid-template-columns:repeat(3,minmax(220px,1fr));gap:14px'>"
+        f"{render_dimension_card('Concentration Risk', dimension_scores['concentration_risk'], 'Weight in the final risk score: 40%', 'Can one holding or a small group dominate the account?')}"
+        f"{render_dimension_card('Behavior Risk', dimension_scores['behavioral_risk'], 'Weight in the final risk score: 20%', 'Does the trading pattern add avoidable risk?')}"
+        f"{render_dimension_card('Market Risk', dimension_scores['market_risk'], market_confidence, 'Has the portfolio been rougher or more sensitive than the S&P 500?')}"
+        "</div>"
+        "<div style='font-size:12px;color:#60a5fa'>The cards below break those three risk families into the specific signals behind each score.</div>"
+        "</div>"
+    )
+
+
+def build_overview_risk_snapshot_html(risk: dict[str, Any]) -> str:
+    """Render a compact, user-facing risk summary for the Overview tab.
+
+    The standalone Risk tab is intentionally hidden for now because the deeper
+    evidence already lives in Risk Diagnosis and Risk Actions. This snapshot is
+    the 10-second bridge: it shows the three risk families, names the dominant
+    one, and points the user to the more detailed tabs only if they want to dig.
+    """
+    dimension_scores = risk.get("dimension_scores", {})
+    risk_items = [
+        (
+            "Concentration",
+            float(dimension_scores.get("concentration_risk", 0.0)),
+            "Can a few holdings dominate the account?",
+            "#2563eb",
+            "rgba(37,99,235,.10)",
+        ),
+        (
+            "Market",
+            float(dimension_scores.get("market_risk", 0.0)),
+            "Has the portfolio been rougher or more sensitive than the S&P 500?",
+            "#ea580c",
+            "rgba(249,115,22,.11)",
+        ),
+        (
+            "Behavior",
+            float(dimension_scores.get("behavioral_risk", 0.0)),
+            "Is trading behavior adding avoidable risk?",
+            "#0f766e",
+            "rgba(20,184,166,.11)",
+        ),
+    ]
+    dominant_label, dominant_score, *_ = max(risk_items, key=lambda item: item[1])
+    alignment = risk.get("alignment") or "Alignment not available yet"
+    confidence = risk.get("confidence_band") or "Unknown"
+    risk_band = risk.get("band") or "Not available"
+    score = risk.get("score", "N/A")
+
+    def card(label: str, value: float, question: str, accent: str, background: str) -> str:
+        clipped_value = max(0.0, min(100.0, value))
+        return (
+            "<div style='padding:16px;border-radius:18px;border:1px solid rgba(148,163,184,.22);"
+            f"background:linear-gradient(180deg, #ffffff, {background});box-shadow:0 12px 28px rgba(15,23,42,.06)'>"
+            "<div style='display:flex;align-items:flex-start;justify-content:space-between;gap:12px'>"
+            f"<div style='font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:{accent};font-weight:900'>{label}</div>"
+            f"<div style='font-size:22px;font-weight:900;color:#0f172a'>{value:.1f}</div>"
+            "</div>"
+            f"<div style='height:8px;border-radius:999px;background:#e2e8f0;overflow:hidden;margin-top:12px'>"
+            f"<div style='height:100%;width:{clipped_value:.1f}%;background:linear-gradient(90deg,{accent},#93c5fd);border-radius:999px'></div>"
+            "</div>"
+            f"<div style='font-size:13px;line-height:1.45;color:#475569;margin-top:12px'>{question}</div>"
+            f"<div style='font-size:12px;color:{accent};font-weight:800;margin-top:8px'>{score_readout(value)}</div>"
+            "</div>"
+        )
+
+    cards = "".join(card(*item) for item in risk_items)
+    return (
+        "<div style='margin:16px 0 18px;padding:18px;border-radius:24px;border:1px solid rgba(96,165,250,.20);"
+        "background:radial-gradient(circle at 0% 0%, rgba(59,130,246,.13), transparent 32%),"
+        "radial-gradient(circle at 92% 20%, rgba(20,184,166,.12), transparent 30%),"
+        "linear-gradient(135deg, rgba(255,255,255,.98), rgba(239,246,255,.86));"
+        "box-shadow:0 18px 42px rgba(15,23,42,.08)'>"
+        "<div style='display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap'>"
+        "<div>"
+        "<div style='font-size:12px;letter-spacing:.10em;text-transform:uppercase;color:#2563eb;font-weight:900'>Risk quick read</div>"
+        f"<div style='font-size:24px;font-weight:900;color:#0f172a;margin-top:6px'>Overall risk is {score}/100 ({risk_band})</div>"
+        f"<div style='font-size:14px;color:#475569;margin-top:6px'>{alignment}</div>"
+        "</div>"
+        "<div style='display:flex;gap:10px;flex-wrap:wrap'>"
+        f"<span style='padding:8px 12px;border-radius:999px;background:rgba(37,99,235,.10);color:#1d4ed8;font-weight:800;font-size:12px'>Main issue: {dominant_label} ({dominant_score:.1f}/100)</span>"
+        f"<span style='padding:8px 12px;border-radius:999px;background:rgba(20,184,166,.12);color:#0f766e;font-weight:800;font-size:12px'>Confidence: {confidence}</span>"
+        "</div>"
+        "</div>"
+        f"<div style='display:grid;grid-template-columns:repeat(3,minmax(180px,1fr));gap:14px;margin-top:16px'>{cards}</div>"
+        "<div style='font-size:13px;color:#475569;margin-top:14px'>Use <strong>Risk Diagnosis</strong> for the evidence and <strong>Risk Actions</strong> for what to trim, sell, or monitor.</div>"
         "</div>"
     )
 
@@ -2746,15 +2836,15 @@ def plot_diagnosis_concerns(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
         fig.update_layout(
             title="Top Risk Categories",
             height=320,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -2806,7 +2896,7 @@ def plot_diagnosis_concerns(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
             mode="text",
             text=[f"{score:.1f}/100" for score in total_scores],
             textposition="middle right",
-            textfont={"color": "#f8fafc", "size": 12},
+            textfont={"color": "#0f172a", "size": 12},
             showlegend=False,
             hoverinfo="skip",
         )
@@ -2815,9 +2905,9 @@ def plot_diagnosis_concerns(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
         title="Top Risk Categories (Ranked)",
         height=420,
         margin={"l": 40, "r": 24, "t": 60, "b": 36},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         barmode="stack",
         hoverlabel=dark_hoverlabel(),
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
@@ -2839,15 +2929,15 @@ def plot_portfolio_gaps(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
         fig.update_layout(
             title="Portfolio Gaps",
             height=340,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -2887,9 +2977,9 @@ def plot_portfolio_gaps(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
         title="What The Portfolio Still Needs Most",
         height=max(340, 90 + 66 * len(labels)),
         margin={"l": 40, "r": 24, "t": 56, "b": 36},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hoverlabel=dark_hoverlabel(),
         xaxis={
             "title": "Gap severity",
@@ -2898,10 +2988,10 @@ def plot_portfolio_gaps(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
             "zeroline": False,
         },
         yaxis={
-            "tickfont": {"size": 12, "color": "#e2e8f0"},
+            "tickfont": {"size": 12, "color": "#0f172a"},
             "gridcolor": "rgba(148,163,184,0.08)",
         },
-        font={"color": "#e2e8f0"},
+        font={"color": "#0f172a"},
     )
     return fig
 
@@ -2959,15 +3049,15 @@ def plot_rebalance_traits(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
         fig.update_layout(
             title="Before vs After Portfolio Traits",
             height=360,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -2992,13 +3082,13 @@ def plot_rebalance_traits(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
         title="Before vs After Portfolio Traits",
         height=420,
         margin={"l": 40, "r": 24, "t": 56, "b": 56},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hoverlabel=dark_hoverlabel(),
         barmode="group",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
-        font={"color": "#e2e8f0"},
+        font={"color": "#0f172a"},
     )
     fig.update_xaxes(tickangle=-18)
     fig.update_yaxes(title_text="Value", gridcolor="rgba(148,163,184,0.16)")
@@ -3017,14 +3107,14 @@ def plot_rebalance_sectors(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
         fig.update_layout(
             height=360,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -3081,13 +3171,13 @@ def plot_rebalance_sectors(diagnosis: PortfolioRiskDiagnosis) -> go.Figure:
     fig.update_layout(
         height=560,
         margin={"l": 40, "r": 24, "t": 56, "b": 56},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hoverlabel=dark_hoverlabel(),
         barmode="group",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
-        font={"color": "#e2e8f0"},
+        font={"color": "#0f172a"},
     )
     fig.update_xaxes(tickangle=-18)
     fig.update_yaxes(title_text="% of invested sleeve", gridcolor="rgba(148,163,184,0.16)")
@@ -4567,15 +4657,15 @@ def plot_buy_projection(
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
         fig.update_layout(
             title="Illustrative 5Y Portfolio Scenario",
             height=380,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -4637,14 +4727,14 @@ def plot_buy_projection(
         title="Illustrative 5Y Portfolio Scenario If You Buy Today",
         height=420,
         margin={"l": 40, "r": 24, "t": 56, "b": 36},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hoverlabel=dark_hoverlabel(),
         xaxis={"title": "Years from today", "dtick": 1, "gridcolor": "rgba(148,163,184,0.16)"},
         yaxis={"title": "Projected value ($)", "gridcolor": "rgba(148,163,184,0.16)"},
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
-        font={"color": "#e2e8f0"},
+        font={"color": "#0f172a"},
         annotations=[
             {
                 "text": "Illustrative scenario using capped historical return proxies, not a forecast.",
@@ -4782,15 +4872,15 @@ def plot_buy_candidate_role_mix(entries: list[BuyCandidateUniverseEntry]) -> go.
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
         fig.update_layout(
             title="Candidate Universe Mix",
             height=360,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -4826,15 +4916,15 @@ def plot_buy_candidate_role_mix(entries: list[BuyCandidateUniverseEntry]) -> go.
         title="Candidate Universe Mix",
         height=max(360, 100 + 58 * len(role_order)),
         margin={"l": 40, "r": 24, "t": 56, "b": 36},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         barmode="stack",
         hoverlabel=dark_hoverlabel(),
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
         xaxis={"title": "Number of candidates", "gridcolor": "rgba(148,163,184,0.16)"},
         yaxis={"gridcolor": "rgba(148,163,184,0.08)"},
-        font={"color": "#e2e8f0"},
+        font={"color": "#0f172a"},
     )
     return fig
 
@@ -4854,15 +4944,15 @@ def plot_buy_candidate_enrichment_map(enriched_frame: pd.DataFrame) -> go.Figure
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
         fig.update_layout(
             title="Candidate Strength vs Stability",
             height=380,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -4890,7 +4980,7 @@ def plot_buy_candidate_enrichment_map(enriched_frame: pd.DataFrame) -> go.Figure
                 marker={
                     "size": 14,
                     "color": colors.get(str(asset_type), "#22c55e"),
-                    "line": {"color": "rgba(15,23,42,0.9)", "width": 1},
+                    "line": {"color": "rgba(148,163,184,0.75)", "width": 1},
                 },
                 customdata=np.stack(
                     [
@@ -4913,14 +5003,14 @@ def plot_buy_candidate_enrichment_map(enriched_frame: pd.DataFrame) -> go.Figure
         title="Candidate Strength vs Stability",
         height=420,
         margin={"l": 40, "r": 24, "t": 56, "b": 36},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hoverlabel=dark_hoverlabel(),
         xaxis={"title": "Annualized 1Y volatility (%)", "gridcolor": "rgba(148,163,184,0.16)"},
         yaxis={"title": "1Y return vs S&P 500 (%)", "gridcolor": "rgba(148,163,184,0.16)"},
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
-        font={"color": "#e2e8f0"},
+        font={"color": "#0f172a"},
     )
     return fig
 
@@ -5311,15 +5401,15 @@ def plot_buy_ideas(candidates: list[ReplacementCandidate]) -> go.Figure:
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
         fig.update_layout(
             title="Best Buy Ideas Right Now",
             height=360,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -5348,13 +5438,13 @@ def plot_buy_ideas(candidates: list[ReplacementCandidate]) -> go.Figure:
         title="Best Buy Ideas Right Now",
         height=max(340, 100 + 56 * len(ordered)),
         margin={"l": 40, "r": 24, "t": 56, "b": 36},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hoverlabel=dark_hoverlabel(),
         xaxis={"title": "Fit score", "range": [0, 100], "gridcolor": "rgba(148,163,184,0.16)"},
         yaxis={"gridcolor": "rgba(148,163,184,0.08)"},
-        font={"color": "#e2e8f0"},
+        font={"color": "#0f172a"},
     )
     return fig
 
@@ -5464,14 +5554,14 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
         fig.update_layout(
             height=640,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -5486,14 +5576,14 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 12, "color": "#e2e8f0"},
+            font={"size": 12, "color": "#0f172a"},
         )
         fig.update_layout(
             height=640,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -5575,12 +5665,12 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
         ),
         height=640,
         margin={"l": 54, "r": 26, "t": 68, "b": 44},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hoverlabel=dark_hoverlabel(),
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
-        font={"color": "#e2e8f0"},
+        font={"color": "#0f172a"},
     )
     fig.update_yaxes(
         title_text="Total return since chart start (%)",
@@ -5699,7 +5789,6 @@ def build_user_portfolio_preferences(
     include_existing_holdings: bool,
     buy_idea_limit: int,
     buy_ideas_view_mode: str = "Quick Read",
-    progress: gr.Progress = gr.Progress(track_tqdm=True),
 ) -> tuple[
     str,
     pd.DataFrame,
@@ -5719,6 +5808,7 @@ def build_user_portfolio_preferences(
     so the user can immediately see how a new constraint changes the candidate
     set.
     """
+    progress = noop_progress
     progress(0.05, desc="Reading current diagnosis and preference inputs...")
     if not diagnosis_payload:
         raise gr.Error("Run analysis first so the buy preferences can inherit the current portfolio context.")
@@ -5968,15 +6058,15 @@ def plot_diagnosis_market_sensitivity_lens(timeseries_records: list[dict[str, An
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
         fig.update_layout(
             title=f"Market Sensitivity of {subject_label} vs S&P 500",
             height=520,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -6012,17 +6102,17 @@ def plot_diagnosis_market_sensitivity_lens(timeseries_records: list[dict[str, An
             arrowhead=2,
             ax=42,
             ay=-26,
-            bgcolor="rgba(15,23,42,0.92)",
+            bgcolor="rgba(255,255,255,0.96)",
             bordercolor="#A855F7",
-            font={"color": "#f8fafc", "size": 11},
+            font={"color": "#0f172a", "size": 11},
         )
     fig.update_layout(
         title=f"Market Sensitivity of {subject_label} vs S&P 500",
         height=520,
         margin={"l": 24, "r": 24, "t": 56, "b": 24},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hovermode="x unified",
         hoverlabel=dark_hoverlabel(),
     )
@@ -6185,8 +6275,8 @@ def plot_equity_curves(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         xaxis_title="Date",
         yaxis_title="Value ($)",
         hovermode="x unified",
-        template="plotly_dark",
-        title_font={"size": 24},
+        template="plotly_white",
+        title_font={"size": 24, "color": "#0f172a"},
         legend={
             "orientation": "h",
             "yanchor": "bottom",
@@ -6195,7 +6285,7 @@ def plot_equity_curves(timeseries_records: list[dict[str, Any]]) -> go.Figure:
             "x": 1,
         },
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hoverlabel=dark_hoverlabel(),
     )
     fig.update_yaxes(tickprefix="$", separatethousands=True, gridcolor="rgba(148,163,184,0.18)")
@@ -6247,9 +6337,9 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
                 arrowhead=2,
                 ax=40,
                 ay=-24,
-                bgcolor="rgba(15,23,42,0.92)",
+                bgcolor="rgba(255,255,255,0.96)",
                 bordercolor="#EF4444",
-                font={"color": "#f8fafc", "size": 11},
+                font={"color": "#0f172a", "size": 11},
             )
             fig.add_annotation(
                 x=x_values[-1],
@@ -6259,9 +6349,9 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
                 arrowhead=2,
                 ax=40,
                 ay=24,
-                bgcolor="rgba(15,23,42,0.92)",
+                bgcolor="rgba(255,255,255,0.96)",
                 bordercolor="#A855F7",
-                font={"color": "#f8fafc", "size": 11},
+                font={"color": "#0f172a", "size": 11},
             )
             y_range = padded_axis_range(portfolio_drawdown + benchmark_drawdown, baseline_values=[0.0], min_padding=2.5)
             if y_range is not None:
@@ -6274,7 +6364,7 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
     fig.update_layout(
         title="Recent 6-Month Rolling Drawdown Depth vs S&P 500",
@@ -6283,8 +6373,8 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
         xaxis_title="Date",
         yaxis_title="Drawdown (%)",
         hovermode="x unified",
-        template="plotly_dark",
-        title_font={"size": 24},
+        template="plotly_white",
+        title_font={"size": 24, "color": "#0f172a"},
         legend={
             "orientation": "h",
             "yanchor": "bottom",
@@ -6293,7 +6383,7 @@ def plot_drawdowns(timeseries_records: list[dict[str, Any]]) -> go.Figure:
             "x": 1,
         },
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hoverlabel=dark_hoverlabel() ,
     )
     fig.update_yaxes(ticksuffix="%", gridcolor="rgba(148,163,184,0.18)")
@@ -6344,7 +6434,7 @@ def plot_sector_allocation(sector_rows: list[dict[str, Any]]) -> go.Figure:
                 values=frame["current_value"].tolist(),
                 customdata=customdata,
                 texttemplate="<b>%{label}</b><br>%{customdata[0]}",
-                textfont={"size": 18, "color": "#f8fafc"},
+                textfont={"size": 18, "color": "#0f172a"},
                 branchvalues="total",
                 tiling={"packing": "squarify", "pad": 4},
                 hovertemplate=(
@@ -6370,18 +6460,18 @@ def plot_sector_allocation(sector_rows: list[dict[str, Any]]) -> go.Figure:
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
     fig.update_layout(
         title="Sector Exposure Map",
         height=520,
         margin={"l": 24, "r": 24, "t": 60, "b": 24},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         showlegend=False,
         hoverlabel=dark_hoverlabel(),
-        font={"color": "#e2e8f0"},
+        font={"color": "#0f172a"},
     )
     return fig
 
@@ -6431,8 +6521,8 @@ def plot_projection(projection_df: pd.DataFrame) -> go.Figure:
         xaxis_title="Years From Today",
         yaxis_title="Projected Value ($)",
         hovermode="x unified",
-        template="plotly_dark",
-        title_font={"size": 24},
+        template="plotly_white",
+        title_font={"size": 24, "color": "#0f172a"},
         legend={
             "orientation": "h",
             "yanchor": "bottom",
@@ -6441,7 +6531,7 @@ def plot_projection(projection_df: pd.DataFrame) -> go.Figure:
             "x": 1,
         },
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hoverlabel=dark_hoverlabel(),
     )
     fig.update_yaxes(tickprefix="$", separatethousands=True, gridcolor="rgba(148,163,184,0.18)")
@@ -6730,9 +6820,9 @@ def add_latest_annotation(fig: go.Figure, x_value: str, y_value: float, text: st
         arrowhead=2,
         ax=42,
         ay=-26,
-        bgcolor="rgba(15,23,42,0.92)",
+        bgcolor="rgba(255,255,255,0.96)",
         bordercolor=color,
-        font={"color": "#f8fafc", "size": 11},
+        font={"color": "#0f172a", "size": 11},
         row=row,
         col=col,
     )
@@ -6740,9 +6830,9 @@ def add_latest_annotation(fig: go.Figure, x_value: str, y_value: float, text: st
 
 def dark_hoverlabel() -> dict[str, Any]:
     return {
-        "bgcolor": "rgba(15,23,42,0.96)",
-        "bordercolor": "#475569",
-        "font": {"color": "#f8fafc", "size": 13},
+        "bgcolor": "rgba(255,255,255,0.98)",
+        "bordercolor": "#cbd5e1",
+        "font": {"color": "#0f172a", "size": 13},
     }
 
 
@@ -6801,15 +6891,15 @@ def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) 
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
         fig.update_layout(
             title="Recent 6-Month Rolling Volatility vs S&P 500",
             height=520,
             margin={"l": 24, "r": 24, "t": 60, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -6858,9 +6948,9 @@ def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) 
         arrowhead=2,
         ax=42,
         ay=-28,
-        bgcolor="rgba(15,23,42,0.92)",
+        bgcolor="rgba(255,255,255,0.96)",
         bordercolor="#3B82F6",
-        font={"color": "#f8fafc", "size": 11},
+        font={"color": "#0f172a", "size": 11},
     )
     fig.add_annotation(
         x=x_values[-1],
@@ -6870,17 +6960,17 @@ def plot_recent_volatility_comparison(timeseries_records: list[dict[str, Any]]) 
         arrowhead=2,
         ax=42,
         ay=28,
-        bgcolor="rgba(15,23,42,0.92)",
+        bgcolor="rgba(255,255,255,0.96)",
         bordercolor="#F59E0B",
-        font={"color": "#f8fafc", "size": 11},
+        font={"color": "#0f172a", "size": 11},
     )
     fig.update_layout(
         title="Volatility vs S&P 500",
         height=520,
         margin={"l": 40, "r": 24, "t": 60, "b": 36},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
         hoverlabel=dark_hoverlabel(),
@@ -6934,15 +7024,15 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
             xref="paper",
             yref="paper",
             showarrow=False,
-            font={"size": 15, "color": "#e2e8f0"},
+            font={"size": 15, "color": "#0f172a"},
         )
         fig.update_layout(
             title="Evidence Behind Top Risk Signals",
             height=220,
             margin={"l": 24, "r": 24, "t": 56, "b": 24},
-            template="plotly_dark",
+            template="plotly_white",
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(17,24,39,0.55)",
+            plot_bgcolor="rgba(248,250,252,0.92)",
             xaxis={"visible": False},
             yaxis={"visible": False},
         )
@@ -6995,9 +7085,9 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                     arrowhead=2,
                     ax=70,
                     ay=-28,
-                    bgcolor="rgba(15,23,42,0.92)",
+                    bgcolor="rgba(255,255,255,0.96)",
                     bordercolor="#3B82F6",
-                    font={"color": "#f8fafc", "size": 11},
+                    font={"color": "#0f172a", "size": 11},
                     row=row_idx,
                     col=1,
                 )
@@ -7016,10 +7106,10 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                 text=summary_text,
                 showarrow=False,
                 align="left",
-                bgcolor="rgba(15,23,42,0.92)",
+                bgcolor="rgba(255,255,255,0.96)",
                 bordercolor="#475569",
                 borderwidth=1,
-                font={"color": "#e2e8f0", "size": 12},
+                font={"color": "#0f172a", "size": 12},
                 row=row_idx,
                 col=1,
             )
@@ -7120,9 +7210,9 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                     showarrow=False,
                     xanchor="left",
                     yanchor="bottom",
-                    bgcolor="rgba(15,23,42,0.88)",
+                    bgcolor="rgba(255,255,255,0.94)",
                     bordercolor="#10B981",
-                    font={"size": 11, "color": "#f8fafc"},
+                    font={"size": 11, "color": "#0f172a"},
                     row=row_idx,
                     col=1,
                 )
@@ -7133,9 +7223,9 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
                     showarrow=False,
                     xanchor="left",
                     yanchor="bottom",
-                    bgcolor="rgba(15,23,42,0.88)",
+                    bgcolor="rgba(255,255,255,0.94)",
                     bordercolor="#F59E0B",
-                    font={"size": 11, "color": "#f8fafc"},
+                    font={"size": 11, "color": "#0f172a"},
                     row=row_idx,
                     col=1,
                 )
@@ -7274,9 +7364,9 @@ def plot_risk_evidence(market_metrics: dict[str, Any], portfolio_summary: dict[s
         title="Recent Evidence Behind Top Risk Signals",
         height=max(520, 420 * len(evidence_specs)),
         margin={"l": 40, "r": 24, "t": 72, "b": 24},
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.55)",
+        plot_bgcolor="rgba(248,250,252,0.92)",
         hovermode="x unified",
         barmode="stack",
         hoverlabel=dark_hoverlabel(),
@@ -7473,9 +7563,9 @@ def run_analysis(
     risk_profile: int,
     dataset_source: str,
     risk_actions_view_mode: str = "Action Summary",
-    progress: gr.Progress = gr.Progress(track_tqdm=True),
 ) -> tuple[Any, ...]:
     started_at = time.perf_counter()
+    progress = noop_progress
     progress(0.01, desc="Starting analysis and locating the portfolio file...")
     if dataset_source == "Use bundled fake dataset":
         csv_path = REPO_ROOT / "data" / "raw" / "fake_mantis_invest.csv"
@@ -7604,17 +7694,28 @@ def run_analysis(
     market_sensitivity_fig = plot_diagnosis_market_sensitivity_lens(market_metrics["timeseries"], "Portfolio")
     risk_evidence_fig = plot_risk_evidence(market_metrics, portfolio_summary)
     elapsed_seconds = time.perf_counter() - started_at
+    overview_risk_html = build_overview_risk_snapshot_html(risk)
 
+    dimension_scores = risk["dimension_scores"]
     summary_cards_inner = (
-        metric_card("Analysis Window", f'{headline["analysis_years"]:.2f}y', f'{headline["analysis_start"]} to {headline["analysis_end"]}')
-        + metric_card("Invested Value", money_text(headline["current_portfolio_value"]), "Current invested sleeve")
-        + metric_card("Total Portfolio Value", money_text(headline["total_account_value_estimate"]), "Holdings plus cash estimate")
-        + metric_card("Cash in Hand", money_text(headline["uninvested_cash_estimate"]), "Estimated uninvested cash")
-        + metric_card("Realized P&L", money_text(headline["total_realized_pnl"]), "Closed positions and cash events")
-        + metric_card("Unrealized P&L", money_text(headline["total_unrealized_pnl"]), "Open positions only")
-        + metric_card("Observed Risk", f'{risk["score"]}/100', f'{risk["band"]} | {risk["alignment"]}')
-        + metric_card("Vs S&P 500", pct_text(headline["excess_money_weighted_return_vs_benchmark"]), "Excess money-weighted return")
-        + metric_card("Prep Time", f"{elapsed_seconds:.2f}s", "Upload to dashboard-ready")
+        metric_card("Observed Risk", f'{risk["score"]}/100', f'{risk["band"]} | {risk["alignment"]}')
+        + metric_card(
+            "Concentration Risk",
+            f'{dimension_scores["concentration_risk"]:.1f}/100',
+            "Can a few holdings dominate the account?",
+        )
+        + metric_card(
+            "Behavior Risk",
+            f'{dimension_scores["behavioral_risk"]:.1f}/100',
+            "Is trading behavior adding avoidable risk?",
+        )
+        + metric_card(
+            "Market Risk",
+            f'{dimension_scores["market_risk"]:.1f}/100',
+            "How rough or sensitive vs the S&P 500?",
+        )
+        + metric_card("Alignment", risk["alignment"], "Portfolio vs stated risk tolerance")
+        + metric_card("Confidence", risk["confidence_band"], "How complete and consistent the evidence looks")
     )
     summary_cards = f"<div class='metric-strip'>{summary_cards_inner}</div>"
 
@@ -7624,6 +7725,7 @@ def run_analysis(
     return (
         summary_cards,
         sector_overview_md,
+        overview_risk_html,
         risk_md,
         risk_guide_html,
         risk,
@@ -7700,9 +7802,10 @@ def build_app() -> gr.Blocks:
         css="""
         .gradio-container {
             background:
-                radial-gradient(circle at top left, rgba(59,130,246,.12), transparent 28%),
-                radial-gradient(circle at top right, rgba(14,165,233,.10), transparent 26%),
-                linear-gradient(180deg, #0b1220 0%, #111827 100%);
+                radial-gradient(circle at top left, rgba(59,130,246,.18), transparent 26%),
+                radial-gradient(circle at top right, rgba(20,184,166,.14), transparent 28%),
+                linear-gradient(180deg, #f8fbff 0%, #eef4ff 54%, #f8fafc 100%);
+            color: #0f172a !important;
             max-width: 100vw !important;
             padding-left: 18px !important;
             padding-right: 18px !important;
@@ -7710,35 +7813,106 @@ def build_app() -> gr.Blocks:
         .app-shell {width: 100%; max-width: 100% !important; margin: 0; align-items: start;}
         .control-rail {
             padding: 18px;
-            border: 1px solid rgba(148,163,184,.16);
+            border: 1px solid rgba(148,163,184,.28);
             border-radius: 22px;
-            background: linear-gradient(180deg, rgba(15,23,42,.92), rgba(15,23,42,.78));
-            box-shadow: 0 20px 48px rgba(2,6,23,.24);
+            background: linear-gradient(180deg, rgba(255,255,255,.94), rgba(248,250,252,.88));
+            box-shadow: 0 20px 48px rgba(15,23,42,.10);
             backdrop-filter: blur(14px);
         }
         .content-rail {
             width: 100%;
             padding: 8px 0 0;
         }
-        .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 14px; width: 100%; align-items: stretch;}
+        .summary-cards-wrap {
+            padding: 16px;
+            border: 1px solid rgba(96,165,250,.18);
+            border-radius: 28px;
+            background:
+                radial-gradient(circle at 10% 0%, rgba(59,130,246,.14), transparent 34%),
+                radial-gradient(circle at 92% 18%, rgba(20,184,166,.12), transparent 32%),
+                linear-gradient(135deg, rgba(255,255,255,.92), rgba(239,246,255,.72));
+            box-shadow: 0 22px 54px rgba(15,23,42,.10);
+            backdrop-filter: blur(14px);
+        }
+        .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 16px; width: 100%; align-items: stretch;}
         .metric-card {
+            position: relative;
+            isolation: isolate;
             transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+            background:
+                linear-gradient(145deg, rgba(255,255,255,.98), rgba(239,246,255,.90)) !important;
+            border-color: rgba(96,165,250,.22) !important;
+            box-shadow: 0 16px 34px rgba(30,64,175,.08) !important;
+        }
+        .metric-card::before {
+            content: "";
+            position: absolute;
+            inset: 0 auto 0 0;
+            width: 5px;
+            background: linear-gradient(180deg, #2563eb, #38bdf8);
+            z-index: -1;
+        }
+        .metric-card::after {
+            content: "";
+            position: absolute;
+            right: -42px;
+            top: -48px;
+            width: 150px;
+            height: 150px;
+            border-radius: 999px;
+            background: radial-gradient(circle, rgba(59,130,246,.16), transparent 68%);
+            z-index: -1;
+        }
+        .metric-strip .metric-card:nth-child(2)::before,
+        .metric-strip .metric-card:nth-child(5)::before {
+            background: linear-gradient(180deg, #0f766e, #5eead4);
+        }
+        .metric-strip .metric-card:nth-child(3)::before,
+        .metric-strip .metric-card:nth-child(6)::before {
+            background: linear-gradient(180deg, #f97316, #facc15);
+        }
+        .metric-card-label,
+        .metric-card-value,
+        .metric-card > div {
+            position: relative;
+            z-index: 1;
         }
         .metric-card:hover {
             transform: translateY(-2px);
-            box-shadow: 0 18px 44px rgba(2,6,23,.32);
-            border-color: rgba(96,165,250,.28) !important;
+            box-shadow: 0 18px 44px rgba(15,23,42,.12);
+            border-color: rgba(37,99,235,.30) !important;
+        }
+        .gradio-container .tabitem {
+            padding: 18px !important;
+            border: 1px solid rgba(148,163,184,.24) !important;
+            border-radius: 0 22px 22px 22px !important;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,.96), rgba(248,250,252,.88)) !important;
+            box-shadow: 0 18px 44px rgba(15,23,42,.08) !important;
+        }
+        .gradio-container .tabs {
+            padding: 10px;
+            border-radius: 24px;
+            background:
+                linear-gradient(135deg, rgba(255,255,255,.88), rgba(226,232,240,.42));
+            border: 1px solid rgba(148,163,184,.22);
+            box-shadow: 0 14px 36px rgba(15,23,42,.08);
         }
         button[role="tab"] {
             border-radius: 14px 14px 0 0 !important;
             padding: 10px 16px !important;
             font-weight: 600 !important;
             letter-spacing: .01em;
+            color: #475569 !important;
+            background: rgba(255,255,255,.46) !important;
+            border: 1px solid transparent !important;
         }
         button[role="tab"][aria-selected="true"] {
-            background: linear-gradient(180deg, rgba(59,130,246,.18), rgba(59,130,246,.08)) !important;
-            color: #f8fafc !important;
-            border-color: rgba(96,165,250,.28) !important;
+            background:
+                linear-gradient(180deg, rgba(219,234,254,.98), rgba(239,246,255,.94)) !important;
+            color: #1d4ed8 !important;
+            border-color: rgba(37,99,235,.36) !important;
+            box-shadow: 0 10px 24px rgba(37,99,235,.14) !important;
         }
         .control-rail .gr-button-primary {
             min-height: 48px !important;
@@ -7765,6 +7939,99 @@ def build_app() -> gr.Blocks:
         .summary-cards-wrap {margin-bottom: 8px;}
         .risk-guide-link button {
             opacity: .94;
+        }
+        .gradio-container h1,
+        .gradio-container h2,
+        .gradio-container h3,
+        .gradio-container label,
+        .gradio-container .markdown,
+        .gradio-container .prose,
+        .gradio-container .block-label {
+            color: #0f172a !important;
+        }
+        .gradio-container p,
+        .gradio-container li,
+        .gradio-container small,
+        .gradio-container span {
+            color: inherit;
+        }
+        .gradio-container .gr-form,
+        .gradio-container .gr-box,
+        .gradio-container .panel,
+        .gradio-container .wrap,
+        .gradio-container .block,
+        .gradio-container .table-wrap {
+            background-color: rgba(255,255,255,.82) !important;
+            border-color: rgba(148,163,184,.26) !important;
+            color: #0f172a !important;
+        }
+        .gradio-container textarea,
+        .gradio-container input,
+        .gradio-container select {
+            background: #ffffff !important;
+            color: #0f172a !important;
+            border-color: rgba(148,163,184,.36) !important;
+        }
+        .gradio-container table,
+        .gradio-container thead,
+        .gradio-container tbody,
+        .gradio-container tr,
+        .gradio-container td,
+        .gradio-container th {
+            background: #ffffff !important;
+            color: #0f172a !important;
+            border-color: rgba(148,163,184,.22) !important;
+        }
+        .gradio-container button.primary,
+        .gradio-container .gr-button-primary {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
+            color: #ffffff !important;
+            border-color: rgba(29,78,216,.34) !important;
+        }
+        .gradio-container button.secondary,
+        .gradio-container .gr-button-secondary {
+            background: #f8fafc !important;
+            color: #334155 !important;
+            border-color: rgba(148,163,184,.34) !important;
+        }
+        .gradio-container div[style*="rgba(30,41,59"],
+        .gradio-container div[style*="rgba(15,23,42"],
+        .gradio-container div[style*="rgba(17,24,39"],
+        .gradio-container section[style*="rgba(30,41,59"],
+        .gradio-container section[style*="rgba(15,23,42"],
+        .gradio-container section[style*="rgba(17,24,39"] {
+            background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96)) !important;
+            border-color: rgba(148,163,184,.26) !important;
+            box-shadow: 0 16px 34px rgba(15,23,42,.08) !important;
+        }
+        .gradio-container div[style*="#f8fafc"],
+        .gradio-container div[style*="#e2e8f0"],
+        .gradio-container li[style*="#e2e8f0"],
+        .gradio-container ul[style*="#e2e8f0"],
+        .gradio-container span[style*="#e2e8f0"],
+        .gradio-container strong[style*="#f8fafc"] {
+            color: #0f172a !important;
+        }
+        .gradio-container div[style*="#cbd5e1"],
+        .gradio-container span[style*="#cbd5e1"],
+        .gradio-container li[style*="#cbd5e1"] {
+            color: #475569 !important;
+        }
+        .gradio-container div[style*="#93c5fd"],
+        .gradio-container span[style*="#93c5fd"] {
+            color: #2563eb !important;
+        }
+        .gradio-container .metric-card {
+            background:
+                linear-gradient(145deg, rgba(255,255,255,.98), rgba(239,246,255,.90)) !important;
+            border-color: rgba(96,165,250,.22) !important;
+            box-shadow: 0 16px 34px rgba(30,64,175,.08) !important;
+        }
+        .gradio-container .metric-card-label {
+            color: #2563eb !important;
+        }
+        .gradio-container .metric-card-value {
+            color: #0f172a !important;
         }
         @media (max-width: 1200px) {
             .metric-strip {grid-template-columns: repeat(2, minmax(220px, 1fr));}
@@ -7824,6 +8091,11 @@ def build_app() -> gr.Blocks:
                 cards = gr.HTML(label="Summary Cards", elem_classes=["summary-cards-wrap"])
                 with gr.Tabs(selected="overview") as main_tabs:
                     with gr.Tab("Overview", id="overview"):
+                        equity_plot = gr.Plot(
+                            value=empty_dashboard_plot("Run analysis to compare your portfolio with the S&P 500"),
+                            label="Benchmark",
+                        )
+                        overview_risk_md = gr.HTML()
                         with gr.Row(equal_height=False):
                             with gr.Column(scale=7, min_width=520):
                                 sector_plot = gr.Plot(
@@ -7832,11 +8104,7 @@ def build_app() -> gr.Blocks:
                                 )
                             with gr.Column(scale=5, min_width=360):
                                 sector_overview_md = gr.HTML()
-                        equity_plot = gr.Plot(
-                            value=empty_dashboard_plot("Run analysis to compare your portfolio with the S&P 500"),
-                            label="Benchmark",
-                        )
-                    with gr.Tab("Risk", id="risk"):
+                    with gr.Group(visible=False):
                         risk_md = gr.HTML()
                         metric_card_components: list[gr.HTML] = []
                         metric_buttons: list[gr.Button] = []
@@ -7854,18 +8122,25 @@ def build_app() -> gr.Blocks:
                                         )
                                         metric_card_components.append(card)
                                         metric_buttons.append(button)
-                        volatility_drivers_df = gr.Dataframe(label="Top Drivers of 2025 Volatility", interactive=False)
+                        volatility_drivers_df = gr.Dataframe(
+                            label="Top Drivers of 2025 Volatility",
+                            interactive=False,
+                            visible=False,
+                        )
                         recent_volatility_plot = gr.Plot(
                             value=empty_dashboard_plot("Run analysis to see volatility versus the S&P 500"),
                             label="Volatility vs S&P 500",
+                            visible=False,
                         )
                         risk_evidence_plot = gr.Plot(
                             value=empty_dashboard_plot("Run analysis to see the evidence behind top risk signals"),
                             label="Evidence Behind Top Risk Signals",
+                            visible=False,
                         )
                         drawdown_plot = gr.Plot(
                             value=empty_dashboard_plot("Run analysis to see downside depth versus the S&P 500"),
                             label="Downside Depth vs S&P 500",
+                            visible=False,
                         )
                     with gr.Tab("Risk Diagnosis", id="risk-diagnosis"):
                         diagnosis_driver_md = gr.HTML()
@@ -8109,6 +8384,7 @@ def build_app() -> gr.Blocks:
             outputs=[
                 cards,
                 sector_overview_md,
+                overview_risk_md,
                 risk_md,
                 risk_guide_md,
                 risk_state,
@@ -8242,7 +8518,7 @@ def build_app() -> gr.Blocks:
 
 
 def launch_app() -> None:
-    app = build_app().queue()
+    app = build_app()
     # Default to local launch so the dashboard reliably binds to the configured port without
     # depending on Gradio's share tunnel port allocation.
     app.launch(server_name="127.0.0.1", server_port=7863, share=True)
