@@ -4,6 +4,7 @@ import json
 import math
 import re
 import subprocess
+import textwrap
 import time
 import urllib.error
 import urllib.request
@@ -85,8 +86,9 @@ FALLBACK_LLM_MODEL = "llama3.1:latest"
 FAST_DEV_LLM_MODEL = "gemma:2b"
 DEFAULT_MODEL_NAME = PRIMARY_LLM_MODEL
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
-RISK_ACTION_LLM_TIMEOUT_SECONDS = 25
+RISK_ACTION_LLM_TIMEOUT_SECONDS = 60
 BENCHMARK_SYMBOL = "^GSPC"
+BENCHMARK_DISPLAY_NAME = "S&P 500"
 PROJECTION_YEARS = 18
 SHORT_HOLD_TARGET_DAYS = round(365.25 * 1.5)
 ROLLING_DRAWDOWN_WINDOW_DAYS = round(365.25 / 2)
@@ -101,6 +103,12 @@ RISK_CHART_START_DATE = "2024-01-01"
 WEEKLY_FLOW_DOMINANCE_LIMIT = 0.25
 MAX_STABLE_WEEKLY_RETURN = 0.75
 MAX_FEATURED_BUY_IDEA_COUNT = 20
+MAX_FEATURED_RISK_ACTION_COUNT = 10
+
+
+def benchmark_display_name(symbol: str | None = None) -> str:
+    """Return the user-facing benchmark name while preserving the Yahoo symbol internally."""
+    return BENCHMARK_DISPLAY_NAME if (symbol or BENCHMARK_SYMBOL) == BENCHMARK_SYMBOL else str(symbol)
 
 
 def empty_dashboard_plot(message: str = "Run analysis to populate this chart") -> go.Figure:
@@ -110,15 +118,16 @@ def empty_dashboard_plot(message: str = "Run analysis to populate this chart") -
     even when the backend has not failed. Initializing chart slots with a valid
     Plotly figure keeps the dashboard calm and makes real failures easier to see.
     """
+    wrapped_message = "<br>".join(textwrap.wrap(message, width=34)) or message
     fig = go.Figure()
     fig.add_annotation(
-        text=message,
+        text=wrapped_message,
         x=0.5,
         y=0.5,
         xref="paper",
         yref="paper",
         showarrow=False,
-        font={"color": "#93c5fd", "size": 16},
+        font={"color": "#2563eb", "size": 15},
         align="center",
     )
     fig.update_layout(
@@ -1808,7 +1817,7 @@ def build_messages(analysis_payload: dict[str, Any], risk_profile: int) -> list[
         "Analysis payload:\n"
         f"{json.dumps(make_json_safe(analysis_payload), indent=2)}\n\n"
         "Analyze this investor and provide:\n"
-        "- the actual observed portfolio risk score, confidence level, and what drove it\n"
+        "- the actual observed portfolio risk score and what drove it\n"
         "- whether the observed risk is aligned with the stated risk profile\n"
         "- current portfolio value, uninvested cash, and unrealized P&L context\n"
         "- how returns over the investor's own time horizon compare with the S&P 500 benchmark\n"
@@ -2284,10 +2293,198 @@ def generate_risk_action_llm_explanations(diagnosis: PortfolioRiskDiagnosis, ite
             ticker = str(item.ticker)
             value = parsed.get(ticker)
             if not isinstance(value, dict):
-                cleaned_by_ticker[ticker] = fallbacks[ticker]
+                cleaned_by_ticker[ticker] = generate_risk_action_llm_explanation(diagnosis, item)
                 continue
             cleaned = _clean_llm_explanation(value)
             if not cleaned.get("headline") or not cleaned.get("plain_english_summary"):
+                cleaned_by_ticker[ticker] = generate_risk_action_llm_explanation(diagnosis, item)
+                continue
+            cleaned["_source"] = f"Ollama: {model_name}"
+            cleaned_by_ticker[ticker] = cleaned
+        _write_json_cache(cache_path, cleaned_by_ticker)
+        return cleaned_by_ticker
+    except Exception:
+        retry_by_ticker = {
+            str(item.ticker): generate_risk_action_llm_explanation(diagnosis, item)
+            for item in actionable_items
+        }
+        return retry_by_ticker or fallbacks
+
+
+def _clean_diagnosis_llm_explanation(parsed: dict[str, Any]) -> dict[str, str]:
+    """Keep only the fields rendered by the Risk Diagnosis external-evidence card."""
+    required_keys = [
+        "headline",
+        "external_read",
+        "why_it_matters",
+        "what_to_watch",
+        "evidence_depth",
+    ]
+    cleaned: dict[str, str] = {}
+    for key in required_keys:
+        value = parsed.get(key)
+        if isinstance(value, list):
+            value = " ".join(str(item) for item in value if item)
+        cleaned[key] = str(value or "").strip()
+    return cleaned
+
+
+def _diagnosis_external_payload(diagnosis: PortfolioRiskDiagnosis, contribution: Any, driver: Any) -> dict[str, Any]:
+    """Build the allowed evidence payload for Risk Diagnosis LLM explanations.
+
+    The LLM is not allowed to decide whether a holding is risky or actionable.
+    It only receives already-computed diagnosis labels plus source snippets from
+    filings/news so it can explain, in plain English, why those external signals
+    matter to the current risk read.
+    """
+    ticker = str(getattr(contribution, "ticker", "") or getattr(driver, "ticker", "") or "")
+    narrative_rows: list[dict[str, Any]] = []
+    for evidence in diagnosis.narrative_evidence:
+        if evidence.ticker != ticker:
+            continue
+        narrative_rows.append(
+            {
+                "source_type": "company_report" if evidence.source_type == "sec_filing" else "news",
+                "date": evidence.document_date,
+                "title": evidence.title,
+                "snippet": compact_text_snippet(html_entity_clean(evidence.snippet), 360),
+                "url": evidence.url,
+            }
+        )
+    fundamentals = next((entry for entry in diagnosis.holding_fundamentals if entry.ticker == ticker), None)
+    return make_json_safe(
+        {
+            "ticker": ticker,
+            "sector": getattr(driver, "sector", None) or getattr(contribution, "sector", None),
+            "diagnosis": {
+                "primary_risk": contribution.primary_concern_label,
+                "primary_summary": contribution.primary_concern_summary,
+                "contribution_score": contribution.overall_contribution_score,
+                "current_weight": getattr(driver, "current_weight", None),
+                "variance_contribution": getattr(driver, "variance_contribution_pct", None),
+                "vs_benchmark_since_buy": getattr(driver, "excess_return_vs_benchmark", None),
+            },
+            "external_evidence": narrative_rows[:4],
+            "fundamentals": (
+                {
+                    "company_name": fundamentals.company_name,
+                    "beta": fundamentals.beta,
+                    "latest_filed_date": fundamentals.latest_filed_date,
+                    "signals": fundamentals.signals[:5],
+                }
+                if fundamentals
+                else None
+            ),
+        }
+    )
+
+
+def _diagnosis_deterministic_external_explanation(diagnosis: PortfolioRiskDiagnosis, contribution: Any, driver: Any) -> dict[str, str]:
+    """Fallback external-evidence explanation for Risk Diagnosis cards."""
+    payload = _diagnosis_external_payload(diagnosis, contribution, driver)
+    evidence_items = payload.get("external_evidence", []) or []
+    ticker = payload.get("ticker") or "This holding"
+    if evidence_items:
+        first = evidence_items[0]
+        source = "company report" if first.get("source_type") == "company_report" else "news item"
+        headline = f"{ticker}: external {source} reviewed for the diagnosis"
+        external_read = compact_text_snippet(first.get("snippet") or first.get("title"), 220) or "The external source was available but did not contain a clean snippet."
+        evidence_depth = f"{len(evidence_items)} external source(s) were available for this holding."
+    else:
+        headline = f"{ticker}: no strong external news signal attached"
+        external_read = "No recent company-report or news snippet was strong enough to change the diagnosis display."
+        evidence_depth = "External evidence is thin for this holding."
+    return {
+        "headline": headline,
+        "external_read": external_read,
+        "why_it_matters": str(contribution.primary_concern_summary or humanize_concern_label(contribution.primary_concern_label)),
+        "what_to_watch": "Watch whether new filings, earnings updates, or major news either confirm the risk or reduce the concern.",
+        "evidence_depth": evidence_depth,
+        "_source": "Rule-based fallback",
+    }
+
+
+def generate_diagnosis_driver_llm_explanations(
+    diagnosis: PortfolioRiskDiagnosis,
+    contributions: list[Any],
+    driver_lookup: dict[str, Any],
+) -> dict[str, dict[str, str]]:
+    """Generate LLM explanations for Risk Diagnosis external evidence.
+
+    This is explanation-only. It does not change the diagnosis ranking, risk
+    category, action recommendation, or amount. If Ollama is unavailable or the
+    JSON response is incomplete, the app falls back to deterministic text.
+    """
+    eligible = [
+        contribution
+        for contribution in contributions
+        if contribution.ticker in driver_lookup
+    ][:10]
+    if not eligible:
+        return {}
+    fallbacks = {
+        str(contribution.ticker): _diagnosis_deterministic_external_explanation(
+            diagnosis,
+            contribution,
+            driver_lookup[contribution.ticker],
+        )
+        for contribution in eligible
+    }
+    model_name = preferred_risk_action_llm_model()
+    if not model_name:
+        return fallbacks
+    payload_by_ticker = {
+        str(contribution.ticker): _diagnosis_external_payload(
+            diagnosis,
+            contribution,
+            driver_lookup[contribution.ticker],
+        )
+        for contribution in eligible
+    }
+    cache_path = LLM_EXPLANATION_CACHE_DIR / f"risk_diagnosis_external_{_cache_key('risk_diagnosis_external_v1', model_name, payload_by_ticker)}.json"
+    cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 24 * 14)
+    if isinstance(cached, dict):
+        return {
+            ticker: _clean_diagnosis_llm_explanation(value) | {"_source": str(value.get("_source", f"Ollama: {model_name}"))}
+            if isinstance(value, dict)
+            else fallbacks.get(ticker, {})
+            for ticker, value in cached.items()
+        }
+
+    system_prompt = (
+        "You explain portfolio risk diagnosis evidence in plain English. "
+        "Use only the supplied JSON. Do not invent facts, prices, or future outcomes. "
+        "Do not change the risk category, score, ranking, action label, or recommendation. "
+        "Focus on what the company report or news actually contributes to the diagnosis. "
+        "Translate terms like 10-Q, 10-K, Item 1A, beta, and macro sensitivity into regular investor language. "
+        "Return JSON only."
+    )
+    user_prompt = (
+        "For each ticker, produce a short external-evidence explanation for the Risk Diagnosis tab. "
+        "Return one JSON object keyed by ticker. Each ticker value must contain exactly these keys: "
+        "headline, external_read, why_it_matters, what_to_watch, evidence_depth. "
+        "Keep each field to one concise sentence. If external news or filing evidence is thin, say that plainly. "
+        "Do not recommend a buy, sell, or trim.\n\n"
+        f"Evidence payload by ticker:\n{json.dumps(payload_by_ticker, indent=2)}"
+    )
+    try:
+        raw = call_ollama(
+            model_name,
+            [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            temperature=0.1,
+            num_predict=1400,
+            timeout_seconds=RISK_ACTION_LLM_TIMEOUT_SECONDS,
+        )
+        parsed = _extract_json_object(raw)
+        cleaned_by_ticker: dict[str, dict[str, str]] = {}
+        for contribution in eligible:
+            ticker = str(contribution.ticker)
+            value = parsed.get(ticker)
+            if not isinstance(value, dict):
+                cleaned_by_ticker[ticker] = fallbacks[ticker]
+                continue
+            cleaned = _clean_diagnosis_llm_explanation(value)
+            if not cleaned.get("headline") or not cleaned.get("external_read"):
                 cleaned_by_ticker[ticker] = fallbacks[ticker]
                 continue
             cleaned["_source"] = f"Ollama: {model_name}"
@@ -2656,7 +2853,7 @@ def build_risk_explainer_html(risk: dict[str, Any]) -> str:
         f"Observed portfolio risk is {risk['score']}/100 ({risk['band']}). "
         f"Use this tab as the quick risk snapshot; use Risk Diagnosis and Risk Actions for why and what to do."
     )
-    market_confidence = f"Confidence: {risk['confidence_band']}"
+    market_subtitle = "Market movement pressure"
 
     return (
         "<div style='display:grid;gap:16px'>"
@@ -2668,7 +2865,7 @@ def build_risk_explainer_html(risk: dict[str, Any]) -> str:
         "<div style='display:grid;grid-template-columns:repeat(3,minmax(220px,1fr));gap:14px'>"
         f"{render_dimension_card('Concentration Risk', dimension_scores['concentration_risk'], 'Weight in the final risk score: 40%', 'Can one holding or a small group dominate the account?')}"
         f"{render_dimension_card('Behavior Risk', dimension_scores['behavioral_risk'], 'Weight in the final risk score: 20%', 'Does the trading pattern add avoidable risk?')}"
-        f"{render_dimension_card('Market Risk', dimension_scores['market_risk'], market_confidence, 'Has the portfolio been rougher or more sensitive than the S&P 500?')}"
+        f"{render_dimension_card('Market Risk', dimension_scores['market_risk'], market_subtitle, 'Has the portfolio been rougher or more sensitive than the S&P 500?')}"
         "</div>"
         "<div style='font-size:12px;color:#60a5fa'>The cards below break those three risk families into the specific signals behind each score.</div>"
         "</div>"
@@ -2709,7 +2906,6 @@ def build_overview_risk_snapshot_html(risk: dict[str, Any]) -> str:
     ]
     dominant_label, dominant_score, *_ = max(risk_items, key=lambda item: item[1])
     alignment = risk.get("alignment") or "Alignment not available yet"
-    confidence = risk.get("confidence_band") or "Unknown"
     risk_band = risk.get("band") or "Not available"
     score = risk.get("score", "N/A")
 
@@ -2745,7 +2941,6 @@ def build_overview_risk_snapshot_html(risk: dict[str, Any]) -> str:
         "</div>"
         "<div style='display:flex;gap:10px;flex-wrap:wrap'>"
         f"<span style='padding:8px 12px;border-radius:999px;background:rgba(37,99,235,.10);color:#1d4ed8;font-weight:800;font-size:12px'>Main issue: {dominant_label} ({dominant_score:.1f}/100)</span>"
-        f"<span style='padding:8px 12px;border-radius:999px;background:rgba(20,184,166,.12);color:#0f766e;font-weight:800;font-size:12px'>Confidence: {confidence}</span>"
         "</div>"
         "</div>"
         f"<div style='display:grid;grid-template-columns:repeat(3,minmax(180px,1fr));gap:14px;margin-top:16px'>{cards}</div>"
@@ -2819,7 +3014,7 @@ def build_diagnosis_summary_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         f"({diagnosis.stated_risk_band})."
         "</div>"
         "<div style='font-size:13px;color:#93c5fd;margin-top:12px'>"
-        f"Most important concerns right now: {top_concern_text}. Confidence in this diagnosis is <strong>{diagnosis.confidence_band}</strong>."
+        f"Most important concerns right now: {top_concern_text}."
         "</div>"
         "</div>"
     )
@@ -3425,10 +3620,10 @@ def render_llm_text(text: Any) -> str:
 def provenance_badge(label: str, detail: str, tone: str = "rule") -> str:
     """Render a compact provenance badge so users know where text came from."""
     colors = {
-        "llm": ("rgba(14,165,233,.18)", "rgba(125,211,252,.26)", "#bae6fd"),
-        "rule": ("rgba(59,130,246,.14)", "rgba(96,165,250,.22)", "#bfdbfe"),
-        "data": ("rgba(34,197,94,.14)", "rgba(74,222,128,.22)", "#bbf7d0"),
-        "warn": ("rgba(245,158,11,.14)", "rgba(251,191,36,.22)", "#fde68a"),
+        "llm": ("rgba(224,242,254,.92)", "rgba(14,165,233,.26)", "#0369a1"),
+        "rule": ("rgba(219,234,254,.92)", "rgba(96,165,250,.26)", "#1d4ed8"),
+        "data": ("rgba(220,252,231,.92)", "rgba(74,222,128,.26)", "#047857"),
+        "warn": ("rgba(254,243,199,.92)", "rgba(251,191,36,.30)", "#b45309"),
     }
     bg, border, color = colors.get(tone, colors["rule"])
     return (
@@ -3462,17 +3657,18 @@ def section_provenance_note(kind: str, detail: str, tone: str = "rule") -> str:
 def risk_action_metric(label: str, value: str, detail: str, tone: str = "blue") -> str:
     """Compact metric tile for the redesigned Risk Actions cards."""
     tone_map = {
-        "red": ("rgba(127,29,29,.20)", "rgba(248,113,113,.24)", "#fecaca"),
-        "green": ("rgba(6,78,59,.20)", "rgba(74,222,128,.22)", "#bbf7d0"),
-        "blue": ("rgba(30,64,175,.18)", "rgba(96,165,250,.22)", "#bfdbfe"),
-        "amber": ("rgba(120,53,15,.18)", "rgba(251,191,36,.22)", "#fde68a"),
+        "red": ("rgba(254,226,226,.88)", "rgba(239,68,68,.32)", "#b91c1c"),
+        "green": ("rgba(220,252,231,.88)", "rgba(34,197,94,.30)", "#047857"),
+        "blue": ("rgba(219,234,254,.90)", "rgba(37,99,235,.30)", "#1d4ed8"),
+        "amber": ("rgba(254,243,199,.90)", "rgba(245,158,11,.34)", "#b45309"),
     }
     bg, border, color = tone_map.get(tone, tone_map["blue"])
     return (
-        f"<div style='padding:12px 14px;border-radius:15px;background:{bg};border:1px solid {border};min-height:86px'>"
-        f"<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#93c5fd;font-weight:800'>{label}</div>"
-        f"<div style='font-size:20px;line-height:1.15;color:{color};font-weight:900;margin-top:7px'>{value}</div>"
-        f"<div style='font-size:12px;line-height:1.35;color:#cbd5e1;margin-top:7px'>{detail}</div>"
+        f"<div style='padding:12px 14px;border-radius:15px;background:{bg};border:1px solid {border};"
+        "min-height:86px;box-shadow:0 10px 24px rgba(15,23,42,.06)'>"
+        f"<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#2563eb;font-weight:900'>{label}</div>"
+        f"<div style='font-size:20px;line-height:1.15;color:{color};font-weight:950;margin-top:7px'>{value}</div>"
+        f"<div style='font-size:12px;line-height:1.35;color:#475569;margin-top:7px'>{detail}</div>"
         "</div>"
     )
 
@@ -3739,15 +3935,165 @@ def build_sector_driver_explanation(driver: Any) -> str:
 def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     driver_lookup = {driver.ticker: driver for driver in diagnosis.top_holding_drivers}
     action_lookup = {item.ticker: item for item in getattr(diagnosis, "holding_action_needs", []) or []}
+    recommendation_lookup = {item.ticker: item for item in getattr(diagnosis, "holding_action_recommendations", []) or []}
     holding_items = ""
-    contribution_items = diagnosis.holding_risk_contributions or []
-    for contribution in contribution_items:
+    raw_contribution_items = diagnosis.holding_risk_contributions or []
+    contribution_lookup = {item.ticker: item for item in raw_contribution_items}
+    actionable_recommendations = [
+        item
+        for item in getattr(diagnosis, "holding_action_recommendations", []) or []
+        if item.is_actionable
+    ]
+    actionable_tickers = [item.ticker for item in actionable_recommendations]
+    actionable_ticker_set = set(actionable_tickers)
+    ordered_tickers = [
+        item.ticker
+        for item in raw_contribution_items
+        if item.ticker not in actionable_ticker_set
+    ]
+    contribution_items = [contribution_lookup[ticker] for ticker in ordered_tickers if ticker in contribution_lookup]
+    external_explanations = generate_diagnosis_driver_llm_explanations(
+        diagnosis,
+        contribution_items,
+        driver_lookup,
+    )
+    actionable_detail_section = build_underperforming_risk_detail_cards(
+        diagnosis,
+        actionable_recommendations,
+        include_heading=True,
+    )
+
+    underperforming_chips = "".join(
+        (
+            "<span style='display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border-radius:999px;"
+            "background:rgba(254,226,226,.86);border:1px solid rgba(239,68,68,.24);color:#991b1b;font-size:12px;font-weight:800'>"
+            f"{ticker} · {recommendation_lookup[ticker].recommendation_label}"
+            "</span>"
+        )
+        for ticker in actionable_tickers[:8]
+        if ticker in recommendation_lookup
+    ) or "<span style='font-size:13px;color:#475569'>No underperforming risk trims were flagged in this run.</span>"
+    monitor_chips = "".join(
+        (
+            "<span style='display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border-radius:999px;"
+            "background:rgba(219,234,254,.88);border:1px solid rgba(37,99,235,.22);color:#1d4ed8;font-size:12px;font-weight:800'>"
+            f"{item.ticker} · driver {item.overall_contribution_score:.1f}/100"
+            "</span>"
+        )
+        for item in contribution_items
+        if item.ticker not in actionable_ticker_set
+    ) or "<span style='font-size:13px;color:#475569'>No separate high-risk winners were identified in this run.</span>"
+    diagnosis_order_html = (
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(239,246,255,.95), rgba(255,255,255,.96));margin:14px 0 18px;box-shadow:0 16px 36px rgba(15,23,42,.07)'>"
+        "<div style='font-size:20px;font-weight:900;color:#0f172a'>Diagnosis order matches Risk Actions</div>"
+        "<div style='font-size:14px;line-height:1.6;color:#475569;margin-top:8px'>"
+        "The diagnosis still identifies the biggest risk drivers, but the display order now follows the action story so the tabs read consistently."
+        "</div>"
+        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:14px'>"
+        "<div style='padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.92);border:1px solid rgba(239,68,68,.18)'>"
+        "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#dc2626;font-weight:900'>1. Underperforming risks to trim</div>"
+        "<div style='font-size:13px;color:#475569;margin-top:8px'>These are shown first because the risk is paired with weak same-window performance.</div>"
+        f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:12px'>{underperforming_chips}</div>"
+        "</div>"
+        "<div style='padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.92);border:1px solid rgba(37,99,235,.18)'>"
+        "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#2563eb;font-weight:900'>2. High-risk winners to cap or monitor</div>"
+        "<div style='font-size:13px;color:#475569;margin-top:8px'>These can still drive portfolio risk, but they are not automatically sell candidates.</div>"
+        f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:12px'>{monitor_chips}</div>"
+        "</div>"
+        "<div style='padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.92);border:1px solid rgba(16,185,129,.18)'>"
+        "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#047857;font-weight:900'>3. Why top risk drivers are not always sells</div>"
+        "<div style='font-size:13px;line-height:1.55;color:#475569;margin-top:8px'>A large winner can be a top risk driver simply because it moves the portfolio. "
+        "The action layer only pushes trims first when that risk is also paired with underperformance.</div>"
+        "</div>"
+        "</div>"
+        "</div>"
+    )
+    rank_counter = max(1, len(actionable_recommendations) + 1)
+    for recommendation in []:
+        linked_contribution = contribution_lookup.get(recommendation.ticker)
+        linked_driver = driver_lookup.get(recommendation.ticker)
+        concern_label = (
+            recommendation.linked_primary_concern
+            or (linked_contribution.primary_concern_label if linked_contribution is not None else None)
+            or "Underperforming risk"
+        )
+        contribution_score = (
+            linked_contribution.overall_contribution_score
+            if linked_contribution is not None
+            else recommendation.diagnosis_pressure_score
+        )
+        evidence_html = "".join(
+            f"<li style='margin-bottom:6px'>{humanize_evidence_point(point, recommendation.ticker)}</li>"
+            for point in recommendation.supporting_evidence[:5]
+        ) or "<li>The action engine flagged this from same-window performance and portfolio pressure.</li>"
+        action_tone = "#b91c1c" if recommendation.recommendation_label == "Sell all shares" else "#c2410c"
+        action_bg = "rgba(254,226,226,.95)" if recommendation.recommendation_label == "Sell all shares" else "rgba(255,237,213,.95)"
+        holding_items += (
+            "<div style='padding:22px 24px;border:1px solid rgba(248,113,113,.24);border-left:6px solid rgba(220,38,38,.72);border-radius:22px;"
+            "background:linear-gradient(180deg, rgba(255,255,255,.99), rgba(254,242,242,.66));margin-bottom:28px;"
+            "box-shadow:0 18px 44px rgba(15,23,42,.08);scroll-margin-top:18px'>"
+            "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
+            "<div style='display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
+            f"<div style='width:34px;height:34px;border-radius:999px;background:rgba(254,226,226,.94);border:1px solid rgba(239,68,68,.24);color:#991b1b;font-size:14px;font-weight:900;display:flex;align-items:center;justify-content:center'>#{rank_counter}</div>"
+            "<div>"
+            f"<div style='font-size:22px;font-weight:900;color:#0f172a'>{recommendation.ticker}"
+            + (f"<span style='font-size:15px;font-weight:500;color:#475569;margin-left:10px'>({recommendation.sector})</span>" if recommendation.sector else "")
+            + "</div>"
+            "<div style='display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:10px;font-size:14px;color:#2563eb'>"
+            f"<span>Current weight <strong style='color:#0f172a'>{percent_display(recommendation.current_weight)}</strong></span>"
+            f"<span>Since-buy vs S&P 500 <strong style='color:#991b1b'>{percent_display(recommendation.relative_performance_vs_benchmark)}</strong></span>"
+            f"<span>Action value <strong style='color:#0f172a'>{money_text(recommendation.value_to_sell)}</strong></span>"
+            "</div>"
+            "</div>"
+            "</div>"
+            "<div style='display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end'>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(248,250,252,.96);border:1px solid rgba(148,163,184,.26);color:#b91c1c;font-size:12px;font-weight:800'>Action-aligned diagnosis</div>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:{action_bg};border:1px solid rgba(248,113,113,.28);color:{action_tone};font-size:12px;font-weight:800'>{recommendation.recommendation_label}</div>"
+            "</div>"
+            "</div>"
+            "<div style='display:grid;grid-template-columns:minmax(280px,.95fr) minmax(320px,1.35fr);gap:16px;margin-top:18px'>"
+            "<div style='padding:16px 18px;border-radius:16px;background:linear-gradient(180deg, rgba(239,246,255,.95), rgba(255,255,255,.96));border:1px solid rgba(96,165,250,.20)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:900'>Why this appears first in diagnosis</div>"
+            f"<div style='font-size:18px;font-weight:900;color:#0f172a;margin-top:8px'>{short_concern_badge(concern_label)}</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#475569;margin-top:8px'>This holding is shown first because Risk Actions has already classified it as an underperforming risk to trim or sell. Diagnosis pressure is {number_text(contribution_score, 1)}/100.</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#334155;margin-top:10px'>{render_bold_markers(recommendation.why_it_matters or recommendation.what_changed)}</div>"
+            "</div>"
+            "<div style='padding:16px 18px;border-radius:16px;background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));border:1px solid rgba(148,163,184,.20)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#dc2626;font-weight:900'>Same recommendation as Risk Actions</div>"
+            f"<div style='font-size:18px;font-weight:900;color:{action_tone};margin-top:8px'>{recommendation.recommendation_label}</div>"
+            f"<div style='font-size:15px;line-height:1.6;color:#334155;margin-top:10px'>{render_bold_markers(recommendation.recommendation_summary)}</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#475569;margin-top:10px'>{render_bold_markers(recommendation.amount_rationale)}</div>"
+            "<details open style='margin-top:12px;padding:12px 14px;border-radius:14px;background:rgba(254,242,242,.78);border:1px solid rgba(248,113,113,.18)'>"
+            "<summary style='cursor:pointer;font-size:13px;font-weight:900;color:#dc2626;text-transform:uppercase;letter-spacing:.04em'>Evidence that triggered this action</summary>"
+            f"<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>{evidence_html}</ul>"
+            "</details>"
+            "</div>"
+            "</div>"
+            "</div>"
+        )
+        rank_counter += 1
+
+    for rank, contribution in enumerate(contribution_items, start=rank_counter):
         driver = driver_lookup.get(contribution.ticker)
         if driver is None:
             continue
         action_need = action_lookup.get(contribution.ticker)
+        final_recommendation = recommendation_lookup.get(contribution.ticker)
+        has_final_action = bool(final_recommendation is not None and final_recommendation.is_actionable)
         spillover_labels = build_contribution_spillover_labels(contribution)
         evidence_points = build_driver_evidence_points(diagnosis, driver)
+        if has_final_action:
+            recommendation_evidence = [
+                final_recommendation.what_changed,
+                final_recommendation.amount_rationale,
+                *final_recommendation.supporting_evidence[:3],
+            ]
+            evidence_points = [
+                point
+                for point in recommendation_evidence + evidence_points
+                if point
+            ]
         evidence_html = "".join(
             f"<li style='margin-bottom:6px'>{point}</li>"
             for point in evidence_points
@@ -3756,134 +4102,175 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
             (
                 "<span style='padding:6px 10px;border-radius:999px;"
                 "background:rgba(59,130,246,.10);border:1px solid rgba(96,165,250,.18);"
-                "color:#dbeafe;font-size:12px;font-weight:600'>"
+                "color:#1d4ed8;font-size:12px;font-weight:600'>"
                 f"{label}"
                 "</span>"
             )
             for label in spillover_labels
         ) or (
             "<span style='padding:6px 10px;border-radius:999px;background:rgba(148,163,184,.08);"
-            "border:1px solid rgba(148,163,184,.14);color:#cbd5e1;font-size:12px'>No major spillover concerns</span>"
+            "border:1px solid rgba(148,163,184,.14);color:#475569;font-size:12px'>No major spillover concerns</span>"
         )
-        confidence_band = contribution.contribution_confidence_band
-        confidence_tone = "#34d399" if confidence_band == "High" else "#fbbf24" if confidence_band == "Medium" else "#f87171"
-        score_tone = "#60a5fa" if contribution.overall_contribution_score < 40 else "#fbbf24" if contribution.overall_contribution_score < 70 else "#f87171"
-        action_label = getattr(action_need, "action_label", "No action read yet")
-        action_urgency = getattr(action_need, "action_urgency", "Needs review")
-        action_pressure_score = getattr(action_need, "action_pressure_score", None)
-        action_summary = (
-            build_action_summary_for_users(action_need, contribution)
-            if action_need is not None
-            else "The action layer has not produced a stable read for this holding yet."
-        )
-        action_reason = getattr(action_need, "primary_action_reason", None) or "The system has not identified a dominant action reason yet."
-        action_support = ", ".join(
-            humanize_concern_label(label)
-            for label in getattr(action_need, "supporting_concerns", [])[:2]
-        ) or "No major secondary pressure noted"
-        if action_label == "Reduce exposure":
-            action_tone = "#f87171"
-            action_bg = "rgba(127,29,29,.22)"
-        elif action_label == "Trim and monitor":
-            action_tone = "#fb923c"
-            action_bg = "rgba(124,45,18,.22)"
-        elif action_label == "Monitor closely":
-            action_tone = "#fbbf24"
-            action_bg = "rgba(120,53,15,.18)"
+        score_tone = "#2563eb" if contribution.overall_contribution_score < 40 else "#b45309" if contribution.overall_contribution_score < 70 else "#b91c1c"
+        if has_final_action:
+            action_label = final_recommendation.recommendation_label
+            action_urgency = "Trim candidate in Risk Actions"
+            action_pressure_score = final_recommendation.diagnosis_pressure_score
+            action_summary = final_recommendation.recommendation_summary
+            action_reason = final_recommendation.what_changed or final_recommendation.why_it_matters
+            action_support = final_recommendation.amount_rationale or final_recommendation.portfolio_impact_summary or "The final action recommendation is driven by same-window underperformance."
         else:
-            action_tone = "#34d399"
-            action_bg = "rgba(6,78,59,.18)"
+            action_label = getattr(action_need, "action_label", "No action read yet")
+            action_urgency = getattr(action_need, "action_urgency", "Needs review")
+            action_pressure_score = getattr(action_need, "action_pressure_score", None)
+            action_summary = (
+                build_action_summary_for_users(action_need, contribution)
+                if action_need is not None
+                else "The action layer has not produced a stable read for this holding yet."
+            )
+            action_reason = getattr(action_need, "primary_action_reason", None) or "The system has not identified a dominant action reason yet."
+            action_support = ", ".join(
+                humanize_concern_label(label)
+                for label in getattr(action_need, "supporting_concerns", [])[:2]
+            ) or "No major secondary pressure noted"
+        if action_label == "Reduce exposure" or action_label == "Sell all shares" or action_label.startswith("Reduce"):
+            action_tone = "#b91c1c"
+            action_bg = "rgba(254,226,226,.95)"
+        elif action_label == "Trim and monitor" or action_label.startswith("Trim"):
+            action_tone = "#c2410c"
+            action_bg = "rgba(255,237,213,.95)"
+        elif action_label == "Monitor closely":
+            action_tone = "#a16207"
+            action_bg = "rgba(254,249,195,.95)"
+        else:
+            action_tone = "#047857"
+            action_bg = "rgba(220,252,231,.95)"
         action_pressure_html = (
-            f"<div style='font-size:13px;color:#cbd5e1;margin-top:10px'>"
+            f"<div style='font-size:13px;color:#475569;margin-top:10px'>"
             f"Action pressure <strong style='color:{action_tone}'>{action_pressure_score:.1f}/100</strong> · {action_urgency}"
             "</div>"
             if action_pressure_score is not None
             else ""
         )
-        holding_items += (
-            "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
-            "background:rgba(15,23,42,.34);margin-bottom:14px'>"
+        external_explanation = external_explanations.get(contribution.ticker) or _diagnosis_deterministic_external_explanation(
+            diagnosis,
+            contribution,
+            driver,
+        )
+        external_panel = (
+            "<div style='margin-top:16px;padding:16px 18px;border-radius:18px;"
+            "background:linear-gradient(135deg, rgba(224,242,254,.98), rgba(255,255,255,.96));"
+            "border:1px solid rgba(14,165,233,.24);box-shadow:0 14px 32px rgba(14,116,144,.08)'>"
             "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
+            "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#0369a1;font-weight:900'>External news and company-report read</div>"
+            f"{explanation_source_badge(external_explanation.get('_source'))}"
+            "</div>"
+            f"<div style='font-size:17px;line-height:1.35;color:#0f172a;font-weight:900;margin-top:10px'>{render_llm_text(external_explanation.get('headline'))}</div>"
+            "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px'>"
+            "<div style='padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.90);border:1px solid rgba(14,165,233,.16)'>"
+            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#0369a1;font-weight:900'>What the external evidence says</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:8px'>{render_llm_text(external_explanation.get('external_read'))}</div>"
+            "</div>"
+            "<div style='padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.90);border:1px solid rgba(14,165,233,.16)'>"
+            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#0369a1;font-weight:900'>Why it matters to the diagnosis</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:8px'>{render_llm_text(external_explanation.get('why_it_matters'))}</div>"
+            "</div>"
+            "<div style='padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.90);border:1px solid rgba(14,165,233,.16)'>"
+            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#0369a1;font-weight:900'>What to watch next</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:8px'>{render_llm_text(external_explanation.get('what_to_watch'))}</div>"
+            "</div>"
+            "</div>"
+            f"<div style='font-size:12px;line-height:1.45;color:#0369a1;margin-top:12px'><strong>Evidence depth:</strong> {render_llm_text(external_explanation.get('evidence_depth'))}</div>"
+            "</div>"
+        )
+        holding_items += (
+            "<div style='padding:22px 24px;border:1px solid rgba(148,163,184,.24);border-left:6px solid rgba(37,99,235,.72);border-radius:22px;"
+            "background:linear-gradient(180deg, rgba(255,255,255,.99), rgba(248,250,252,.96));margin-bottom:28px;"
+            "box-shadow:0 18px 44px rgba(15,23,42,.08);scroll-margin-top:18px'>"
+            "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
+            "<div style='display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
+            f"<div style='width:34px;height:34px;border-radius:999px;background:rgba(37,99,235,.12);border:1px solid rgba(37,99,235,.22);color:#1d4ed8;font-size:14px;font-weight:900;display:flex;align-items:center;justify-content:center'>#{rank}</div>"
             "<div>"
-            f"<div style='font-size:20px;font-weight:800;color:#f8fafc'>{contribution.ticker}"
-            + (f"<span style='font-size:15px;font-weight:500;color:#cbd5e1;margin-left:10px'>({driver.sector})</span>" if driver.sector else "")
+            f"<div style='font-size:22px;font-weight:900;color:#0f172a'>{contribution.ticker}"
+            + (f"<span style='font-size:15px;font-weight:500;color:#475569;margin-left:10px'>({driver.sector})</span>" if driver.sector else "")
             + "</div>"
             "<div style='display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:10px;font-size:14px;color:#93c5fd'>"
-            f"<span>Weight <strong style='color:#f8fafc'>{percent_display(driver.current_weight)}</strong></span>"
-            f"<span>Vs benchmark <strong style='color:#f8fafc'>{percent_display(driver.excess_return_vs_benchmark)}</strong></span>"
-            f"<span>Variance contribution <strong style='color:#f8fafc'>{percent_display(driver.variance_contribution_pct)}</strong></span>"
+            f"<span>Weight <strong style='color:#0f172a'>{percent_display(driver.current_weight)}</strong></span>"
+            f"<span>Vs benchmark <strong style='color:#0f172a'>{percent_display(driver.excess_return_vs_benchmark)}</strong></span>"
+            f"<span>Variance contribution <strong style='color:#0f172a'>{percent_display(driver.variance_contribution_pct)}</strong></span>"
             "</div>"
             "</div>"
             "<div style='display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end'>"
-            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:{score_tone};font-size:12px;font-weight:700'>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(248,250,252,.96);border:1px solid rgba(148,163,184,.26);color:{score_tone};font-size:12px;font-weight:800'>"
             f"Contribution {contribution.overall_contribution_score:.1f}/100"
             "</div>"
-            f"<div style='padding:8px 12px;border-radius:999px;background:{action_bg};border:1px solid rgba(148,163,184,.16);color:{action_tone};font-size:12px;font-weight:700'>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:{action_bg};border:1px solid rgba(148,163,184,.22);color:{action_tone};font-size:12px;font-weight:800'>"
             f"{action_label}"
             "</div>"
-            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:{confidence_tone};font-size:12px;font-weight:700'>"
-            f"{confidence_band} confidence"
             "</div>"
             "</div>"
-            "</div>"
-            "<div style='display:grid;grid-template-columns:minmax(260px,1.2fr) minmax(240px,.95fr) minmax(240px,1fr);gap:16px;margin-top:16px'>"
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.46);border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='display:grid;grid-template-columns:minmax(280px,.95fr) minmax(320px,1.35fr);gap:16px;margin-top:18px'>"
+            "<div style='padding:16px 18px;border-radius:16px;background:linear-gradient(180deg, rgba(239,246,255,.95), rgba(255,255,255,.96));border:1px solid rgba(96,165,250,.20)'>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Main portfolio risk this holding is feeding</div>"
-            f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:8px'>{contribution.primary_concern_label}</div>"
-            f"<div style='font-size:13px;line-height:1.5;color:#cbd5e1;margin-top:8px'>{humanize_concern_label(contribution.primary_concern_label)}</div>"
-            f"<div style='font-size:15px;line-height:1.6;color:#dbe4f0;margin-top:10px'>{contribution.primary_concern_summary}</div>"
+            f"<div style='font-size:18px;font-weight:800;color:#0f172a;margin-top:8px'>{contribution.primary_concern_label}</div>"
+            f"<div style='font-size:13px;line-height:1.5;color:#475569;margin-top:8px'>{humanize_concern_label(contribution.primary_concern_label)}</div>"
+            f"<div style='font-size:15px;line-height:1.6;color:#334155;margin-top:10px'>{contribution.primary_concern_summary}</div>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Other risks this holding also spills into</div>"
             f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:10px'>{spillover_html}</div>"
             "</div>"
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.40);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What level of action this currently deserves</div>"
+            "<div style='padding:16px 18px;border-radius:16px;background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));border:1px solid rgba(148,163,184,.20)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What to do and why</div>"
             f"<div style='font-size:18px;font-weight:800;color:{action_tone};margin-top:8px'>{action_label}</div>"
             f"{action_pressure_html}"
-            f"<div style='font-size:15px;line-height:1.6;color:#dbe4f0;margin-top:10px'>{action_summary}</div>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Why this action label was chosen</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:8px'>{action_reason.capitalize()}.</div>"
-            f"<div style='font-size:13px;line-height:1.5;color:#cbd5e1;margin-top:10px'>Secondary pressure still comes from: <strong style='color:#f8fafc'>{action_support}</strong>.</div>"
-            "</div>"
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What changed in the portfolio that led to this</div>"
-            "<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>"
+            f"<div style='font-size:15px;line-height:1.6;color:#334155;margin-top:10px'>{action_summary}</div>"
+            "<details open style='margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(239,246,255,.70);border:1px solid rgba(96,165,250,.16)'>"
+            "<summary style='cursor:pointer;font-size:13px;font-weight:900;color:#2563eb;text-transform:uppercase;letter-spacing:.04em'>Why this action label was chosen</summary>"
+            f"<div style='font-size:14px;line-height:1.6;color:#334155;margin-top:10px'>{action_reason.capitalize()}.</div>"
+            f"<div style='font-size:13px;line-height:1.5;color:#475569;margin-top:10px'>Secondary pressure still comes from: <strong style='color:#0f172a'>{action_support}</strong>.</div>"
+            "</details>"
+            "<details style='margin-top:10px;padding:12px 14px;border-radius:14px;background:rgba(248,250,252,.86);border:1px solid rgba(148,163,184,.18)'>"
+            "<summary style='cursor:pointer;font-size:13px;font-weight:900;color:#2563eb;text-transform:uppercase;letter-spacing:.04em'>Evidence that triggered this read</summary>"
+            "<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>"
             f"{evidence_html}"
             "</ul>"
+            "</details>"
             "</div>"
             "</div>"
+            f"{external_panel}"
             "</div>"
         )
 
     if not holding_items:
-        holding_items = "<div style='color:#cbd5e1'>No holding-level drivers were identified yet.</div>"
+        holding_items = "<div style='color:#475569'>No holding-level drivers were identified yet.</div>"
 
     sector_items = "".join(
         (
-            "<div style='padding:14px 16px;border:1px solid rgba(148,163,184,.14);border-radius:14px;"
-            "background:rgba(15,23,42,.28);margin-bottom:10px'>"
+            "<div style='padding:14px 16px;border:1px solid rgba(148,163,184,.18);border-radius:14px;"
+            "background:rgba(255,255,255,.86);margin-bottom:10px;box-shadow:0 10px 28px rgba(15,23,42,.06)'>"
             f"<div style='display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap'>"
-            f"<div style='font-size:16px;font-weight:700;color:#f8fafc'>{driver.sector}</div>"
-            f"<div style='font-size:12px;color:#93c5fd'>{driver.driver_confidence_band} confidence</div>"
+            f"<div style='font-size:16px;font-weight:700;color:#0f172a'>{driver.sector}</div>"
             "</div>"
-            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Weight <strong style='color:#f8fafc'>{percent_display(driver.weight_pct)}</strong> · "
-            f"Vs benchmark <strong style='color:#f8fafc'>{percent_display(driver.excess_return_vs_benchmark)}</strong></div>"
-            f"<div style='margin-top:10px;font-size:14px;line-height:1.5;color:#e2e8f0'><strong>{humanize_reason_label(driver.primary_reason_label or 'Main sector reason')}:</strong> {driver.primary_reason_summary or build_sector_driver_explanation(driver)}</div>"
+            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Weight <strong style='color:#0f172a'>{percent_display(driver.weight_pct)}</strong> · "
+            f"Vs benchmark <strong style='color:#0f172a'>{percent_display(driver.excess_return_vs_benchmark)}</strong></div>"
+            f"<div style='margin-top:10px;font-size:14px;line-height:1.5;color:#334155'><strong>{humanize_reason_label(driver.primary_reason_label or 'Main sector reason')}:</strong> {driver.primary_reason_summary or build_sector_driver_explanation(driver)}</div>"
             "</div>"
         )
         for driver in diagnosis.top_sector_drivers
-    ) or "<div style='color:#cbd5e1'>No sector-level drivers were identified yet.</div>"
+    ) or "<div style='color:#475569'>No sector-level drivers were identified yet.</div>"
     return (
         "<div style='display:grid;gap:16px'>"
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:20px;font-weight:800;color:#f8fafc'>Top Holding Drivers</div>"
+        "background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));box-shadow:0 18px 48px rgba(15,23,42,.08)'>"
+        "<div style='font-size:20px;font-weight:800;color:#0f172a'>Top Holding Drivers</div>"
         f"{section_provenance_note('Rule-based', 'reason-code framework + evidence tables', 'rule')}"
         "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>For each holding, start with the main portfolio risk it is feeding, then look at the current action read and the evidence that made the diagnosis flag it.</div>"
+        f"{diagnosis_order_html}"
+        f"{actionable_detail_section}"
         f"<div style='margin-top:14px'>{holding_items}</div>"
         "</div>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Sector Drivers</div>"
+        "background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));box-shadow:0 18px 48px rgba(15,23,42,.08)'>"
+        "<div style='font-size:18px;font-weight:700;color:#0f172a'>Sector Drivers</div>"
         "<div style='font-size:13px;color:#93c5fd;margin-top:6px'>These are the sector-level patterns that make the portfolio feel crowded or fragile.</div>"
         f"<div style='margin-top:14px'>{sector_items}</div>"
         "</div>"
@@ -4034,9 +4421,8 @@ def build_confidence_completeness_html(diagnosis: PortfolioRiskDiagnosis) -> str
         "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px'>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Confidence and Completeness</div>"
+        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Evidence Completeness</div>"
         f"{section_provenance_note('Rule-based', 'evidence coverage checks', 'rule')}"
-        f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>Overall diagnosis confidence is <strong>{diagnosis.confidence_band}</strong>.</div>"
         f"<div style='font-size:14px;color:#93c5fd;margin-top:10px'>Coverage check: {coverage_count}/{total_count} evidence sources are currently available.</div>"
         "<div style='font-size:14px;color:#cbd5e1;margin-top:12px'>The system should stay explicit about uncertainty, especially when external evidence is thin or incomplete.</div>"
         "</div>"
@@ -4052,21 +4438,21 @@ def build_confidence_completeness_html(diagnosis: PortfolioRiskDiagnosis) -> str
 def performance_window_chip(label: str, relative_value: float | None) -> str:
     """Render one trailing-window comparison chip for the Risk Actions tab."""
     if relative_value is None:
-        tone = "#cbd5e1"
-        background = "rgba(51,65,85,.55)"
+        tone = "#64748b"
+        background = "rgba(248,250,252,.94)"
         text = "Not enough history"
     elif relative_value >= 0:
-        tone = "#34d399"
-        background = "rgba(6,78,59,.22)"
+        tone = "#047857"
+        background = "rgba(220,252,231,.88)"
         text = f"Beat S&P 500 by {percent_display(relative_value)}"
     else:
-        tone = "#f87171"
-        background = "rgba(127,29,29,.22)"
+        tone = "#b91c1c"
+        background = "rgba(254,226,226,.88)"
         text = f"Lagged S&P 500 by {percent_display(abs(relative_value))}"
     return (
         "<div style='padding:10px 12px;border-radius:14px;"
         f"background:{background};border:1px solid rgba(148,163,184,.14)'>"
-        f"<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>{label}</div>"
+        f"<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:700'>{label}</div>"
         f"<div style='font-size:13px;color:{tone};font-weight:700;margin-top:6px'>{text}</div>"
         "</div>"
     )
@@ -4093,7 +4479,6 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "1Y vs S&P 500": percent_display(item.relative_1y_return_pct),
                 "3Y vs S&P 500": percent_display(item.relative_3y_return_pct),
                 "5Y vs S&P 500": percent_display(item.relative_5y_return_pct),
-                "Confidence": item.confidence_band,
                 "Explicit sell modifiers": " | ".join(item.explicit_sell_modifiers),
                 "Modifier score": item.modifier_score,
                 "What changed": item.what_changed,
@@ -4120,7 +4505,6 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "1Y vs S&P 500",
                 "3Y vs S&P 500",
                 "5Y vs S&P 500",
-                "Confidence",
                 "Explicit sell modifiers",
                 "Modifier score",
                 "What changed",
@@ -4133,6 +4517,362 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
     frame = pd.DataFrame(rows)
     frame["_sort"] = frame["Action"].map(action_order).fillna(99)
     return frame.sort_values(["_sort", "Ticker"]).drop(columns=["_sort"]).reset_index(drop=True)
+
+
+def plot_risk_action_candidate_chart(item: Any | None, market_data: dict[str, Any] | None = None) -> go.Figure:
+    """Plot a Risk Action candidate against the S&P 500 around the user's buy date.
+
+    The chart is intentionally aligned to the user's weighted-average purchase
+    date. Both the holding and the S&P 500 are set to 0% on that date, so the
+    user can visually inspect the same comparison that powers the trim / sell
+    recommendation instead of reading only a percentage in a card.
+    """
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        column_widths=[0.76, 0.24],
+        specs=[[{"type": "xy"}, {"type": "bar"}]],
+        horizontal_spacing=0.08,
+    )
+    if item is None or not market_data:
+        fig.add_annotation(
+            text="Run analysis to see each risk-action candidate versus the S&P 500.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 14, "color": "#0f172a"},
+        )
+        fig.update_layout(
+            height=460,
+            margin={"l": 48, "r": 24, "t": 58, "b": 36},
+            template="plotly_white",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(248,250,252,0.94)",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
+    ticker = str(getattr(item, "ticker", "") or "").strip()
+    ticker_close = market_data.get("long_horizon_ticker_close", pd.DataFrame())
+    benchmark_close = market_data.get("long_horizon_benchmark_close", pd.Series(dtype=float))
+    if ticker_close.empty or benchmark_close.empty or ticker not in ticker_close.columns:
+        fig.add_annotation(
+            text=f"No chart history available for {ticker or 'this holding'}.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 14, "color": "#0f172a"},
+        )
+        fig.update_layout(
+            height=460,
+            margin={"l": 48, "r": 24, "t": 58, "b": 36},
+            template="plotly_white",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(248,250,252,0.94)",
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+        )
+        return fig
+
+    raw_start = getattr(item, "performance_window_start", None)
+    purchase_ts = pd.to_datetime(raw_start, errors="coerce")
+    frame = pd.concat(
+        [
+            pd.to_numeric(ticker_close[ticker], errors="coerce").rename("holding"),
+            pd.to_numeric(benchmark_close, errors="coerce").rename("benchmark"),
+        ],
+        axis=1,
+        join="inner",
+    ).dropna()
+    if frame.empty:
+        return plot_risk_action_candidate_chart(None, None)
+    frame.index = pd.to_datetime(frame.index)
+    frame = frame.sort_index()
+    if pd.isna(purchase_ts):
+        purchase_ts = frame.index[0]
+    purchase_ts = next_market_date(frame.index, purchase_ts)
+    purchase_price = float(frame.loc[purchase_ts, "holding"])
+    benchmark_purchase_price = float(frame.loc[purchase_ts, "benchmark"])
+    if purchase_price <= 0 or benchmark_purchase_price <= 0:
+        return plot_risk_action_candidate_chart(None, None)
+
+    frame = frame.copy()
+    frame["holding_return_pct"] = (frame["holding"] / purchase_price - 1.0) * 100.0
+    frame["benchmark_return_pct"] = (frame["benchmark"] / benchmark_purchase_price - 1.0) * 100.0
+    frame = frame.dropna(subset=["holding_return_pct", "benchmark_return_pct"])
+    if frame.empty:
+        return plot_risk_action_candidate_chart(None, None)
+
+    x_values = [idx.to_pydatetime() for idx in frame.index]
+    holding_values = [float(value) for value in frame["holding_return_pct"]]
+    benchmark_values = [float(value) for value in frame["benchmark_return_pct"]]
+    latest_holding = holding_values[-1]
+    latest_benchmark = benchmark_values[-1]
+    relative = latest_holding - latest_benchmark
+    y_min = min(min(holding_values), min(benchmark_values), 0.0)
+    y_max = max(max(holding_values), max(benchmark_values), 0.0)
+    y_padding = max((y_max - y_min) * 0.10, 8.0)
+
+    fig.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=holding_values,
+            mode="lines",
+            name=ticker,
+            line={"color": "#2563eb", "width": 2.8},
+            hovertemplate="<b>%{x|%b %d, %Y}</b><br>" + f"{ticker}: " + "%{y:.1f}% since buy<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x_values,
+            y=benchmark_values,
+            mode="lines",
+            name="S&P 500",
+            line={"color": "#f97316", "width": 2.1, "dash": "dash"},
+            hovertemplate="<b>%{x|%b %d, %Y}</b><br>S&P 500: %{y:.1f}% since buy<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=[ticker, "S&P 500"],
+            y=[latest_holding, latest_benchmark],
+            marker={"color": ["#2563eb", "#f97316"]},
+            text=[f"{latest_holding:.1f}%", f"{latest_benchmark:.1f}%"],
+            textposition="outside",
+            showlegend=False,
+            hovertemplate="<b>%{x}</b><br>Return since buy: %{y:.1f}%<extra></extra>",
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_vline(
+        x=purchase_ts.to_pydatetime(),
+        line_color="#0f766e",
+        line_dash="dot",
+        line_width=2,
+        row=1,
+        col=1,
+    )
+    fig.add_annotation(
+        x=purchase_ts.to_pydatetime(),
+        y=y_max,
+        xref="x",
+        yref="y",
+        text=f"Avg buy<br>{purchase_ts.date().isoformat()}",
+        showarrow=True,
+        arrowhead=2,
+        ax=38,
+        ay=-34,
+        bgcolor="rgba(236,253,245,.96)",
+        bordercolor="#0f766e",
+        font={"size": 11, "color": "#0f172a"},
+    )
+    fig.add_hline(y=0, line_dash="dot", line_color="rgba(100,116,139,0.36)", row=1, col=1)
+    fig.add_hline(y=0, line_dash="dot", line_color="rgba(100,116,139,0.36)", row=1, col=2)
+
+    fig.update_layout(
+        title=(
+            f"{ticker} since avg buy: {latest_holding:.1f}% | "
+            f"S&P 500: {latest_benchmark:.1f}% | Difference: {relative:+.1f}%"
+        ),
+        height=460,
+        margin={"l": 54, "r": 26, "t": 70, "b": 42},
+        template="plotly_white",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(248,250,252,0.94)",
+        hoverlabel=dark_hoverlabel(),
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "right", "x": 1.0},
+        font={"color": "#0f172a"},
+    )
+    fig.update_yaxes(
+        title_text="Return since your avg buy date (%)",
+        gridcolor="rgba(148,163,184,0.16)",
+        ticksuffix="%",
+        range=[y_min - y_padding, y_max + y_padding],
+        row=1,
+        col=1,
+    )
+    bar_upper_bound = max(latest_holding, latest_benchmark, 0.0) * 1.25 + 8.0
+    bar_lower_bound = min(latest_holding, latest_benchmark, 0.0) - 10.0
+    fig.update_yaxes(
+        title_text="Final return",
+        gridcolor="rgba(148,163,184,0.14)",
+        ticksuffix="%",
+        range=[bar_lower_bound, bar_upper_bound],
+        row=1,
+        col=2,
+    )
+    fig.update_xaxes(gridcolor="rgba(148,163,184,0.14)", row=1, col=1)
+    fig.update_xaxes(gridcolor="rgba(148,163,184,0.10)", row=1, col=2)
+    return fig
+
+
+def build_risk_action_chart_card_html(item: Any | None, rank: int) -> str:
+    """Small text card paired with a Risk Action performance chart."""
+    if item is None:
+        return ""
+    lag_text = percent_display(abs(getattr(item, "relative_performance_vs_benchmark", 0.0) or 0.0))
+    purchase_text = getattr(item, "performance_window_start", None) or "N/A"
+    return (
+        "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.18);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));box-shadow:0 16px 34px rgba(15,23,42,.07)'>"
+        "<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
+        f"<div style='padding:6px 10px;border-radius:999px;background:rgba(254,226,226,.92);border:1px solid rgba(239,68,68,.24);color:#991b1b;font-size:12px;font-weight:900'>#{rank}</div>"
+        f"<div style='font-size:22px;font-weight:900;color:#0f172a'>{item.ticker}</div>"
+        f"<div style='padding:7px 10px;border-radius:999px;background:rgba(254,243,199,.96);border:1px solid rgba(217,119,6,.24);color:#92400e;font-size:12px;font-weight:900'>{item.recommendation_label}</div>"
+        "</div>"
+        f"<div style='font-size:13px;color:#475569;margin-top:10px'>{short_concern_badge(getattr(item, 'linked_primary_concern', None))}</div>"
+        "<div style='display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px'>"
+        f"<div style='padding:11px 12px;border-radius:14px;background:rgba(239,246,255,.96);border:1px solid rgba(37,99,235,.18)'><div style='font-size:11px;color:#2563eb;font-weight:900;text-transform:uppercase;letter-spacing:.05em'>Avg buy date</div><div style='font-size:16px;color:#0f172a;font-weight:850;margin-top:5px'>{purchase_text}</div></div>"
+        f"<div style='padding:11px 12px;border-radius:14px;background:rgba(254,226,226,.80);border:1px solid rgba(239,68,68,.18)'><div style='font-size:11px;color:#dc2626;font-weight:900;text-transform:uppercase;letter-spacing:.05em'>Lag vs S&P 500</div><div style='font-size:16px;color:#991b1b;font-weight:850;margin-top:5px'>{lag_text}</div></div>"
+        "</div>"
+        f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:12px'>{render_bold_markers(getattr(item, 'what_changed', '') or getattr(item, 'recommendation_summary', ''))}</div>"
+        "<div style='font-size:12px;color:#2563eb;margin-top:10px'>The chart sets both lines to 0% on your average buy date, then shows what happened from there.</div>"
+        "</div>"
+    )
+
+
+def build_risk_action_feature_slots(
+    diagnosis: PortfolioRiskDiagnosis,
+    market_data: dict[str, Any],
+    limit: int = MAX_FEATURED_RISK_ACTION_COUNT,
+) -> list[Any]:
+    """Return fixed Risk Action chart rows in Gradio output order."""
+    actionable = [item for item in diagnosis.holding_action_recommendations if item.is_actionable]
+    selected = actionable[: max(0, min(int(limit), MAX_FEATURED_RISK_ACTION_COUNT))]
+    row_outputs: list[Any] = []
+    card_outputs: list[Any] = []
+    plot_outputs: list[Any] = []
+    for idx in range(MAX_FEATURED_RISK_ACTION_COUNT):
+        item = selected[idx] if idx < len(selected) else None
+        is_visible = item is not None
+        row_outputs.append(gr.update(visible=is_visible))
+        card_outputs.append(build_risk_action_chart_card_html(item, idx + 1) if is_visible else "")
+        plot_outputs.append(plot_risk_action_candidate_chart(item, market_data) if is_visible else plot_risk_action_candidate_chart(None, None))
+    return [*row_outputs, *card_outputs, *plot_outputs]
+
+
+def build_underperforming_risk_detail_cards(
+    diagnosis: PortfolioRiskDiagnosis,
+    actionable: list[Any] | None = None,
+    *,
+    include_heading: bool = True,
+) -> str:
+    """Render the full underperforming-risk cards used by Risk Diagnosis.
+
+    The action engine decides the label, amount, and target weight before this
+    renderer runs. This function only turns those deterministic outputs into a
+    readable diagnosis story: what action is suggested, why same-window S&P 500
+    performance triggered it, what evidence was checked, and what should improve
+    if the user follows the move.
+    """
+    items = actionable
+    if items is None:
+        items = [item for item in diagnosis.holding_action_recommendations if item.is_actionable]
+    if not items:
+        return ""
+
+    llm_explanations = generate_risk_action_llm_explanations(diagnosis, items)
+    cards = ""
+    for item in items:
+        llm_explanation = llm_explanations.get(item.ticker) or _risk_action_deterministic_explanation(item)
+        llm_source = llm_explanation.get("_source", "Explanation layer")
+        amount_value = money_text(item.value_to_sell)
+        amount_detail = (
+            "Full exit recommended"
+            if item.recommendation_label == "Sell all shares"
+            else f"{percent_display(item.position_reduction_pct)} of this position"
+        )
+        action_line = (
+            f"Sell the full position: about <strong>{number_text(item.shares_to_sell, 4)}</strong> shares, "
+            f"or roughly <strong>{amount_value}</strong>."
+            if item.recommendation_label == "Sell all shares"
+            else (
+                f"{item.recommendation_label} now: sell about <strong>{number_text(item.shares_to_sell, 4)}</strong> shares "
+                f"(roughly <strong>{amount_value}</strong>) and bring the weight from "
+                f"<strong>{percent_display(item.current_weight)}</strong> down to about "
+                f"<strong>{percent_display(item.target_weight_after_action)}</strong>."
+            )
+        )
+        action_tiles = (
+            risk_action_metric("Recommended move", item.recommendation_label, amount_value, "red")
+            + risk_action_metric(
+                "Why it triggered",
+                percent_display(item.relative_performance_vs_benchmark),
+                "vs S&P 500 over the same holding window",
+                "red",
+            )
+            + risk_action_metric("New target weight", percent_display(item.target_weight_after_action), amount_detail, "blue")
+        )
+        evidence = "".join(
+            f"<li style='margin-bottom:7px'>{humanize_evidence_point(point, item.ticker)}</li>"
+            for point in item.supporting_evidence[:5]
+        ) or "<li>No supporting evidence was attached.</li>"
+        external_context = render_llm_text(llm_explanation.get("external_context"))
+        what_improves = render_llm_text(llm_explanation.get("what_improves"))
+        why_now = render_llm_text(llm_explanation.get("why_now"))
+        cards += (
+            "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(255,255,255,.99), rgba(248,250,252,.96));margin-bottom:18px;"
+            "box-shadow:0 18px 44px rgba(15,23,42,.08);scroll-margin-top:18px'>"
+            "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
+            "<div>"
+            f"<div style='font-size:22px;font-weight:900;color:#0f172a'>{item.ticker}"
+            + (f"<span style='font-size:15px;font-weight:500;color:#475569;margin-left:10px'>({item.sector})</span>" if item.sector else "")
+            + "</div>"
+            f"<div style='font-size:14px;color:#2563eb;margin-top:8px'>{short_concern_badge(item.linked_primary_concern)} · same-window S&P 500 comparison</div>"
+            "</div>"
+            "<div style='display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end'>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(254,226,226,.92);border:1px solid rgba(248,113,113,.28);color:#991b1b;font-size:12px;font-weight:800'>{item.recommendation_label}</div>"
+            f"{explanation_source_badge(llm_source)}"
+            "</div>"
+            "</div>"
+            f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:16px'>{action_tiles}</div>"
+            f"<div style='font-size:15px;line-height:1.6;color:#334155;margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.92);border:1px solid rgba(148,163,184,.18)'>{action_line}</div>"
+            "<div style='padding:16px 18px;border-radius:16px;background:linear-gradient(135deg, rgba(239,246,255,.98), rgba(255,255,255,.94));border:1px solid rgba(96,165,250,.22);margin-top:16px'>"
+            "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#2563eb;font-weight:900'>Plain-English read</div>"
+            f"<div style='font-size:18px;line-height:1.35;color:#0f172a;font-weight:900;margin-top:10px'>{render_llm_text(llm_explanation.get('headline'))}</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#334155;margin-top:10px'>{render_llm_text(llm_explanation.get('plain_english_summary'))}</div>"
+            "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px'>"
+            "<div style='padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.92);border:1px solid rgba(96,165,250,.16)'>"
+            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:900'>Why now</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:8px'>{why_now}</div>"
+            "</div>"
+            "<div style='padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.92);border:1px solid rgba(96,165,250,.16)'>"
+            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:900'>Company, news, and market context</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:8px'>{external_context}</div>"
+            "</div>"
+            "<div style='padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.92);border:1px solid rgba(96,165,250,.16)'>"
+            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:900'>What should improve</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:8px'>{what_improves}</div>"
+            "</div>"
+            "</div>"
+            f"<div style='font-size:12px;line-height:1.55;color:#475569;margin-top:12px'><strong>Watchout:</strong> {render_llm_text(llm_explanation.get('watchout'))}</div>"
+            "</div>"
+            "<details style='margin-top:12px;padding:12px 14px;border-radius:14px;background:rgba(248,250,252,.90);border:1px solid rgba(148,163,184,.18)'>"
+            "<summary style='cursor:pointer;font-size:13px;font-weight:900;color:#2563eb;text-transform:uppercase;letter-spacing:.04em'>Evidence that triggered this read</summary>"
+            f"<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>{evidence}</ul>"
+            "</details>"
+            "</div>"
+        )
+
+    heading = (
+        "<div style='font-size:20px;font-weight:900;color:#0f172a;margin:4px 0 10px'>Underperforming risks to trim</div>"
+        if include_heading
+        else ""
+    )
+    return f"{heading}{cards}"
 
 
 def update_risk_actions_view(
@@ -4155,7 +4895,8 @@ def update_risk_actions_view(
 def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis, view_mode: str = "Action Summary") -> str:
     """Render simple sell/trim guidance backed by relative performance windows."""
     actionable = [item for item in diagnosis.holding_action_recommendations if item.is_actionable]
-    held = [item for item in diagnosis.holding_action_recommendations if not item.is_actionable][:4]
+    recommendation_lookup = {item.ticker: item for item in diagnosis.holding_action_recommendations}
+    actionable_tickers = {item.ticker for item in actionable}
     action_impact = diagnosis.portfolio_action_impact
     normalized_view = str(view_mode or "Action Summary").strip()
     show_summary = normalized_view == "Action Summary"
@@ -4165,10 +4906,10 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis, view_mode: str = 
     if not actionable:
         return (
             "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-            "<div style='font-size:20px;font-weight:800;color:#f8fafc'>Risk Actions</div>"
+            "background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));box-shadow:0 16px 40px rgba(15,23,42,.08)'>"
+            "<div style='font-size:20px;font-weight:800;color:#0f172a'>Risk Actions</div>"
             f"{section_provenance_note('Rule-based', 'sell/trim gate from relative performance + risk pressure', 'rule')}"
-            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No holdings currently meet the stricter sell / trim rule. The current logic only recommends action when a holding has actually been underperforming the S&P 500 over a meaningful period.</div>"
+            "<div style='font-size:15px;color:#475569;margin-top:10px'>No holdings currently meet the stricter sell / trim rule. The current logic only recommends action when a holding has actually been underperforming the S&P 500 over a meaningful period.</div>"
             "</div>"
         )
 
@@ -4192,17 +4933,80 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis, view_mode: str = 
         )
         impact_section = (
             "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94));margin-bottom:18px'>"
-            "<div style='font-size:20px;font-weight:800;color:#f8fafc'>If You Follow The Current Action Set</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:10px'>{render_bold_markers(action_impact.impact_summary)}</div>"
+            "background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));margin-bottom:18px;box-shadow:0 16px 40px rgba(15,23,42,.08)'>"
+            "<div style='font-size:20px;font-weight:800;color:#0f172a'>If You Follow The Current Action Set</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#475569;margin-top:10px'>{render_bold_markers(action_impact.impact_summary)}</div>"
             f"<div class='metric-strip' style='margin-top:14px'>{impact_cards}</div>"
             "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>What likely improves at the portfolio level</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{impact_bullets_html}</ul>"
+            f"<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>{impact_bullets_html}</ul>"
             "</div>"
         )
 
+    high_risk_monitor_rows = []
+    for contribution in diagnosis.holding_risk_contributions or []:
+        if contribution.ticker in actionable_tickers:
+            continue
+        if len(high_risk_monitor_rows) >= 6:
+            break
+        linked_action = recommendation_lookup.get(contribution.ticker)
+        driver_score = float(contribution.overall_contribution_score or 0.0)
+        if driver_score >= 45 or len(high_risk_monitor_rows) < 3:
+            high_risk_monitor_rows.append((contribution, linked_action))
+
+    underperforming_chips = "".join(
+        (
+            "<span style='display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border-radius:999px;"
+            "background:rgba(254,226,226,.86);border:1px solid rgba(239,68,68,.24);color:#991b1b;font-size:12px;font-weight:800'>"
+            f"{item.ticker} · {item.recommendation_label}"
+            "</span>"
+        )
+        for item in actionable[:8]
+    )
+    high_risk_chips = "".join(
+        (
+            "<span style='display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border-radius:999px;"
+            "background:rgba(219,234,254,.88);border:1px solid rgba(37,99,235,.22);color:#1d4ed8;font-size:12px;font-weight:800'>"
+            f"{contribution.ticker} · risk driver {contribution.overall_contribution_score:.1f}/100"
+            "</span>"
+        )
+        for contribution, _linked_action in high_risk_monitor_rows
+    ) or "<span style='font-size:13px;color:#475569'>No high-risk winners were separated from the trim list in this run.</span>"
+    bridge_html = (
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
+        "background:linear-gradient(180deg, rgba(239,246,255,.95), rgba(255,255,255,.96));margin-bottom:18px;box-shadow:0 16px 36px rgba(15,23,42,.07)'>"
+        "<div style='font-size:20px;font-weight:900;color:#0f172a'>Risk Actions order</div>"
+        "<div style='font-size:14px;line-height:1.6;color:#475569;margin-top:8px'>"
+        "A holding can be a major risk driver without being an immediate sell. Risk Diagnosis asks <strong>what moves the portfolio</strong>. "
+        "Risk Actions asks <strong>where that risk is paired with weak same-window performance</strong>."
+        "</div>"
+        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:14px'>"
+        "<div style='padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.92);border:1px solid rgba(239,68,68,.18)'>"
+        "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#dc2626;font-weight:900'>1. Underperforming risks to trim</div>"
+        "<div style='font-size:13px;color:#475569;margin-top:8px'>These holdings show enough risk plus lagging performance to deserve action before simply cutting winners.</div>"
+        f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:12px'>{underperforming_chips}</div>"
+        "</div>"
+        "<div style='padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.92);border:1px solid rgba(37,99,235,.18)'>"
+        "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#2563eb;font-weight:900'>2. High-risk winners to cap or monitor</div>"
+        "<div style='font-size:13px;color:#475569;margin-top:8px'>These may drive portfolio risk, but the action layer avoids calling them sells unless the evidence also shows weakness.</div>"
+        f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:12px'>{high_risk_chips}</div>"
+        "</div>"
+        "<div style='padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.92);border:1px solid rgba(16,185,129,.18)'>"
+        "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#047857;font-weight:900'>3. Why top risk drivers are not always sells</div>"
+        "<div style='font-size:13px;line-height:1.55;color:#475569;margin-top:8px'>If a large winner is still outperforming, the app treats it as a name to cap or monitor rather than automatically sell. "
+        "That keeps the story coherent: reduce weak risk first, then manage oversized winners.</div>"
+        "</div>"
+        "</div>"
+        "</div>"
+    )
+
     cards = ""
-    llm_explanations = generate_risk_action_llm_explanations(diagnosis, actionable)
+    if show_summary:
+        llm_explanations = {
+            str(item.ticker): _risk_action_deterministic_explanation(item)
+            for item in actionable
+        }
+    else:
+        llm_explanations = generate_risk_action_llm_explanations(diagnosis, actionable)
     for item in actionable:
         if item.recommendation_label == "Sell all shares":
             action_line = (
@@ -4251,61 +5055,59 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis, view_mode: str = 
             risk_action_metric("Recommended move", item.recommendation_label, amount_value, action_tone)
             + risk_action_metric("Why it triggered", percent_display(item.relative_performance_vs_benchmark), "vs S&P 500 over the same holding window", "red")
             + risk_action_metric("New target weight", percent_display(item.target_weight_after_action), amount_detail, "blue")
-            + risk_action_metric("Confidence", item.confidence_band, "decision strength from available evidence", "green" if item.confidence_band == "High" else "amber")
         )
         plain_english_panel = (
             "<div style='padding:16px 18px;border-radius:16px;"
-            "background:linear-gradient(135deg, rgba(14,116,144,.22), rgba(30,64,175,.16));"
-            "border:1px solid rgba(125,211,252,.22);margin-top:16px'>"
+            "background:linear-gradient(135deg, rgba(239,246,255,.98), rgba(255,255,255,.94));"
+            "border:1px solid rgba(96,165,250,.22);margin-top:16px'>"
             "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
-            "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#7dd3fc;font-weight:800'>Plain-English read</div>"
+            "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#2563eb;font-weight:800'>Plain-English read</div>"
             f"{explanation_source_badge(llm_source)}"
             "</div>"
-            f"<div style='font-size:18px;line-height:1.35;color:#f8fafc;font-weight:800;margin-top:10px'>{render_llm_text(llm_explanation.get('headline'))}</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_llm_text(llm_explanation.get('plain_english_summary'))}</div>"
+            f"<div style='font-size:18px;line-height:1.35;color:#0f172a;font-weight:800;margin-top:10px'>{render_llm_text(llm_explanation.get('headline'))}</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#334155;margin-top:10px'>{render_llm_text(llm_explanation.get('plain_english_summary'))}</div>"
             "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px'>"
-            "<div style='padding:12px 14px;border-radius:14px;background:rgba(15,23,42,.38);border:1px solid rgba(125,211,252,.14)'>"
-            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Why now</div>"
-            f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_llm_text(llm_explanation.get('why_now'))}</div>"
+            "<div style='padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.92);border:1px solid rgba(96,165,250,.16)'>"
+            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:800'>Why now</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:8px'>{render_llm_text(llm_explanation.get('why_now'))}</div>"
             "</div>"
-            "<div style='padding:12px 14px;border-radius:14px;background:rgba(15,23,42,.38);border:1px solid rgba(125,211,252,.14)'>"
-            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Company, news, and market context</div>"
-            f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_llm_text(llm_explanation.get('external_context'))}</div>"
+            "<div style='padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.92);border:1px solid rgba(96,165,250,.16)'>"
+            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:800'>Company, news, and market context</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:8px'>{render_llm_text(llm_explanation.get('external_context'))}</div>"
             "</div>"
-            "<div style='padding:12px 14px;border-radius:14px;background:rgba(15,23,42,.38);border:1px solid rgba(125,211,252,.14)'>"
-            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>What should improve</div>"
-            f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_llm_text(llm_explanation.get('what_improves'))}</div>"
+            "<div style='padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.92);border:1px solid rgba(96,165,250,.16)'>"
+            "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:800'>What should improve</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:8px'>{render_llm_text(llm_explanation.get('what_improves'))}</div>"
             "</div>"
             "</div>"
-            f"<div style='font-size:12px;line-height:1.55;color:#bfdbfe;margin-top:12px'><strong>Watchout:</strong> {render_llm_text(llm_explanation.get('watchout'))}</div>"
-            f"<div style='font-size:12px;line-height:1.55;color:#94a3b8;margin-top:6px'>{render_llm_text(llm_explanation.get('confidence_note'))}</div>"
+            f"<div style='font-size:12px;line-height:1.55;color:#475569;margin-top:12px'><strong>Watchout:</strong> {render_llm_text(llm_explanation.get('watchout'))}</div>"
             "</div>"
         )
         decision_math_card = (
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Decision math</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.what_changed)}</div>"
-            f"<div style='font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:10px'>{render_bold_markers(item.amount_rationale)}</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{reasoning}</ul>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.92);border:1px solid rgba(148,163,184,.16)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:800'>Decision math</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#334155;margin-top:10px'>{render_bold_markers(item.what_changed)}</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#475569;margin-top:10px'>{render_bold_markers(item.amount_rationale)}</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>{reasoning}</ul>"
             "</div>"
         )
         performance_card = (
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Recent performance check</div>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.92);border:1px solid rgba(148,163,184,.16)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:800'>Recent performance check</div>"
             f"<div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px'>{performance_window_chip('1Y', item.relative_1y_return_pct)}{performance_window_chip('3Y', item.relative_3y_return_pct)}{performance_window_chip('5Y', item.relative_5y_return_pct)}</div>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800;margin-top:16px'>What likely improves</div>"
-            f"<div style='font-size:14px;line-height:1.6;color:#e2e8f0;margin-top:10px'>{render_bold_markers(item.portfolio_impact_summary)}</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{impacts}</ul>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:800;margin-top:16px'>What likely improves</div>"
+            f"<div style='font-size:14px;line-height:1.6;color:#334155;margin-top:10px'>{render_bold_markers(item.portfolio_impact_summary)}</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>{impacts}</ul>"
             "</div>"
         )
         evidence_card = (
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.32);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800'>Evidence trail</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence}</ul>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800;margin-top:16px'>External pressure signals</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{modifiers}</ul>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:800;margin-top:16px'>What kept this from being more aggressive</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{guardrails}</ul>"
+            "<div style='padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.92);border:1px solid rgba(148,163,184,.16)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:800'>Evidence trail</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>{evidence}</ul>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:800;margin-top:16px'>External pressure signals</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>{modifiers}</ul>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:800;margin-top:16px'>What kept this from being more aggressive</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>{guardrails}</ul>"
             "</div>"
         )
         if show_summary:
@@ -4329,40 +5131,40 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis, view_mode: str = 
 
         cards += (
             "<div style='padding:18px 20px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(15,23,42,.66), rgba(15,23,42,.32));margin-bottom:18px'>"
+            "background:linear-gradient(180deg, rgba(255,255,255,.99), rgba(248,250,252,.96));margin-bottom:18px;box-shadow:0 18px 44px rgba(15,23,42,.08)'>"
             "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
             "<div>"
-            f"<div style='font-size:22px;font-weight:800;color:#f8fafc'>{item.ticker}"
-            + (f"<span style='font-size:15px;font-weight:500;color:#cbd5e1;margin-left:10px'>({item.sector})</span>" if item.sector else "")
+            f"<div style='font-size:22px;font-weight:800;color:#0f172a'>{item.ticker}"
+            + (f"<span style='font-size:15px;font-weight:500;color:#475569;margin-left:10px'>({item.sector})</span>" if item.sector else "")
             + "</div>"
-            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>{short_concern_badge(item.linked_primary_concern)} · same-window S&P 500 comparison</div>"
+            f"<div style='font-size:14px;color:#2563eb;margin-top:8px'>{short_concern_badge(item.linked_primary_concern)} · same-window S&P 500 comparison</div>"
             "</div>"
             "<div style='display:flex;gap:8px;flex-wrap:wrap'>"
-            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(127,29,29,.22);border:1px solid rgba(248,113,113,.22);color:#fca5a5;font-size:12px;font-weight:700'>{item.recommendation_label}</div>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(254,226,226,.92);border:1px solid rgba(248,113,113,.28);color:#991b1b;font-size:12px;font-weight:700'>{item.recommendation_label}</div>"
             f"{explanation_source_badge(llm_source)}"
             "</div>"
             "</div>"
             f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:16px'>{action_tiles}</div>"
-            f"<div style='font-size:15px;line-height:1.6;color:#e2e8f0;margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(15,23,42,.38);border:1px solid rgba(148,163,184,.12)'>{action_line}</div>"
+            f"<div style='font-size:15px;line-height:1.6;color:#334155;margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.90);border:1px solid rgba(148,163,184,.18)'>{action_line}</div>"
             f"{plain_english_panel}"
             f"{detail_section}"
             "</div>"
         )
 
-    held_section = ""
-    if held:
+    monitor_section = ""
+    if high_risk_monitor_rows:
         held_cards = "".join(
-            "<div style='padding:12px 14px;border-radius:14px;border:1px solid rgba(148,163,184,.12);background:rgba(15,23,42,.26)'>"
-            f"<div style='font-size:16px;font-weight:700;color:#f8fafc'>{item.ticker} <span style='font-size:12px;color:#34d399;font-weight:700'>{item.recommendation_label}</span></div>"
-            f"<div style='font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:8px'>{render_bold_markers(item.recommendation_summary)}</div>"
+            "<div style='padding:12px 14px;border-radius:14px;border:1px solid rgba(37,99,235,.16);background:rgba(239,246,255,.82)'>"
+            f"<div style='font-size:16px;font-weight:850;color:#0f172a'>{contribution.ticker} <span style='font-size:12px;color:#1d4ed8;font-weight:800'>risk driver {contribution.overall_contribution_score:.1f}/100</span></div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#475569;margin-top:8px'>{render_bold_markers((linked_action.recommendation_summary if linked_action is not None else humanize_concern_label(contribution.primary_concern_label)))}</div>"
             "</div>"
-            for item in held
+            for contribution, linked_action in high_risk_monitor_rows
         )
-        held_section = (
+        monitor_section = (
             "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94));margin-top:18px'>"
-            "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Names Not Flagged for Sale Right Now</div>"
-            "<div style='font-size:13px;color:#93c5fd;margin-top:6px'>This is here to show the rule is not blindly selling every higher-risk name. Some holdings still look acceptable once their broader performance versus the S&P 500 is considered.</div>"
+            "background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));margin-top:18px;box-shadow:0 16px 40px rgba(15,23,42,.08)'>"
+            "<div style='font-size:18px;font-weight:900;color:#0f172a'>High-risk winners to cap or monitor</div>"
+            "<div style='font-size:13px;color:#475569;margin-top:6px'>These names may still drive risk, but the current evidence does not make them first-priority trims versus weaker same-window performers.</div>"
             f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:14px'>{held_cards}</div>"
             "</div>"
         )
@@ -4370,17 +5172,17 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis, view_mode: str = 
     return (
         "<div style='display:grid;gap:16px'>"
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Risk Actions</div>"
+        "background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));box-shadow:0 18px 48px rgba(15,23,42,.08)'>"
+        "<div style='font-size:22px;font-weight:800;color:#0f172a'>Risk Actions</div>"
         "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:10px'>"
         f"{provenance_badge('Rule-based action engine', 'decides sell/trim labels and amounts', 'rule')}"
-        f"{provenance_badge('LLM explanation layer', 'only rewrites evidence when Ollama is available', 'llm')}"
+        f"{provenance_badge('LLM explanation layer', 'loads in Evidence Trail / Full Detail', 'llm')}"
         f"{provenance_badge('Current view', normalized_view, 'data')}"
         "</div>"
-        "<div style='font-size:14px;color:#93c5fd;margin-top:8px'>This tab is narrower than a full rebalance engine. It focuses on one question: which holdings now have enough underperformance versus the S&P 500, combined with portfolio risk and recent company or market caution signals, to justify trimming or selling.</div>"
-        f"<div style='margin-top:16px'>{impact_section}{cards}</div>"
+        "<div style='font-size:14px;color:#2563eb;margin-top:8px'>Start with names where risk is also paired with weak performance. Then separately monitor large winners that still drive portfolio risk.</div>"
+        f"<div style='margin-top:16px'>{impact_section}{bridge_html}</div>"
         "</div>"
-        f"{held_section}"
+        f"{monitor_section}"
         "</div>"
     )
 
@@ -5193,37 +5995,37 @@ def build_buy_idea_card_html(
         for item in candidate.what_it_improves[:2]
     ) or "<li>No improvement notes were attached yet.</li>"
     existing_holding_badge = (
-        "<div style='padding:8px 12px;border-radius:999px;background:rgba(34,197,94,.14);border:1px solid rgba(34,197,94,.22);color:#bbf7d0;font-size:12px;font-weight:700'>Already in portfolio</div>"
+        "<div style='padding:8px 12px;border-radius:999px;background:rgba(220,252,231,.92);border:1px solid rgba(22,163,74,.28);color:#166534;font-size:12px;font-weight:800'>Already in portfolio</div>"
         if candidate.is_existing_holding
         else ""
     )
     allocation_line = ""
     if candidate.suggested_allocation_amount is not None and candidate.suggested_allocation_pct_of_budget is not None:
         allocation_line = (
-            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(34,197,94,.16);"
-            f"border:1px solid rgba(34,197,94,.22);color:#bbf7d0;font-size:12px;font-weight:800'>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(220,252,231,.95);"
+            f"border:1px solid rgba(22,163,74,.30);color:#166534;font-size:12px;font-weight:900'>"
             f"Suggested starting slice: {money_text(candidate.suggested_allocation_amount)} "
             f"({percent_display(candidate.suggested_allocation_pct_of_budget)} of buy budget)"
             f"</div>"
         )
     l5y_hero = (
         "<div style='display:flex;gap:10px;flex-wrap:wrap;margin-top:12px'>"
-        f"<div style='padding:10px 14px;border-radius:14px;background:linear-gradient(135deg, rgba(34,197,94,.22), rgba(8,145,178,.16));border:1px solid rgba(34,197,94,.26);color:#bbf7d0;font-size:13px;font-weight:800'>5Y return: {pct_text(chart_return_summary.get('stock_5y_return_pct'))}</div>"
-        f"<div style='padding:10px 14px;border-radius:14px;background:rgba(59,130,246,.16);border:1px solid rgba(96,165,250,.22);color:#bfdbfe;font-size:13px;font-weight:800'>5Y vs S&P 500: {pct_text(chart_return_summary.get('relative_5y_return_pct'))}</div>"
+        f"<div style='padding:10px 14px;border-radius:14px;background:linear-gradient(135deg, rgba(220,252,231,.98), rgba(204,251,241,.92));border:1px solid rgba(22,163,74,.28);color:#166534;font-size:13px;font-weight:900'>5Y return: {pct_text(chart_return_summary.get('stock_5y_return_pct'))}</div>"
+        f"<div style='padding:10px 14px;border-radius:14px;background:rgba(219,234,254,.96);border:1px solid rgba(37,99,235,.24);color:#1d4ed8;font-size:13px;font-weight:900'>5Y vs S&P 500: {pct_text(chart_return_summary.get('relative_5y_return_pct'))}</div>"
         "</div>"
     )
     performance_badges = ""
     if candidate.asset_type == "ETF":
         performance_badges += (
-            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.18);color:#fde68a;font-size:12px;font-weight:700'>Expense ratio {_expense_ratio_text(reference.get('expense_ratio'))}</div>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(254,243,199,.96);border:1px solid rgba(217,119,6,.24);color:#92400e;font-size:12px;font-weight:800'>Expense ratio {_expense_ratio_text(reference.get('expense_ratio'))}</div>"
         )
         if parse_float(reference.get("dividend_yield")) is not None:
             performance_badges += (
-                f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:#cbd5e1;font-size:12px;font-weight:700'>Dividend yield {percent_display(reference.get('dividend_yield'))}</div>"
+                f"<div style='padding:8px 12px;border-radius:999px;background:rgba(241,245,249,.96);border:1px solid rgba(100,116,139,.22);color:#334155;font-size:12px;font-weight:800'>Dividend yield {percent_display(reference.get('dividend_yield'))}</div>"
             )
     else:
         performance_badges += (
-            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(168,85,247,.14);border:1px solid rgba(168,85,247,.18);color:#ddd6fe;font-size:12px;font-weight:700'>P/E {_pe_text(reference.get('trailing_pe'))}</div>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(237,233,254,.96);border:1px solid rgba(124,58,237,.24);color:#6d28d9;font-size:12px;font-weight:800'>P/E {_pe_text(reference.get('trailing_pe'))}</div>"
         )
     signal_row = ""
     if external_signals:
@@ -5262,24 +6064,24 @@ def build_buy_idea_card_html(
         "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
         "<div>"
         "<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
-        f"<div style='padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.16);border:1px solid rgba(59,130,246,.22);color:#bfdbfe;font-size:12px;font-weight:800'>#{rank}</div>"
+        f"<div style='padding:6px 10px;border-radius:999px;background:rgba(219,234,254,.96);border:1px solid rgba(37,99,235,.28);color:#1d4ed8;font-size:12px;font-weight:900'>#{rank}</div>"
         f"<div style='font-size:21px;font-weight:800;color:#f8fafc'>{candidate.ticker}</div>"
         f"<div style='font-size:16px;font-weight:600;color:#e2e8f0'>{reference.get('full_name') or candidate.security_name}</div>"
         f"<div style='font-size:14px;font-weight:500;color:#cbd5e1'>({candidate.asset_type} · {candidate.sector})</div>"
         f"{allocation_line}"
         "</div>"
-        f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Role: <strong style='color:#f8fafc'>{candidate.primary_role}</strong> · Confidence: <strong style='color:#f8fafc'>{candidate.confidence_band}</strong> · Source: <strong style='color:#f8fafc'>{candidate.universe_source or 'Known universe mix'}</strong></div>"
+        f"<div style='font-size:14px;color:#2563eb;margin-top:8px'>Role: <strong style='color:#0f172a'>{candidate.primary_role}</strong> · Source: <strong style='color:#0f172a'>{candidate.universe_source or 'Known universe mix'}</strong></div>"
         "</div>"
         "<div style='display:flex;gap:8px;flex-wrap:wrap'>"
-        f"<div style='padding:8px 12px;border-radius:999px;background:rgba(8,145,178,.18);border:1px solid rgba(34,211,238,.18);color:#a5f3fc;font-size:12px;font-weight:700'>{candidate.fit_score:.1f}/100 fit</div>"
-        f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:#93c5fd;font-size:12px;font-weight:700'>{candidate.linked_gap_label}</div>"
+        f"<div style='padding:8px 12px;border-radius:999px;background:rgba(207,250,254,.96);border:1px solid rgba(8,145,178,.24);color:#0e7490;font-size:12px;font-weight:900'>{candidate.fit_score:.1f}/100 fit</div>"
+        f"<div style='padding:8px 12px;border-radius:999px;background:rgba(239,246,255,.96);border:1px solid rgba(37,99,235,.22);color:#1d4ed8;font-size:12px;font-weight:800'>{candidate.linked_gap_label}</div>"
         f"{existing_holding_badge}"
         f"{performance_badges}"
         "</div>"
         "</div>"
-        f"<div style='font-size:14px;line-height:1.55;color:#e2e8f0;margin-top:12px'>{render_bold_markers(candidate.why_it_fits)}</div>"
+        f"<div style='font-size:14px;line-height:1.55;color:#0f172a;margin-top:12px'>{render_bold_markers(candidate.why_it_fits)}</div>"
         f"{l5y_hero}"
-        f"<div style='font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:8px'>{render_bold_markers(candidate.preference_fit_summary)}</div>"
+        f"<div style='font-size:13px;line-height:1.55;color:#475569;margin-top:8px'>{render_bold_markers(candidate.preference_fit_summary)}</div>"
         f"{detail_section}"
         "</div>"
     )
@@ -6427,24 +7229,28 @@ def plot_sector_allocation(sector_rows: list[dict[str, Any]]) -> go.Figure:
             ]
             for position, (_, row) in enumerate(frame.iterrows())
         ]
+        hovertext = [
+            (
+                f"<b>{html.escape(str(row['sector']))}</b><br>"
+                f"Current value: {money_text(row['current_value'])}<br>"
+                f"Portfolio weight: {customdata[position][0]}<br>"
+                f"Weighted return vs S&P 500: {customdata[position][1]}<br>"
+                f"Readout: {customdata[position][2]}"
+            )
+            for position, (_, row) in enumerate(frame.iterrows())
+        ]
         fig.add_trace(
             go.Treemap(
                 labels=frame["sector"].tolist(),
                 parents=[""] * len(frame),
                 values=frame["current_value"].tolist(),
                 customdata=customdata,
+                hovertext=hovertext,
+                hoverinfo="text",
                 texttemplate="<b>%{label}</b><br>%{customdata[0]}",
                 textfont={"size": 18, "color": "#0f172a"},
                 branchvalues="total",
                 tiling={"packing": "squarify", "pad": 4},
-                hovertemplate=(
-                    "<b>%{label}</b><br>"
-                    "Current value: $%{value:,.2f}<br>"
-                    "Portfolio weight: %{customdata[0]}<br>"
-                    "Weighted return vs S&P 500: %{customdata[1]}<br>"
-                    "Readout: %{customdata[2]}"
-                    "<extra></extra>"
-                ),
                 marker={
                     "colors": colors,
                     "line": {"color": "rgba(15,23,42,0.96)", "width": 3},
@@ -7389,7 +8195,6 @@ def build_overview_markdown(portfolio_summary: dict[str, Any], market_metrics: d
 ### Portfolio Health
 - Observed risk score: `{risk["score"]}/100` (`{risk["band"]}`)
 - Alignment to stated risk: `{risk["alignment"]}` with alignment score `{risk["alignment_score"]}`
-- Confidence in observed risk read: `{risk["confidence_band"]}` (`{risk["confidence_score"]}`)
 - Capital-weighted median holding period: `{behavior["capital_weighted_median_holding_period_days"]}` days
 - Annualized turnover proxy: `{behavior["annualized_turnover_proxy"]}`
 
@@ -7406,7 +8211,7 @@ def build_benchmark_markdown(market_metrics: dict[str, Any]) -> str:
     headline = market_metrics["headline_metrics"]
     return f"""
 ### Time-Horizon Benchmark Comparison
-- Benchmark: `{headline["benchmark_symbol"]}` using `{headline["benchmark_method"]}`
+- Benchmark: `{benchmark_display_name(headline["benchmark_symbol"])}` using `{headline["benchmark_method"]}`
 - Invested-only return over your investing horizon: `{pct_text(headline["invested_only_return_estimate"])}`
 - Trade-matched S&P 500 return over the same horizon: `{pct_text(headline["benchmark_return_estimate"])}`
 - Excess return vs S&P 500: `{pct_text(headline["excess_return_vs_benchmark"])}`
@@ -7515,7 +8320,7 @@ def generate_fallback_insight(portfolio_summary: dict[str, Any], market_metrics:
     ) or "none yet"
     return f"""
 ## Investor Profile
-Observed portfolio risk is **{risk["score"]}/100 ({risk["band"]})**, while the stated risk was **{risk["stated_score"]}/100**. Current alignment reads as **{risk["alignment"]}** with **{risk["confidence_band"]}** confidence.
+Observed portfolio risk is **{risk["score"]}/100 ({risk["band"]})**, while the stated risk was **{risk["stated_score"]}/100**. Current alignment reads as **{risk["alignment"]}**.
 
 ## Portfolio Snapshot
 Across **{headline["analysis_years"]:.2f} years**, the account built an estimated **{money_text(headline["current_portfolio_value"])}** invested portfolio plus **{money_text(headline["uninvested_cash_estimate"])}** in idle cash. Unrealized P&L is **{money_text(headline["total_unrealized_pnl"])}** and realized P&L is **{money_text(headline["total_realized_pnl"])}**.
@@ -7638,10 +8443,11 @@ def run_analysis(
     progress(0.66, desc="Preparing Risk Actions and plain-English LLM explanations...")
     risk_actions_html = build_risk_actions_html(diagnosis, view_mode=risk_actions_view_mode)
     risk_actions_df = build_risk_actions_frame(diagnosis)
+    featured_risk_action_outputs = build_risk_action_feature_slots(diagnosis, market_data)
 
     progress(0.75, desc="Finding portfolio gaps and generating buy ideas...")
     portfolio_gaps_html = build_portfolio_gaps_html(diagnosis)
-    portfolio_gap_fig = plot_portfolio_gaps(diagnosis)
+    portfolio_gap_fig = gr.update(visible=False)
     portfolio_gaps_df = build_portfolio_gap_frame(diagnosis)
     portfolio_preferences_df = build_portfolio_preferences_frame(diagnosis.portfolio_preferences)
     buy_preferences_html = build_buy_preferences_html(diagnosis.portfolio_preferences)
@@ -7715,7 +8521,6 @@ def run_analysis(
             "How rough or sensitive vs the S&P 500?",
         )
         + metric_card("Alignment", risk["alignment"], "Portfolio vs stated risk tolerance")
-        + metric_card("Confidence", risk["confidence_band"], "How complete and consistent the evidence looks")
     )
     summary_cards = f"<div class='metric-strip'>{summary_cards_inner}</div>"
 
@@ -7747,6 +8552,7 @@ def run_analysis(
         gr.update(choices=diagnosis_stock_choices, value="Portfolio"),
         risk_actions_html,
         risk_actions_df,
+        *featured_risk_action_outputs,
         portfolio_gaps_html,
         portfolio_gap_fig,
         portfolio_gaps_df,
@@ -7891,23 +8697,79 @@ def build_app() -> gr.Blocks:
             box-shadow: 0 18px 44px rgba(15,23,42,.08) !important;
         }
         .gradio-container .tabs {
-            padding: 10px;
-            border-radius: 24px;
-            background:
-                linear-gradient(135deg, rgba(255,255,255,.88), rgba(226,232,240,.42));
-            border: 1px solid rgba(148,163,184,.22);
-            box-shadow: 0 14px 36px rgba(15,23,42,.08);
+            position: relative;
+            padding: 0;
+            border-radius: 0;
+            background: transparent;
+            border: 0;
+            box-shadow: none;
         }
-        button[role="tab"] {
-            border-radius: 14px 14px 0 0 !important;
-            padding: 10px 16px !important;
+        .content-rail .tabs {
+            display: block !important;
+        }
+        .content-rail .tabs > .tab-nav {
+            position: fixed !important;
+            left: 34px !important;
+            top: clamp(760px, 62vh, 1040px) !important;
+            width: min(520px, calc(33vw - 44px)) !important;
+            max-height: 34vh !important;
+            overflow-y: auto !important;
+            z-index: 40 !important;
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 8px;
+            padding: 14px;
+            border-radius: 22px;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,.98), rgba(239,246,255,.86));
+            border: 1px solid rgba(148,163,184,.24);
+            box-shadow: 0 16px 34px rgba(15,23,42,.08);
+        }
+        .content-rail .tabs > .tab-nav::before {
+            content: "Dashboard Sections";
+            display: block;
+            margin: 0 2px 4px;
+            color: #2563eb;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: .09em;
+            text-transform: uppercase;
+        }
+        .content-rail .tabitem {
+            min-width: 0;
+        }
+        .tab-nav button {
+            position: relative !important;
+            overflow: hidden !important;
+            border-radius: 14px !important;
+            padding: 12px 14px 12px 18px !important;
             font-weight: 600 !important;
             letter-spacing: .01em;
             color: #475569 !important;
             background: rgba(255,255,255,.46) !important;
             border: 1px solid transparent !important;
+            width: 100% !important;
+            justify-content: flex-start !important;
+            text-align: left !important;
         }
-        button[role="tab"][aria-selected="true"] {
+        .tab-nav button::before {
+            content: "";
+            position: absolute;
+            inset: 8px auto 8px 0;
+            width: 5px;
+            border-radius: 999px;
+            background: linear-gradient(180deg, #60a5fa, #93c5fd);
+        }
+        .tab-nav button:nth-of-type(2)::before {background: linear-gradient(180deg, #f97316, #facc15);}
+        .tab-nav button:nth-of-type(3)::before {background: linear-gradient(180deg, #ef4444, #fb7185);}
+        .tab-nav button:nth-of-type(4)::before {background: linear-gradient(180deg, #14b8a6, #5eead4);}
+        .tab-nav button:nth-of-type(5)::before {background: linear-gradient(180deg, #6366f1, #a78bfa);}
+        .tab-nav button:nth-of-type(6)::before {background: linear-gradient(180deg, #0ea5e9, #67e8f9);}
+        .tab-nav button:nth-of-type(7)::before {background: linear-gradient(180deg, #22c55e, #86efac);}
+        .tab-nav button:nth-of-type(8)::before {background: linear-gradient(180deg, #f59e0b, #fde68a);}
+        .tab-nav button:nth-of-type(9)::before {background: linear-gradient(180deg, #8b5cf6, #c4b5fd);}
+        .tab-nav button:nth-of-type(10)::before {background: linear-gradient(180deg, #64748b, #cbd5e1);}
+        .tab-nav button.selected {
             background:
                 linear-gradient(180deg, rgba(219,234,254,.98), rgba(239,246,255,.94)) !important;
             color: #1d4ed8 !important;
@@ -8021,6 +8883,26 @@ def build_app() -> gr.Blocks:
         .gradio-container span[style*="#93c5fd"] {
             color: #2563eb !important;
         }
+        .gradio-container div[style*="#bbf7d0"],
+        .gradio-container span[style*="#bbf7d0"] {
+            color: #166534 !important;
+        }
+        .gradio-container div[style*="#a5f3fc"],
+        .gradio-container span[style*="#a5f3fc"] {
+            color: #0e7490 !important;
+        }
+        .gradio-container div[style*="#bfdbfe"],
+        .gradio-container span[style*="#bfdbfe"] {
+            color: #1d4ed8 !important;
+        }
+        .gradio-container div[style*="#ddd6fe"],
+        .gradio-container span[style*="#ddd6fe"] {
+            color: #6d28d9 !important;
+        }
+        .gradio-container div[style*="#fde68a"],
+        .gradio-container span[style*="#fde68a"] {
+            color: #92400e !important;
+        }
         .gradio-container .metric-card {
             background:
                 linear-gradient(145deg, rgba(255,255,255,.98), rgba(239,246,255,.90)) !important;
@@ -8036,6 +8918,17 @@ def build_app() -> gr.Blocks:
         @media (max-width: 1200px) {
             .metric-strip {grid-template-columns: repeat(2, minmax(220px, 1fr));}
             .control-rail {padding: 16px;}
+            .content-rail .tabitem {
+                position: static;
+            }
+            .content-rail .tabs > .tab-nav {
+                left: 22px !important;
+                width: min(460px, calc(48vw - 34px)) !important;
+            }
+            .tab-nav button {
+                width: 100% !important;
+                min-width: 0 !important;
+            }
         }
         @media (max-width: 820px) {
             .metric-strip {grid-template-columns: 1fr;}
@@ -8075,7 +8968,7 @@ def build_app() -> gr.Blocks:
                 gr.Markdown(
                     """
                     **Notes**
-                    - Benchmark uses `^GSPC`
+                    - Benchmark uses `S&P 500`
                     - Benchmark comparison excludes idle cash
                     - Timeframe stats are shown using your actual investing horizon
                     - A bundled fake dataset is available for demo purposes
@@ -8088,9 +8981,9 @@ def build_app() -> gr.Blocks:
                 diagnosis_chart_state = gr.State(value={})
                 buy_preferences_state = gr.State(value={})
                 buy_candidates_state = gr.State(value=[])
-                cards = gr.HTML(label="Summary Cards", elem_classes=["summary-cards-wrap"])
                 with gr.Tabs(selected="overview") as main_tabs:
                     with gr.Tab("Overview", id="overview"):
+                        cards = gr.HTML(label="Summary Cards", elem_classes=["summary-cards-wrap"])
                         equity_plot = gr.Plot(
                             value=empty_dashboard_plot("Run analysis to compare your portfolio with the S&P 500"),
                             label="Benchmark",
@@ -8148,10 +9041,12 @@ def build_app() -> gr.Blocks:
                             diagnosis_concern_plot = gr.Plot(
                                 value=empty_dashboard_plot("Run analysis to rank the top risk categories"),
                                 label="Top Risk Categories",
+                                visible=False,
                             )
                             diagnosis_sector_plot = gr.Plot(
                                 value=empty_dashboard_plot("Run analysis to see sector crowding"),
                                 label="Sector Crowding View",
+                                visible=False,
                             )
                         diagnosis_stock_filter = gr.Dropdown(
                             label="Risk Lens",
@@ -8179,6 +9074,7 @@ def build_app() -> gr.Blocks:
                             diagnosis_risk_evidence_plot = gr.Plot(
                                 value=empty_dashboard_plot("Run analysis to see detailed risk evidence"),
                                 label="Evidence Behind Top Risk Signals",
+                                visible=False,
                             )
                             diagnosis_supporting_metrics_df = gr.Dataframe(
                                 label="Supporting Evidence",
@@ -8199,7 +9095,7 @@ def build_app() -> gr.Blocks:
                                 label="Source Coverage",
                                 interactive=False,
                             )
-                            diagnosis_confidence_md = gr.HTML()
+                            diagnosis_confidence_md = gr.HTML(visible=False)
                         with gr.Accordion("Diagnosis Snapshot and Alignment", open=False):
                             diagnosis_summary_md = gr.HTML()
                     with gr.Tab("Risk Actions", id="risk-actions"):
@@ -8208,18 +9104,44 @@ def build_app() -> gr.Blocks:
                             value="Action Summary",
                             label="Choose how much explanation to show",
                             info="Use Summary for a quick read, Evidence Trail for source checks, and Full Detail for review/debugging.",
+                            visible=False,
                         )
+                        gr.HTML(
+                            "<div style='margin:10px 0 10px;padding:16px 18px;border:1px solid rgba(148,163,184,.18);"
+                            "border-radius:18px;background:linear-gradient(180deg, rgba(239,246,255,.96), rgba(255,255,255,.96));"
+                            "box-shadow:0 14px 30px rgba(15,23,42,.06)'>"
+                            "<div style='font-size:18px;font-weight:900;color:#0f172a'>Action candidates with performance proof</div>"
+                            "<div style='font-size:13px;color:#475569;margin-top:6px'>Each ticker card sits next to its S&P 500 comparison and marks your weighted-average buy date.</div>"
+                            "</div>"
+                        )
+                        featured_risk_action_rows: list[gr.Row] = []
+                        featured_risk_action_cards: list[gr.HTML] = []
+                        featured_risk_action_plots: list[gr.Plot] = []
+                        for idx in range(MAX_FEATURED_RISK_ACTION_COUNT):
+                            with gr.Row(equal_height=True, visible=False) as risk_action_row:
+                                with gr.Column(scale=1, min_width=320):
+                                    risk_action_card = gr.HTML()
+                                with gr.Column(scale=2, min_width=520):
+                                    risk_action_plot = gr.Plot(
+                                        value=plot_risk_action_candidate_chart(None, None),
+                                        label=f"Risk Action #{idx + 1}: Stock vs S&P 500 Since Buy",
+                                    )
+                            featured_risk_action_rows.append(risk_action_row)
+                            featured_risk_action_cards.append(risk_action_card)
+                            featured_risk_action_plots.append(risk_action_plot)
                         risk_actions_md = gr.HTML()
                         risk_actions_df = gr.Dataframe(
                             label="Recommendation Detail",
                             interactive=False,
                             wrap=True,
+                            visible=False,
                         )
                     with gr.Tab("Portfolio Gaps", id="portfolio-gaps"):
                         portfolio_gaps_md = gr.HTML()
                         portfolio_gap_plot = gr.Plot(
                             value=empty_dashboard_plot("Run analysis to see what the portfolio still needs most"),
                             label="What The Portfolio Still Needs Most",
+                            visible=False,
                         )
                         portfolio_gaps_df = gr.Dataframe(
                             label="Gap Quick Read",
@@ -8406,6 +9328,9 @@ def build_app() -> gr.Blocks:
                 diagnosis_stock_filter,
                 risk_actions_md,
                 risk_actions_df,
+                *featured_risk_action_rows,
+                *featured_risk_action_cards,
+                *featured_risk_action_plots,
                 portfolio_gaps_md,
                 portfolio_gap_plot,
                 portfolio_gaps_df,
