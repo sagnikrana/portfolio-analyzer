@@ -1749,6 +1749,7 @@ def build_market_enriched_metrics(
         "headline_metrics": headline_metrics,
         "risk_score": risk_score,
         "open_positions": open_positions_df.sort_values("current_value", ascending=False).round(4).to_dict(orient="records"),
+        "open_lots": lot_data.get("open_lots", []),
         "holding_performance_context": holding_performance_context,
         "sector_allocation": sector_allocation[["sector", "current_value", "weight_pct", "excess_return_vs_benchmark"]]
         .round(4)
@@ -1928,6 +1929,7 @@ def save_diagnosis_artifacts(
         "files": [
             "transactions.csv",
             "open_positions.csv",
+            "open_lots.csv",
             "holding_performance_context.csv",
             "sector_allocation.csv",
             "timeseries.csv",
@@ -1945,6 +1947,7 @@ def save_diagnosis_artifacts(
     file_writes: list[tuple[str, Any]] = [
         ("transactions.csv", transactions),
         ("open_positions.csv", market_metrics["open_positions"]),
+        ("open_lots.csv", market_metrics.get("open_lots", [])),
         ("holding_performance_context.csv", market_metrics.get("holding_performance_context", [])),
         ("sector_allocation.csv", market_metrics["sector_allocation"]),
         ("timeseries.csv", market_metrics["timeseries"]),
@@ -1971,6 +1974,516 @@ def save_diagnosis_artifacts(
         "latest_dir": str(latest_dir),
         "run_dir": str(run_dir),
     }
+
+
+def _slice_market_data_to_cutoff(market_data: dict[str, Any], cutoff_date: pd.Timestamp) -> dict[str, Any]:
+    """Return a market-data payload whose latest price is the cutoff-date price.
+
+    Backtesting should not let prices after the selected date leak into the
+    recommendation engine. This helper keeps the same payload shape used by the
+    normal dashboard path while trimming every price series to observations on
+    or before the cutoff.
+    """
+    cutoff = pd.Timestamp(cutoff_date).normalize()
+    ticker_close = market_data.get("ticker_close", pd.DataFrame()).copy()
+    if not ticker_close.empty:
+        ticker_close.index = pd.to_datetime(ticker_close.index)
+        ticker_close = ticker_close.sort_index().loc[lambda frame: frame.index <= cutoff]
+
+    long_horizon_ticker_close = market_data.get("long_horizon_ticker_close", pd.DataFrame()).copy()
+    if not long_horizon_ticker_close.empty:
+        long_horizon_ticker_close.index = pd.to_datetime(long_horizon_ticker_close.index)
+        long_horizon_ticker_close = long_horizon_ticker_close.sort_index().loc[
+            lambda frame: frame.index <= cutoff
+        ]
+
+    benchmark_close = market_data.get("benchmark_close", pd.Series(dtype=float)).copy()
+    if not benchmark_close.empty:
+        benchmark_close.index = pd.to_datetime(benchmark_close.index)
+        benchmark_close = benchmark_close.sort_index().loc[lambda series: series.index <= cutoff]
+
+    long_horizon_benchmark_close = market_data.get(
+        "long_horizon_benchmark_close", pd.Series(dtype=float)
+    ).copy()
+    if not long_horizon_benchmark_close.empty:
+        long_horizon_benchmark_close.index = pd.to_datetime(long_horizon_benchmark_close.index)
+        long_horizon_benchmark_close = long_horizon_benchmark_close.sort_index().loc[
+            lambda series: series.index <= cutoff
+        ]
+
+    latest_prices = ticker_close.ffill().iloc[-1].dropna().to_dict() if not ticker_close.empty else {}
+    latest_benchmark_price = float(benchmark_close.iloc[-1]) if not benchmark_close.empty else None
+    sliced = dict(market_data)
+    sliced.update(
+        {
+            "ticker_close": ticker_close,
+            "latest_prices": latest_prices,
+            "benchmark_close": benchmark_close,
+            "long_horizon_ticker_close": long_horizon_ticker_close,
+            "long_horizon_benchmark_close": long_horizon_benchmark_close,
+            "latest_benchmark_price": latest_benchmark_price,
+        }
+    )
+    return sliced
+
+
+def _price_at_or_after(series: pd.Series, target_date: pd.Timestamp) -> tuple[pd.Timestamp | None, float | None]:
+    """Find the first usable market price on or after a selected date."""
+    if series is None or series.empty:
+        return None, None
+    cleaned = pd.to_numeric(series, errors="coerce").dropna()
+    if cleaned.empty:
+        return None, None
+    cleaned.index = pd.to_datetime(cleaned.index)
+    cleaned = cleaned.sort_index()
+    after = cleaned.loc[cleaned.index >= pd.Timestamp(target_date).normalize()]
+    if after.empty:
+        return None, None
+    return pd.Timestamp(after.index[0]), float(after.iloc[0])
+
+
+def _price_at_or_before(series: pd.Series, target_date: pd.Timestamp) -> tuple[pd.Timestamp | None, float | None]:
+    """Find the last usable market price on or before a selected date."""
+    if series is None or series.empty:
+        return None, None
+    cleaned = pd.to_numeric(series, errors="coerce").dropna()
+    if cleaned.empty:
+        return None, None
+    cleaned.index = pd.to_datetime(cleaned.index)
+    cleaned = cleaned.sort_index()
+    before = cleaned.loc[cleaned.index <= pd.Timestamp(target_date).normalize()]
+    if before.empty:
+        return None, None
+    return pd.Timestamp(before.index[-1]), float(before.iloc[-1])
+
+
+def _build_backtest_diagnosis(
+    *,
+    csv_path: Path,
+    dataset_source: str,
+    cutoff_transactions: pd.DataFrame,
+    risk_profile: int,
+    cutoff_date: pd.Timestamp,
+) -> tuple[PortfolioRiskDiagnosis, dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Build the same diagnosis object, but with evidence cut off historically.
+
+    The normal dashboard diagnosis uses the full uploaded file and latest prices.
+    Backtesting needs the opposite: only transactions that existed by the cutoff
+    date, and only market prices that were visible then. That makes the sell/trim
+    set auditable as an "as-of" recommendation instead of a hindsight label.
+    """
+    lot_data = build_lot_analytics(cutoff_transactions)
+    portfolio_summary = summarize_portfolio(cutoff_transactions, lot_data)
+    traded_symbols = sorted(
+        set(cutoff_transactions.loc[cutoff_transactions["Instrument"].ne(""), "Instrument"].tolist())
+    )
+    market_data = fetch_market_data(
+        traded_symbols=traded_symbols,
+        benchmark_symbol=BENCHMARK_SYMBOL,
+        start_date=portfolio_summary["date_range"]["start"],
+    )
+    cutoff_market_data = _slice_market_data_to_cutoff(market_data, cutoff_date)
+    if cutoff_market_data["benchmark_close"].empty:
+        raise gr.Error("No S&P 500 market history was available on or before the selected backtest date.")
+
+    market_metrics = build_market_enriched_metrics(
+        df=cutoff_transactions,
+        portfolio_summary=portfolio_summary,
+        lot_data=lot_data,
+        market_data=cutoff_market_data,
+        benchmark_symbol=BENCHMARK_SYMBOL,
+        projection_years=PROJECTION_YEARS,
+        stated_risk_score=risk_profile,
+    )
+    diagnosis_paths = save_diagnosis_artifacts(
+        csv_path=csv_path,
+        dataset_source=f"{dataset_source} backtest as of {cutoff_date.date()}",
+        risk_profile=risk_profile,
+        transactions=cutoff_transactions,
+        portfolio_summary=portfolio_summary,
+        market_metrics=market_metrics,
+    )
+    diagnosis = portfolio_risk_diagnosis_from_saved_artifacts(Path(diagnosis_paths["latest_dir"]))
+    return diagnosis, market_metrics, cutoff_market_data, portfolio_summary
+
+
+def _backtest_candidate_weights(candidates: list[ReplacementCandidate], limit: int = 8) -> list[tuple[ReplacementCandidate, float]]:
+    """Convert buy candidates into normalized deployment weights for backtesting."""
+    usable = sorted(candidates, key=lambda item: (-float(item.fit_score or 0.0), item.ticker))[:limit]
+    if not usable:
+        return []
+    raw_weights: list[float] = []
+    for idx, candidate in enumerate(usable):
+        suggested = candidate.suggested_allocation_pct_of_budget
+        if suggested is not None and not pd.isna(suggested) and float(suggested) > 0:
+            raw_weights.append(float(suggested))
+        else:
+            raw_weights.append(max(float(candidate.fit_score or 0.0), 1.0) / float(idx + 1))
+    total = sum(raw_weights)
+    if total <= 0:
+        return []
+    return [(candidate, raw / total) for candidate, raw in zip(usable, raw_weights)]
+
+
+def _plot_backtest_counterfactual(
+    timeline: pd.DataFrame,
+    cutoff_date: pd.Timestamp,
+    benefit: float,
+) -> go.Figure:
+    """Plot ignored recommendations against the counterfactual recommendation path."""
+    fig = go.Figure()
+    if timeline.empty:
+        return empty_dashboard_plot("Run a backtest to compare ignored versus followed recommendations")
+    fig.add_trace(
+        go.Scatter(
+            x=timeline.index,
+            y=timeline["Ignored recommendation path"],
+            mode="lines",
+            name="Ignored recommendations",
+            line={"color": "#ef4444", "width": 3},
+            hovertemplate="%{x|%Y-%m-%d}<br>Ignored path: $%{y:,.2f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=timeline.index,
+            y=timeline["Followed app path"],
+            mode="lines",
+            name="Followed app recommendation",
+            line={"color": "#2563eb", "width": 3},
+            hovertemplate="%{x|%Y-%m-%d}<br>App path: $%{y:,.2f}<extra></extra>",
+        )
+    )
+    cutoff_x = pd.Timestamp(cutoff_date).strftime("%Y-%m-%d")
+    fig.add_shape(
+        type="line",
+        x0=cutoff_x,
+        x1=cutoff_x,
+        xref="x",
+        y0=0,
+        y1=1,
+        yref="paper",
+        line={"color": "#64748b", "dash": "dash", "width": 2},
+    )
+    fig.add_annotation(
+        x=cutoff_x,
+        y=1.02,
+        xref="x",
+        yref="paper",
+        text="Backtest date",
+        showarrow=False,
+        font={"color": "#475569", "size": 12},
+        bgcolor="rgba(255,255,255,0.88)",
+    )
+    final_date = timeline.index[-1]
+    final_app = float(timeline["Followed app path"].iloc[-1])
+    final_ignored = float(timeline["Ignored recommendation path"].iloc[-1])
+    color = "#15803d" if benefit >= 0 else "#b91c1c"
+    fig.add_annotation(
+        x=final_date,
+        y=final_app,
+        text=f"App path: {money_text(final_app)}",
+        showarrow=True,
+        arrowhead=2,
+        ax=36,
+        ay=-28,
+        bgcolor="rgba(255,255,255,0.94)",
+        bordercolor="#2563eb",
+        font={"color": "#0f172a", "size": 12},
+    )
+    fig.add_annotation(
+        x=final_date,
+        y=final_ignored,
+        text=f"Ignored: {money_text(final_ignored)}",
+        showarrow=True,
+        arrowhead=2,
+        ax=36,
+        ay=28,
+        bgcolor="rgba(255,255,255,0.94)",
+        bordercolor="#ef4444",
+        font={"color": "#0f172a", "size": 12},
+    )
+    fig.update_layout(
+        title=f"Cost of ignoring recommendation: {money_text(abs(benefit))} {'missed' if benefit >= 0 else 'worse if followed'}",
+        height=520,
+        template="plotly_white",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(248,250,252,0.94)",
+        hovermode="x unified",
+        legend={"orientation": "h", "x": 1, "xanchor": "right", "y": 1.08, "yanchor": "bottom"},
+        margin={"l": 64, "r": 24, "t": 78, "b": 42},
+        font={"color": "#0f172a"},
+    )
+    fig.update_yaxes(title_text="Dollar value of moved sleeve", tickprefix="$", gridcolor="rgba(148,163,184,0.24)")
+    fig.update_xaxes(title_text="Date", gridcolor="rgba(148,163,184,0.20)")
+    return fig
+
+
+def run_backtest(
+    file_obj: Any,
+    dataset_source: str,
+    risk_profile: int,
+    cutoff_date_text: str,
+    use_uninvested_cash: bool,
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+) -> tuple[str, go.Figure, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Run a recommendation counterfactual from a historical cutoff date.
+
+    The first version intentionally compares the *action sleeve* the app would
+    have moved, not a full portfolio optimizer. Untouched holdings are excluded
+    from both sides because they cancel out. This makes the result easy to read:
+    "if the flagged risk dollars had been moved into the app's buy ideas on the
+    cutoff date, how much better or worse would that specific sleeve look now?"
+    """
+    progress(0.03, desc="Preparing historical backtest inputs...")
+    if dataset_source == "Use bundled fake dataset":
+        csv_path = REPO_ROOT / "data" / "raw" / "fake_mantis_invest.csv"
+    else:
+        if file_obj is None:
+            raise gr.Error("Upload a Robinhood CSV export first or switch to the bundled fake dataset.")
+        csv_path = Path(file_obj.name)
+
+    cutoff_date = pd.to_datetime(cutoff_date_text, errors="coerce")
+    if pd.isna(cutoff_date):
+        raise gr.Error("Enter a valid backtest cutoff date in YYYY-MM-DD format.")
+    cutoff_date = pd.Timestamp(cutoff_date).normalize()
+    if cutoff_date >= pd.Timestamp.today().normalize():
+        raise gr.Error("Choose a cutoff date before today so the app can measure what happened afterward.")
+
+    progress(0.12, desc="Reading transactions and applying the cutoff date...")
+    transactions = load_transactions(csv_path)
+    if transactions.empty:
+        raise gr.Error("No valid transaction rows were found in the selected file.")
+    transactions = transactions.sort_values("Activity Date")
+    first_tx = pd.Timestamp(transactions["Activity Date"].min()).normalize()
+    if cutoff_date < first_tx:
+        raise gr.Error(f"Choose a date on or after the first transaction date: {first_tx.date()}.")
+    cutoff_transactions = transactions.loc[transactions["Activity Date"] <= cutoff_date].copy()
+    if cutoff_transactions.empty:
+        raise gr.Error("No transactions existed by that cutoff date.")
+
+    progress(0.28, desc="Rebuilding the as-of-date diagnosis and action set...")
+    diagnosis, market_metrics, _cutoff_market_data, portfolio_summary = _build_backtest_diagnosis(
+        csv_path=csv_path,
+        dataset_source=dataset_source,
+        cutoff_transactions=cutoff_transactions,
+        risk_profile=int(risk_profile or 60),
+        cutoff_date=cutoff_date,
+    )
+
+    progress(0.48, desc="Measuring the actual post-cutoff account path...")
+    full_lot_data = build_lot_analytics(transactions)
+    full_portfolio_summary = summarize_portfolio(transactions, full_lot_data)
+    full_traded_symbols = sorted(
+        set(transactions.loc[transactions["Instrument"].ne(""), "Instrument"].tolist())
+    )
+    full_market_data = fetch_market_data(
+        traded_symbols=full_traded_symbols,
+        benchmark_symbol=BENCHMARK_SYMBOL,
+        start_date=full_portfolio_summary["date_range"]["start"],
+    )
+    full_market_metrics = build_market_enriched_metrics(
+        df=transactions,
+        portfolio_summary=full_portfolio_summary,
+        lot_data=full_lot_data,
+        market_data=full_market_data,
+        benchmark_symbol=BENCHMARK_SYMBOL,
+        projection_years=PROJECTION_YEARS,
+        stated_risk_score=int(risk_profile or 60),
+    )
+
+    actions = [
+        item for item in getattr(diagnosis, "holding_action_recommendations", []) or []
+        if item.is_actionable and float(item.value_to_sell or 0.0) > 0
+    ]
+    actions = sorted(
+        actions,
+        key=lambda item: (
+            -float(item.value_to_sell or 0.0),
+            float(item.relative_performance_vs_benchmark or 0.0),
+            item.ticker,
+        ),
+    )
+    if not actions:
+        summary_html = (
+            "<div style='padding:18px;border:1px solid rgba(148,163,184,.22);border-radius:18px;"
+            "background:#fff;color:#0f172a'><b>No actionable sell/trim recommendations existed at that cutoff.</b><br>"
+            "Try a later date or review the Risk Actions tab for the current portfolio.</div>"
+        )
+        return summary_html, empty_dashboard_plot("No actionable backtest recommendations for this date"), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    idle_cash = float(market_metrics.get("headline_metrics", {}).get("cash_balance_estimate", 0.0) or 0.0)
+    idle_cash = max(idle_cash, 0.0)
+    freed_cash = float(sum(float(item.value_to_sell or 0.0) for item in actions))
+    deployable_cash = freed_cash + (idle_cash if use_uninvested_cash else 0.0)
+    if deployable_cash <= 0:
+        raise gr.Error("The selected cutoff did not produce cash to redeploy.")
+
+    progress(0.66, desc="Pricing the ignored-risk sleeve and hypothetical buys...")
+    candidate_weights = _backtest_candidate_weights(getattr(diagnosis, "replacement_candidates", []) or [], limit=8)
+    if not candidate_weights:
+        raise gr.Error("No buy candidates were available for this cutoff date.")
+
+    sell_tickers = [item.ticker for item in actions]
+    buy_tickers = [candidate.ticker for candidate, _weight in candidate_weights]
+    market_data = fetch_market_data(
+        traded_symbols=sorted(set(sell_tickers + buy_tickers)),
+        benchmark_symbol=BENCHMARK_SYMBOL,
+        start_date=cutoff_date.strftime("%Y-%m-%d"),
+    )
+    close = market_data.get("ticker_close", pd.DataFrame()).copy()
+    if close.empty:
+        raise gr.Error("No forward market history was available for the backtest symbols.")
+    close.index = pd.to_datetime(close.index)
+    close = close.sort_index().ffill()
+
+    ignored_components: dict[str, float] = {}
+    action_rows: list[dict[str, Any]] = []
+    for item in actions:
+        ticker = item.ticker
+        if ticker not in close.columns:
+            continue
+        buy_date, start_price = _price_at_or_after(close[ticker], cutoff_date)
+        if buy_date is None or start_price is None or start_price <= 0:
+            continue
+        shares = float(item.shares_to_sell or 0.0)
+        value_to_sell = float(item.value_to_sell or 0.0)
+        if shares <= 0 and value_to_sell > 0:
+            shares = value_to_sell / start_price
+        if shares <= 0:
+            continue
+        ignored_components[ticker] = ignored_components.get(ticker, 0.0) + shares
+        action_rows.append(
+            {
+                "Ticker": ticker,
+                "As-of Recommendation": item.recommendation_label,
+                "Value The App Would Move": money_text(value_to_sell),
+                "Shares": number_text(shares, 4),
+                "Same-window vs S&P 500": pct_text(item.relative_performance_vs_benchmark),
+                "Reason": item.recommendation_summary,
+            }
+        )
+
+    buy_rows: list[dict[str, Any]] = []
+    buy_components: dict[str, float] = {}
+    for candidate, weight in candidate_weights:
+        ticker = candidate.ticker
+        if ticker not in close.columns:
+            continue
+        buy_date, start_price = _price_at_or_after(close[ticker], cutoff_date)
+        if buy_date is None or start_price is None or start_price <= 0:
+            continue
+        allocation = deployable_cash * float(weight)
+        shares = allocation / start_price
+        if allocation <= 0 or shares <= 0:
+            continue
+        _end_date, end_price = _price_at_or_before(close[ticker], pd.Timestamp.today().normalize())
+        forward_return = ((end_price / start_price) - 1.0) if end_price and start_price else None
+        buy_components[ticker] = buy_components.get(ticker, 0.0) + shares
+        buy_rows.append(
+            {
+                "Ticker": ticker,
+                "Name": candidate.security_name,
+                "Fit": f"{float(candidate.fit_score or 0.0):.1f}/100",
+                "Hypothetical Buy Amount": money_text(allocation),
+                "Shares Bought": number_text(shares, 4),
+                "Forward Return Since Cutoff": pct_text(forward_return),
+                "Why It Was Picked": candidate.why_it_fits,
+            }
+        )
+
+    if not ignored_components or not buy_components:
+        raise gr.Error("The backtest could not price enough sell and buy symbols after the selected cutoff date.")
+
+    timeline = pd.DataFrame(index=close.index[close.index >= cutoff_date])
+    timeline["Ignored recommendation path"] = 0.0
+    for ticker, shares in ignored_components.items():
+        if ticker in close.columns:
+            timeline["Ignored recommendation path"] += pd.to_numeric(close.loc[timeline.index, ticker], errors="coerce").ffill() * shares
+    if use_uninvested_cash:
+        timeline["Ignored recommendation path"] += idle_cash
+
+    timeline["Followed app path"] = 0.0
+    for ticker, shares in buy_components.items():
+        if ticker in close.columns:
+            timeline["Followed app path"] += pd.to_numeric(close.loc[timeline.index, ticker], errors="coerce").ffill() * shares
+    timeline = timeline.dropna(how="all").ffill().dropna()
+    if timeline.empty:
+        raise gr.Error("The backtest timeline was empty after pricing the selected symbols.")
+
+    progress(0.88, desc="Building backtest charts and the cost-of-ignoring summary...")
+    ignored_final = float(timeline["Ignored recommendation path"].iloc[-1])
+    app_final = float(timeline["Followed app path"].iloc[-1])
+    benefit = app_final - ignored_final
+    actual_account_today = float(
+        full_market_metrics.get("headline_metrics", {}).get("total_account_value_estimate", 0.0) or 0.0
+    )
+    counterfactual_account_today = actual_account_today + benefit
+    initial_ignored = float(timeline["Ignored recommendation path"].iloc[0])
+    initial_app = float(timeline["Followed app path"].iloc[0])
+    cash_policy = (
+        f"Freed cash plus {money_text(idle_cash)} of idle cash was deployed."
+        if use_uninvested_cash
+        else "Only freed cash from sell/trim actions was deployed. Idle cash was not used."
+    )
+    outcome_word = "benefit" if benefit >= 0 else "shortfall"
+    summary_html = f"""
+    <div style="display:grid;gap:16px">
+      <div style="padding:20px;border:1px solid rgba(148,163,184,.22);border-radius:22px;background:linear-gradient(180deg,#ffffff,#f8fafc);box-shadow:0 18px 42px rgba(15,23,42,.08)">
+        <div style="font-size:26px;font-weight:950;color:#0f172a">Backtest: Cost of Ignoring The Recommendation</div>
+        <div style="margin-top:8px;color:#475569;font-size:15px;line-height:1.55">
+          Cutoff date: <b>{cutoff_date.date()}</b>. The app rebuilt the portfolio using only transactions and prices visible by that date,
+          then compared the dollars it would have moved against the hypothetical buy ideas held through today.
+        </div>
+      </div>
+      <div class="metric-strip">
+        {metric_card("Ignored-recommendation cost" if benefit >= 0 else "App-path shortfall", money_text(abs(benefit)), f"Estimated {outcome_word} on the moved sleeve")}
+        {metric_card("Cash redeployed", money_text(deployable_cash), cash_policy)}
+        {metric_card("Actions tested", str(len(action_rows)), f"{len(buy_rows)} buy idea(s) funded")}
+      </div>
+      <div class="metric-strip">
+        {metric_card("Actual account today", money_text(actual_account_today), "From the uploaded transaction path")}
+        {metric_card("Counterfactual estimate", money_text(counterfactual_account_today), "Actual path plus the app action-sleeve impact")}
+        {metric_card("Estimated dollar difference", money_text(benefit), "Positive means the app path would have helped")}
+      </div>
+      <div style="padding:16px 18px;border:1px solid rgba(148,163,184,.20);border-radius:18px;background:#fff;color:#334155;line-height:1.55">
+        <b>How to read this:</b> this isolates the part of the portfolio the app would have changed. Untouched holdings are excluded from both sides because they cancel out.
+        The ignored path starts around {money_text(initial_ignored)} and ended at {money_text(ignored_final)}.
+        The app path starts around {money_text(initial_app)} and ended at {money_text(app_final)}.
+        The actual account value still comes from your uploaded post-cutoff transaction path; the counterfactual estimate overlays the app's action-sleeve impact on top of it.
+      </div>
+    </div>
+    """
+
+    trades_rows: list[dict[str, Any]] = []
+    for row in action_rows:
+        trades_rows.append(
+            {
+                "Step": "Sell / Trim",
+                "Ticker": row["Ticker"],
+                "Amount": row["Value The App Would Move"],
+                "Shares": row["Shares"],
+                "Rationale": row["Reason"],
+            }
+        )
+    for row in buy_rows:
+        trades_rows.append(
+            {
+                "Step": "Buy",
+                "Ticker": row["Ticker"],
+                "Amount": row["Hypothetical Buy Amount"],
+                "Shares": row["Shares Bought"],
+                "Rationale": row["Why It Was Picked"],
+            }
+        )
+
+    return (
+        summary_html,
+        _plot_backtest_counterfactual(timeline, cutoff_date, benefit),
+        pd.DataFrame(action_rows),
+        pd.DataFrame(buy_rows),
+        pd.DataFrame(trades_rows),
+    )
 
 
 def call_ollama(
@@ -4471,6 +4984,9 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "Current value": money_text(item.current_value),
                 "Sell / trim value": money_text(item.value_to_sell),
                 "Shares to sell": number_text(item.shares_to_sell, 4),
+                "Estimated short-term sale": money_text(getattr(item, "short_term_sell_value", None)),
+                "Estimated long-term sale": money_text(getattr(item, "long_term_sell_value", None)),
+                "Holding-period read": getattr(item, "selling_horizon_label", "Holding-period mix unknown"),
                 "Target weight": percent_display(item.target_weight_after_action),
                 "Weight reduction": percent_display(item.projected_weight_reduction_pct_points),
                 "Variance reduction": percent_display(item.projected_variance_reduction_pct_points),
@@ -4497,6 +5013,9 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "Current value",
                 "Sell / trim value",
                 "Shares to sell",
+                "Estimated short-term sale",
+                "Estimated long-term sale",
+                "Holding-period read",
                 "Target weight",
                 "Weight reduction",
                 "Variance reduction",
@@ -4517,6 +5036,45 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
     frame = pd.DataFrame(rows)
     frame["_sort"] = frame["Action"].map(action_order).fillna(99)
     return frame.sort_values(["_sort", "Ticker"]).drop(columns=["_sort"]).reset_index(drop=True)
+
+
+def selling_horizon_badge_html(item: Any) -> str:
+    """Render a compact short-term vs long-term selling estimate.
+
+    This is an educational holding-period read, not tax advice. The diagnosis
+    engine estimates the mix from open lots using an oldest-lot-first approach,
+    while the user's broker may use a different lot-selection method.
+    """
+    label = getattr(item, "selling_horizon_label", None) or "Holding-period mix unknown"
+    summary = getattr(item, "selling_horizon_summary", None) or "Lot-level holding-period details were not available."
+    warning = getattr(item, "selling_horizon_warning", None)
+    short_value = getattr(item, "short_term_sell_value", None)
+    long_value = getattr(item, "long_term_sell_value", None)
+    border = "rgba(245,158,11,.32)" if warning else "rgba(16,185,129,.24)"
+    bg = "linear-gradient(135deg, rgba(255,251,235,.96), rgba(255,255,255,.94))" if warning else "linear-gradient(135deg, rgba(236,253,245,.96), rgba(255,255,255,.94))"
+    label_color = "#92400e" if warning else "#047857"
+    values = ""
+    if short_value is not None or long_value is not None:
+        values = (
+            "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:8px'>"
+            f"<span style='padding:5px 8px;border-radius:999px;background:rgba(254,226,226,.88);color:#991b1b;font-size:11px;font-weight:850'>Short-term est. {money_text(short_value)}</span>"
+            f"<span style='padding:5px 8px;border-radius:999px;background:rgba(220,252,231,.88);color:#166534;font-size:11px;font-weight:850'>Long-term est. {money_text(long_value)}</span>"
+            "</div>"
+        )
+    warning_html = (
+        f"<div style='font-size:12px;line-height:1.45;color:#92400e;margin-top:8px'><strong>Check before trading:</strong> {warning}</div>"
+        if warning
+        else ""
+    )
+    return (
+        f"<div style='padding:11px 12px;border-radius:14px;background:{bg};border:1px solid {border};margin-top:12px'>"
+        "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:900'>Holding-period lens</div>"
+        f"<div style='font-size:14px;color:{label_color};font-weight:900;margin-top:6px'>{label}</div>"
+        f"<div style='font-size:12px;line-height:1.45;color:#475569;margin-top:5px'>{summary}</div>"
+        f"{values}{warning_html}"
+        "<div style='font-size:11px;color:#64748b;margin-top:8px'>Estimate only. Actual tax result depends on broker lot selection and your tax situation.</div>"
+        "</div>"
+    )
 
 
 def plot_risk_action_candidate_chart(item: Any | None, market_data: dict[str, Any] | None = None) -> go.Figure:
@@ -4738,6 +5296,7 @@ def build_risk_action_chart_card_html(item: Any | None, rank: int) -> str:
         f"<div style='padding:11px 12px;border-radius:14px;background:rgba(254,226,226,.80);border:1px solid rgba(239,68,68,.18)'><div style='font-size:11px;color:#dc2626;font-weight:900;text-transform:uppercase;letter-spacing:.05em'>Lag vs S&P 500</div><div style='font-size:16px;color:#991b1b;font-weight:850;margin-top:5px'>{lag_text}</div></div>"
         "</div>"
         f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:12px'>{render_bold_markers(getattr(item, 'what_changed', '') or getattr(item, 'recommendation_summary', ''))}</div>"
+        f"{selling_horizon_badge_html(item)}"
         "<div style='font-size:12px;color:#2563eb;margin-top:10px'>The chart sets both lines to 0% on your average buy date, then shows what happened from there.</div>"
         "</div>"
     )
@@ -4814,6 +5373,12 @@ def build_underperforming_risk_detail_cards(
                 "red",
             )
             + risk_action_metric("New target weight", percent_display(item.target_weight_after_action), amount_detail, "blue")
+            + risk_action_metric(
+                "Holding-period lens",
+                getattr(item, "selling_horizon_label", "Holding-period mix unknown"),
+                "short-term vs long-term sale estimate",
+                "amber" if getattr(item, "selling_horizon_warning", None) else "green",
+            )
         )
         evidence = "".join(
             f"<li style='margin-bottom:7px'>{humanize_evidence_point(point, item.ticker)}</li>"
@@ -4840,6 +5405,7 @@ def build_underperforming_risk_detail_cards(
             "</div>"
             f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:16px'>{action_tiles}</div>"
             f"<div style='font-size:15px;line-height:1.6;color:#334155;margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.92);border:1px solid rgba(148,163,184,.18)'>{action_line}</div>"
+            f"{selling_horizon_badge_html(item)}"
             "<div style='padding:16px 18px;border-radius:16px;background:linear-gradient(135deg, rgba(239,246,255,.98), rgba(255,255,255,.94));border:1px solid rgba(96,165,250,.22);margin-top:16px'>"
             "<div style='font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#2563eb;font-weight:900'>Plain-English read</div>"
             f"<div style='font-size:18px;line-height:1.35;color:#0f172a;font-weight:900;margin-top:10px'>{render_llm_text(llm_explanation.get('headline'))}</div>"
@@ -5282,6 +5848,21 @@ def build_portfolio_preferences_frame(preferences: PortfolioPreferences | None) 
     return pd.DataFrame(rows)
 
 
+def build_buy_universe_summary_for_preferences() -> str:
+    """Load and render the candidate-universe context inside Buy Preferences."""
+    try:
+        entries, _raw_frame, enriched_frame = load_buy_candidate_universe_review_data()
+        return build_buy_candidate_universe_summary_html(entries, enriched_frame)
+    except Exception:
+        return (
+            "<div style='padding:18px;border:1px solid rgba(248,113,113,.22);border-radius:18px;"
+            "background:linear-gradient(180deg, rgba(254,242,242,.98), rgba(255,255,255,.96));"
+            "color:#991b1b;font-size:14px;font-weight:700'>"
+            "The buy-candidate universe summary is not available right now."
+            "</div>"
+        )
+
+
 def build_buy_preferences_html(preferences: PortfolioPreferences | None) -> str:
     """Render a concise summary of the active buy-side preference object."""
     if preferences is None:
@@ -5294,10 +5875,7 @@ def build_buy_preferences_html(preferences: PortfolioPreferences | None) -> str:
         )
 
     source_text = "User-defined constraints" if preferences.preference_source == "user_defined" else "Inferred defaults"
-    unresolved_html = "".join(
-        f"<li style='margin-bottom:7px'>{render_bold_markers(item)}</li>"
-        for item in preferences.unresolved_preferences[:4]
-    ) or "<li>No major unresolved preference is blocking the next step.</li>"
+    buy_universe_summary_html = build_buy_universe_summary_for_preferences()
     cards = (
         metric_card("Budget to deploy", money_text(preferences.budget_to_deploy), source_text)
         + metric_card("Risk tolerance", f"{preferences.stated_risk_score:.0f}/100", preferences.stated_risk_band)
@@ -5332,11 +5910,7 @@ def build_buy_preferences_html(preferences: PortfolioPreferences | None) -> str:
         f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>{render_bold_markers(preferences.max_new_position_interpretation)}</div>"
         f"<div class='metric-strip' style='margin-top:14px'>{cards}</div>"
         "</div>"
-        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:18px;font-weight:800;color:#f8fafc'>Still open before buy recommendations</div>"
-        f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{unresolved_html}</ul>"
-        "</div>"
+        f"{buy_universe_summary_html}"
         "</div>"
     )
 
@@ -6591,6 +7165,7 @@ def build_user_portfolio_preferences(
     include_existing_holdings: bool,
     buy_idea_limit: int,
     buy_ideas_view_mode: str = "Quick Read",
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
 ) -> tuple[
     str,
     pd.DataFrame,
@@ -6610,7 +7185,6 @@ def build_user_portfolio_preferences(
     so the user can immediately see how a new constraint changes the candidate
     set.
     """
-    progress = noop_progress
     progress(0.05, desc="Reading current diagnosis and preference inputs...")
     if not diagnosis_payload:
         raise gr.Error("Run analysis first so the buy preferences can inherit the current portfolio context.")
@@ -6691,6 +7265,7 @@ def build_user_portfolio_preferences(
         build_rebalance_holdings_frame(diagnosis),
         build_next_steps_html(diagnosis),
         build_next_steps_frame(diagnosis),
+        gr.update(selected="buy-ideas"),
     )
 
 
@@ -8368,9 +8943,9 @@ def run_analysis(
     risk_profile: int,
     dataset_source: str,
     risk_actions_view_mode: str = "Action Summary",
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
 ) -> tuple[Any, ...]:
     started_at = time.perf_counter()
-    progress = noop_progress
     progress(0.01, desc="Starting analysis and locating the portfolio file...")
     if dataset_source == "Use bundled fake dataset":
         csv_path = REPO_ROOT / "data" / "raw" / "fake_mantis_invest.csv"
@@ -8502,25 +9077,20 @@ def run_analysis(
     elapsed_seconds = time.perf_counter() - started_at
     overview_risk_html = build_overview_risk_snapshot_html(risk)
 
-    dimension_scores = risk["dimension_scores"]
+    headline = market_metrics["headline_metrics"]
+    analysis_years = headline.get("analysis_years")
+    analysis_window_value = f"{number_text(analysis_years, 2)}y" if analysis_years is not None else "N/A"
+    analysis_window_subtitle = f"{headline.get('analysis_start', 'N/A')} to {headline.get('analysis_end', 'N/A')}"
     summary_cards_inner = (
-        metric_card("Observed Risk", f'{risk["score"]}/100', f'{risk["band"]} | {risk["alignment"]}')
-        + metric_card(
-            "Concentration Risk",
-            f'{dimension_scores["concentration_risk"]:.1f}/100',
-            "Can a few holdings dominate the account?",
-        )
-        + metric_card(
-            "Behavior Risk",
-            f'{dimension_scores["behavioral_risk"]:.1f}/100',
-            "Is trading behavior adding avoidable risk?",
-        )
-        + metric_card(
-            "Market Risk",
-            f'{dimension_scores["market_risk"]:.1f}/100',
-            "How rough or sensitive vs the S&P 500?",
-        )
-        + metric_card("Alignment", risk["alignment"], "Portfolio vs stated risk tolerance")
+        metric_card("Analysis Window", analysis_window_value, analysis_window_subtitle)
+        + metric_card("Invested Value", money_text(headline.get("current_portfolio_value")), "Current invested sleeve")
+        + metric_card("Total Portfolio Value", money_text(headline.get("total_account_value_estimate")), "Holdings plus cash estimate")
+        + metric_card("Cash In Hand", money_text(headline.get("uninvested_cash_estimate")), "Estimated uninvested cash")
+        + metric_card("Realized P&L", money_text(headline.get("total_realized_pnl")), "Closed positions and cash events")
+        + metric_card("Unrealized P&L", money_text(headline.get("total_unrealized_pnl")), "Open positions only")
+        + metric_card("Observed Risk", f'{risk["score"]}/100', f'{risk["band"]} | {risk["alignment"]}')
+        + metric_card("Vs S&P 500", pct_text(headline.get("excess_money_weighted_return_vs_benchmark")), "Excess money-weighted return")
+        + metric_card("Prep Time", f"{elapsed_seconds:.2f}s", "Upload to dashboard-ready")
     )
     summary_cards = f"<div class='metric-strip'>{summary_cards_inner}</div>"
 
@@ -8594,13 +9164,20 @@ def run_analysis(
 
 def build_app() -> gr.Blocks:
     buy_universe_entries, buy_universe_raw_df, buy_universe_enriched_source_df = load_buy_candidate_universe_review_data()
-    buy_universe_summary_html = build_buy_candidate_universe_summary_html(
-        buy_universe_entries,
-        buy_universe_enriched_source_df,
-    )
-    buy_universe_role_fig = plot_buy_candidate_role_mix(buy_universe_entries)
-    buy_universe_enrichment_fig = plot_buy_candidate_enrichment_map(buy_universe_enriched_source_df)
     buy_universe_enriched_df = build_buy_candidate_enriched_frame(buy_universe_enriched_source_df)
+    section_nav_specs = [
+        ("Overview", "overview"),
+        ("Risk Diagnosis", "risk-diagnosis"),
+        ("Risk Actions", "risk-actions"),
+        ("Portfolio Gaps", "portfolio-gaps"),
+        ("Buy Preferences", "buy-preferences"),
+        ("Buy Ideas", "buy-ideas"),
+        ("Portfolio Rebalancing Plan", "portfolio-rebalancing-plan"),
+        ("Backtesting", "backtesting"),
+        ("Next Steps", "next-steps"),
+        ("Risk Guide", "risk-guide"),
+        ("Holdings", "holdings"),
+    ]
 
     with gr.Blocks(
         title="Portfolio Analyzer Dashboard",
@@ -8624,6 +9201,60 @@ def build_app() -> gr.Blocks:
             background: linear-gradient(180deg, rgba(255,255,255,.94), rgba(248,250,252,.88));
             box-shadow: 0 20px 48px rgba(15,23,42,.10);
             backdrop-filter: blur(14px);
+        }
+        .app-heading,
+        .app-heading * {
+            color: #0f172a !important;
+            opacity: 1 !important;
+        }
+        .app-heading h1 {
+            margin-bottom: 6px !important;
+            letter-spacing: -.03em;
+        }
+        .app-heading p {
+            color: #334155 !important;
+            font-size: 15px !important;
+            line-height: 1.5 !important;
+        }
+        .control-rail,
+        .control-rail .markdown,
+        .control-rail .prose,
+        .control-rail p,
+        .control-rail li,
+        .control-rail span {
+            color: #0f172a !important;
+        }
+        .sidebar-notes {
+            margin-top: 14px;
+            padding: 16px 18px;
+            border: 1px solid rgba(148,163,184,.22);
+            border-radius: 18px;
+            background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.94));
+            box-shadow: 0 12px 28px rgba(15,23,42,.06);
+        }
+        .sidebar-notes,
+        .sidebar-notes * {
+            color: #0f172a !important;
+            opacity: 1 !important;
+        }
+        .sidebar-notes strong {
+            color: #111827 !important;
+            font-weight: 850 !important;
+        }
+        .sidebar-notes li {
+            color: #334155 !important;
+            margin: 5px 0 !important;
+        }
+        .sidebar-notes code {
+            color: #0f172a !important;
+            background: #f1f5f9 !important;
+            border: 1px solid rgba(148,163,184,.32);
+            border-radius: 6px;
+            padding: 1px 6px;
+        }
+        .sidebar-notes .advice-warning,
+        .sidebar-notes .advice-warning * {
+            color: #991b1b !important;
         }
         .content-rail {
             width: 100%;
@@ -8704,36 +9335,73 @@ def build_app() -> gr.Blocks:
             border: 0;
             box-shadow: none;
         }
+        .gradio-container [role="tablist"] {
+            display: none !important;
+        }
         .content-rail .tabs {
             display: block !important;
         }
-        .content-rail .tabs > .tab-nav {
-            position: fixed !important;
-            left: 34px !important;
-            top: clamp(760px, 62vh, 1040px) !important;
-            width: min(520px, calc(33vw - 44px)) !important;
-            max-height: 34vh !important;
-            overflow-y: auto !important;
-            z-index: 40 !important;
-            display: flex !important;
-            flex-direction: column !important;
-            gap: 8px;
-            padding: 14px;
-            border-radius: 22px;
+        .side-section-nav {
+            margin-top: 16px;
+            padding: 16px;
+            border-radius: 20px;
             background:
-                linear-gradient(180deg, rgba(255,255,255,.98), rgba(239,246,255,.86));
-            border: 1px solid rgba(148,163,184,.24);
-            box-shadow: 0 16px 34px rgba(15,23,42,.08);
+                radial-gradient(circle at 0% 0%, rgba(59,130,246,.12), transparent 34%),
+                linear-gradient(180deg, rgba(255,255,255,.99), rgba(248,250,252,.96));
+            border: 1px solid rgba(148,163,184,.26);
+            box-shadow: 0 18px 42px rgba(15,23,42,.08);
         }
-        .content-rail .tabs > .tab-nav::before {
-            content: "Dashboard Sections";
+        .side-section-nav,
+        .side-section-nav * {
+            color: #0f172a !important;
+            opacity: 1 !important;
+        }
+        .side-section-nav .markdown,
+        .side-section-nav .prose {
+            margin-bottom: 10px !important;
+        }
+        .side-section-nav strong {
             display: block;
-            margin: 0 2px 4px;
-            color: #2563eb;
-            font-size: 12px;
-            font-weight: 800;
-            letter-spacing: .09em;
+            color: #2563eb !important;
+            font-size: 12px !important;
+            letter-spacing: .11em;
             text-transform: uppercase;
+            font-weight: 900 !important;
+        }
+        .side-section-nav .gr-button,
+        .side-section-nav button {
+            display: flex !important;
+            width: 100% !important;
+            justify-content: flex-start !important;
+            align-items: center !important;
+            text-align: left !important;
+            margin: 6px 0 !important;
+            border-radius: 14px !important;
+            padding: 11px 14px 11px 18px !important;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96)) !important;
+            color: #334155 !important;
+            border: 1px solid rgba(148,163,184,.24) !important;
+            font-weight: 750 !important;
+            box-shadow: 0 8px 18px rgba(15,23,42,.04) !important;
+            position: relative !important;
+            overflow: hidden !important;
+        }
+        .side-section-nav .gr-button::before,
+        .side-section-nav button::before {
+            content: "";
+            position: absolute;
+            inset: 9px auto 9px 0;
+            width: 4px;
+            border-radius: 999px;
+            background: linear-gradient(180deg, #3b82f6, #60a5fa);
+        }
+        .side-section-nav .gr-button:hover,
+        .side-section-nav button:hover {
+            background: linear-gradient(180deg, rgba(219,234,254,.98), rgba(239,246,255,.94)) !important;
+            color: #1d4ed8 !important;
+            border-color: rgba(37,99,235,.30) !important;
+            transform: translateX(2px);
         }
         .content-rail .tabitem {
             min-width: 0;
@@ -8945,10 +9613,12 @@ def build_app() -> gr.Blocks:
             # Portfolio Analyzer Dashboard
             Upload your Robinhood CSV, compare your portfolio to the S&P 500 over your actual investing horizon,
             and inspect observed portfolio risk in a more explainable way.
-            """
+            """,
+            elem_classes=["app-heading"],
         )
 
         with gr.Row(elem_classes=["app-shell"]):
+            section_nav_buttons: list[tuple[str, gr.Button]] = []
             with gr.Column(scale=1, min_width=280, elem_classes=["control-rail"]):
                 upload = gr.File(label="Robinhood CSV", file_types=[".csv"])
                 dataset_source = gr.Radio(
@@ -8963,6 +9633,7 @@ def build_app() -> gr.Blocks:
                     value=60,
                     step=1,
                     label="Stated Risk Profile (0-100)",
+                    visible=False,
                 )
                 analyze_btn = gr.Button("Run Analysis", variant="primary")
                 gr.Markdown(
@@ -8972,8 +9643,18 @@ def build_app() -> gr.Blocks:
                     - Benchmark comparison excludes idle cash
                     - Timeframe stats are shown using your actual investing horizon
                     - A bundled fake dataset is available for demo purposes
-                    """
+
+                    <div class="advice-warning" style="margin-top:12px;padding:12px 14px;border-radius:14px;background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;font-weight:800;">
+                    Important: This dashboard is for education and portfolio review only. It is not investment advice, tax advice, or a recommendation to buy or sell securities.
+                    </div>
+                    """,
+                    elem_classes=["sidebar-notes"],
                 )
+                with gr.Group(elem_classes=["side-section-nav"]):
+                    gr.Markdown("**Dashboard Sections**")
+                    for section_label, section_id in section_nav_specs:
+                        section_button = gr.Button(section_label, variant="secondary", size="sm")
+                        section_nav_buttons.append((section_id, section_button))
 
             with gr.Column(scale=3, elem_classes=["content-rail"]):
                 risk_state = gr.State(value=None)
@@ -9154,29 +9835,6 @@ def build_app() -> gr.Blocks:
                                 interactive=False,
                                 wrap=True,
                             )
-                    with gr.Tab("Buy Universe", id="buy-universe"):
-                        buy_universe_md = gr.HTML(value=buy_universe_summary_html)
-                        with gr.Row(equal_height=True):
-                            buy_universe_role_plot = gr.Plot(
-                                value=buy_universe_role_fig,
-                                label="Candidate Universe Mix",
-                            )
-                            buy_universe_enrichment_plot = gr.Plot(
-                                value=buy_universe_enrichment_fig,
-                                label="Candidate Strength vs Stability",
-                            )
-                        buy_universe_df = gr.Dataframe(
-                            value=buy_universe_raw_df,
-                            label="Curated Candidate Universe",
-                            interactive=False,
-                            wrap=True,
-                        )
-                        buy_universe_enriched_df_component = gr.Dataframe(
-                            value=buy_universe_enriched_df,
-                            label="Enriched Candidate Review",
-                            interactive=False,
-                            wrap=True,
-                        )
                     with gr.Tab("Buy Preferences", id="buy-preferences"):
                         with gr.Row(equal_height=False):
                             with gr.Column(scale=1, min_width=300):
@@ -9244,10 +9902,34 @@ def build_app() -> gr.Blocks:
                             with gr.Column(scale=2, min_width=360):
                                 buy_preferences_md = gr.HTML()
                                 buy_preferences_df = gr.Dataframe(
-                                    label="Active Buy Preference Object",
+                                    label="Preference Settings",
                                     interactive=False,
                                     wrap=True,
+                                    visible=False,
                                 )
+                        with gr.Accordion("Candidate Universe Review", open=False):
+                            gr.HTML(
+                                value=(
+                                    "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.18);border-radius:18px;"
+                                    "background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));"
+                                    "box-shadow:0 12px 28px rgba(15,23,42,.05)'>"
+                                    "<div style='font-size:18px;font-weight:900;color:#0f172a'>Candidate universe used by Buy Ideas</div>"
+                                    "<div style='font-size:13px;color:#475569;margin-top:6px'>These are the curated names and enriched review fields the buy-side engine can draw from after preferences are applied.</div>"
+                                    "</div>"
+                                )
+                            )
+                            gr.Dataframe(
+                                value=buy_universe_raw_df,
+                                label="Curated Candidate Universe",
+                                interactive=False,
+                                wrap=True,
+                            )
+                            gr.Dataframe(
+                                value=buy_universe_enriched_df,
+                                label="Enriched Candidate Review",
+                                interactive=False,
+                                wrap=True,
+                            )
                     with gr.Tab("Buy Ideas", id="buy-ideas"):
                         buy_ideas_view = gr.Radio(
                             choices=["Quick Read", "Evidence Detail", "Full Detail"],
@@ -9287,6 +9969,57 @@ def build_app() -> gr.Blocks:
                             interactive=False,
                             wrap=True,
                         )
+                    with gr.Tab("Backtesting", id="backtesting"):
+                        gr.HTML(
+                            "<div style='padding:20px;border:1px solid rgba(148,163,184,.22);border-radius:22px;"
+                            "background:linear-gradient(180deg,#ffffff,#f8fafc);box-shadow:0 18px 42px rgba(15,23,42,.08)'>"
+                            "<div style='font-size:28px;font-weight:950;color:#0f172a'>Backtesting</div>"
+                            "<div style='margin-top:8px;color:#475569;font-size:15px;line-height:1.55'>"
+                            "Pick a historical date. The app rebuilds the recommendation set as of that date, hypothetically follows the sell/trim and buy path, "
+                            "and compares it against the dollars you would have left in the ignored risk names."
+                            "</div></div>"
+                        )
+                        with gr.Row(equal_height=False):
+                            with gr.Column(scale=1, min_width=300):
+                                backtest_cutoff_date = gr.Textbox(
+                                    label="Backtest cutoff date",
+                                    placeholder="YYYY-MM-DD",
+                                    value="2025-10-01",
+                                    info="The app only uses transactions and prices available on or before this date.",
+                                )
+                                backtest_use_idle_cash = gr.Checkbox(
+                                    label="Also use uninvested available cash",
+                                    value=False,
+                                    info="Off by default. When off, the counterfactual uses only cash freed by sells and trims.",
+                                )
+                                backtest_btn = gr.Button("Run Backtest", variant="primary")
+                            with gr.Column(scale=2, min_width=480):
+                                backtest_summary_md = gr.HTML(
+                                    value=(
+                                        "<div style='padding:18px;border:1px dashed rgba(148,163,184,.34);border-radius:18px;"
+                                        "background:#fff;color:#475569'>Run a backtest to estimate the cost of ignoring a past recommendation set.</div>"
+                                    )
+                                )
+                        backtest_plot = gr.Plot(
+                            value=empty_dashboard_plot("Run a backtest to compare ignored versus followed recommendations"),
+                            label="Ignored vs Followed Recommendation Path",
+                        )
+                        with gr.Accordion("Backtest Details", open=True):
+                            backtest_actions_df = gr.Dataframe(
+                                label="Sell / Trim Actions As Of Cutoff",
+                                interactive=False,
+                                wrap=True,
+                            )
+                            backtest_buys_df = gr.Dataframe(
+                                label="Hypothetical Buy Ideas Funded",
+                                interactive=False,
+                                wrap=True,
+                            )
+                            backtest_trades_df = gr.Dataframe(
+                                label="Counterfactual Trade List",
+                                interactive=False,
+                                wrap=True,
+                            )
                     with gr.Tab("Next Steps", id="next-steps"):
                         next_steps_md = gr.HTML()
                         next_steps_df = gr.Dataframe(
@@ -9370,6 +10103,28 @@ def build_app() -> gr.Blocks:
                 diagnosis_risk_evidence_plot,
                 *metric_card_components,
             ],
+            show_progress="full",
+            show_progress_on=[cards],
+        )
+
+        backtest_btn.click(
+            fn=run_backtest,
+            inputs=[
+                upload,
+                dataset_source,
+                risk_profile,
+                backtest_cutoff_date,
+                backtest_use_idle_cash,
+            ],
+            outputs=[
+                backtest_summary_md,
+                backtest_plot,
+                backtest_actions_df,
+                backtest_buys_df,
+                backtest_trades_df,
+            ],
+            show_progress="full",
+            show_progress_on=[backtest_summary_md],
         )
 
         diagnosis_stock_filter.change(
@@ -9380,12 +10135,14 @@ def build_app() -> gr.Blocks:
                 diagnosis_drawdown_plot,
                 diagnosis_market_sensitivity_plot,
             ],
+            show_progress="hidden",
         )
 
         risk_actions_view.change(
             fn=update_risk_actions_view,
             inputs=[diagnosis_state, risk_actions_view],
             outputs=[risk_actions_md],
+            show_progress="hidden",
         )
 
         buy_ideas_view.change(
@@ -9396,6 +10153,7 @@ def build_app() -> gr.Blocks:
                 *featured_buy_idea_cards,
                 *featured_buy_idea_plots,
             ],
+            show_progress="hidden",
         )
 
         apply_buy_preferences_btn.click(
@@ -9429,7 +10187,10 @@ def build_app() -> gr.Blocks:
                 rebalance_holdings_df,
                 next_steps_md,
                 next_steps_df,
+                main_tabs,
             ],
+            show_progress="full",
+            show_progress_on=[buy_ideas_md],
         )
 
         for metric_key, button in zip(metric_navigation_order(), metric_buttons):
@@ -9437,16 +10198,307 @@ def build_app() -> gr.Blocks:
                 fn=lambda risk, key=metric_key: open_metric_guide(key, risk),
                 inputs=[risk_state],
                 outputs=[main_tabs, risk_guide_md],
+                show_progress="hidden",
+            )
+        for section_id, button in section_nav_buttons:
+            button.click(
+                fn=lambda tab_id=section_id: gr.update(selected=tab_id),
+                inputs=None,
+                outputs=[main_tabs],
+                show_progress="hidden",
             )
 
     return demo
 
 
+LAUNCH_CSS = """
+.gradio-container {
+    background:
+        radial-gradient(circle at top left, rgba(59,130,246,.16), transparent 25%),
+        radial-gradient(circle at top right, rgba(20,184,166,.12), transparent 28%),
+        linear-gradient(180deg, #f8fbff 0%, #eef4ff 54%, #f8fafc 100%) !important;
+    color: #0f172a !important;
+    max-width: 100vw !important;
+    padding-left: 18px !important;
+    padding-right: 18px !important;
+}
+.gradio-container [role="tablist"] {
+    display: none !important;
+}
+.app-heading, .app-heading * {
+    color: #0f172a !important;
+    opacity: 1 !important;
+}
+.app-heading h1 {
+    margin-bottom: 6px !important;
+    letter-spacing: -.03em !important;
+}
+.app-heading p {
+    color: #334155 !important;
+    font-size: 15px !important;
+    line-height: 1.5 !important;
+}
+.app-shell {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    align-items: start !important;
+}
+.control-rail {
+    padding: 18px !important;
+    border: 1px solid rgba(148,163,184,.28) !important;
+    border-radius: 22px !important;
+    background:
+        radial-gradient(circle at 0% 0%, rgba(59,130,246,.10), transparent 28%),
+        linear-gradient(180deg, rgba(255,255,255,.99), rgba(248,250,252,.95)) !important;
+    box-shadow: 0 24px 60px rgba(15,23,42,.11) !important;
+}
+.control-rail, .control-rail * {
+    color: #0f172a !important;
+    opacity: 1 !important;
+}
+.control-rail .block,
+.control-rail .wrap,
+.control-rail .form,
+.control-rail .gr-form,
+.control-rail .gr-box,
+.control-rail fieldset {
+    background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.95)) !important;
+    border-color: rgba(148,163,184,.22) !important;
+    box-shadow: none !important;
+}
+.control-rail label,
+.control-rail .block-label,
+.control-rail .label-wrap {
+    color: #0f172a !important;
+    font-weight: 850 !important;
+}
+.control-rail .info,
+.control-rail .secondary-wrap,
+.control-rail small {
+    color: #64748b !important;
+}
+.control-rail input,
+.control-rail textarea,
+.control-rail select {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    border-color: rgba(148,163,184,.34) !important;
+}
+.control-rail button {
+    color: #0f172a !important;
+}
+.control-rail button.primary,
+.control-rail .gr-button-primary {
+    color: #ffffff !important;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
+    box-shadow: 0 14px 30px rgba(37,99,235,.25) !important;
+}
+.control-rail button.secondary,
+.control-rail .gr-button-secondary {
+    color: #334155 !important;
+    background: linear-gradient(180deg, #ffffff, #f8fafc) !important;
+}
+.content-rail {
+    width: 100% !important;
+    padding: 8px 0 0 !important;
+}
+.summary-cards-wrap {
+    padding: 16px !important;
+    border: 1px solid rgba(96,165,250,.18) !important;
+    border-radius: 28px !important;
+    background:
+        radial-gradient(circle at 10% 0%, rgba(59,130,246,.12), transparent 34%),
+        radial-gradient(circle at 92% 18%, rgba(20,184,166,.10), transparent 32%),
+        linear-gradient(135deg, rgba(255,255,255,.94), rgba(239,246,255,.76)) !important;
+    box-shadow: 0 22px 54px rgba(15,23,42,.10) !important;
+}
+.metric-strip {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(220px, 1fr)) !important;
+    gap: 16px !important;
+    width: 100% !important;
+    align-items: stretch !important;
+}
+.metric-card {
+    position: relative !important;
+    isolation: isolate !important;
+    min-height: 128px !important;
+    border-radius: 20px !important;
+    background:
+        linear-gradient(145deg, rgba(255,255,255,.99), rgba(239,246,255,.92)) !important;
+    border: 1px solid rgba(96,165,250,.24) !important;
+    box-shadow: 0 18px 42px rgba(30,64,175,.10) !important;
+    transition: transform .18s ease, box-shadow .18s ease !important;
+}
+.metric-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 5px;
+    background: linear-gradient(180deg, #2563eb, #38bdf8);
+    z-index: 0;
+}
+.metric-card::after {
+    content: "";
+    position: absolute;
+    right: -44px;
+    top: -52px;
+    width: 150px;
+    height: 150px;
+    border-radius: 999px;
+    background: radial-gradient(circle, rgba(59,130,246,.14), transparent 68%);
+    z-index: 0;
+}
+.metric-card-label,
+.metric-card-value,
+.metric-card > div {
+    position: relative !important;
+    z-index: 1 !important;
+}
+.metric-card-label {
+    color: #2563eb !important;
+    font-weight: 900 !important;
+}
+.metric-card-value {
+    color: #0f172a !important;
+    font-size: 30px !important;
+    font-weight: 900 !important;
+}
+.metric-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 22px 52px rgba(30,64,175,.14) !important;
+}
+.sidebar-notes {
+    margin-top: 14px !important;
+    padding: 16px 18px !important;
+    border: 1px solid rgba(148,163,184,.22) !important;
+    border-radius: 18px !important;
+    background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.94)) !important;
+    box-shadow: 0 12px 28px rgba(15,23,42,.06) !important;
+}
+.sidebar-notes, .sidebar-notes * {
+    color: #0f172a !important;
+    opacity: 1 !important;
+}
+.sidebar-notes strong {
+    color: #111827 !important;
+    font-weight: 850 !important;
+}
+.sidebar-notes li {
+    color: #334155 !important;
+    margin: 5px 0 !important;
+}
+.sidebar-notes code {
+    color: #0f172a !important;
+    background: #f1f5f9 !important;
+    border: 1px solid rgba(148,163,184,.32) !important;
+    border-radius: 6px !important;
+    padding: 1px 6px !important;
+}
+.sidebar-notes .advice-warning,
+.sidebar-notes .advice-warning * {
+    color: #991b1b !important;
+}
+.side-section-nav {
+    margin-top: 16px !important;
+    padding: 16px !important;
+    border-radius: 20px !important;
+    background:
+        radial-gradient(circle at 0% 0%, rgba(59,130,246,.12), transparent 34%),
+        linear-gradient(180deg, rgba(255,255,255,.99), rgba(248,250,252,.96)) !important;
+    border: 1px solid rgba(148,163,184,.26) !important;
+    box-shadow: 0 18px 42px rgba(15,23,42,.08) !important;
+}
+.side-section-nav, .side-section-nav * {
+    color: #0f172a !important;
+    opacity: 1 !important;
+}
+.side-section-nav .block,
+.side-section-nav .wrap,
+.side-section-nav .form,
+.side-section-nav .gr-form,
+.side-section-nav .gr-box {
+    background: transparent !important;
+    border-color: transparent !important;
+    box-shadow: none !important;
+}
+.side-section-nav strong {
+    display: block !important;
+    color: #2563eb !important;
+    font-size: 12px !important;
+    letter-spacing: .11em !important;
+    text-transform: uppercase !important;
+    font-weight: 900 !important;
+    margin-bottom: 10px !important;
+}
+.side-section-nav button {
+    display: flex !important;
+    width: 100% !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+    text-align: left !important;
+    margin: 6px 0 !important;
+    border-radius: 14px !important;
+    padding: 11px 14px 11px 18px !important;
+    background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96)) !important;
+    color: #334155 !important;
+    border: 1px solid rgba(148,163,184,.24) !important;
+    font-weight: 750 !important;
+    box-shadow: 0 8px 18px rgba(15,23,42,.04) !important;
+    position: relative !important;
+    overflow: hidden !important;
+}
+.side-section-nav button::before {
+    content: "";
+    position: absolute;
+    inset: 9px auto 9px 0;
+    width: 4px;
+    border-radius: 999px;
+    background: linear-gradient(180deg, #3b82f6, #60a5fa);
+}
+.side-section-nav button:hover {
+    background: linear-gradient(180deg, rgba(219,234,254,.98), rgba(239,246,255,.94)) !important;
+    color: #1d4ed8 !important;
+    border-color: rgba(37,99,235,.30) !important;
+}
+.gradio-container button.primary,
+.gradio-container .gr-button-primary {
+    background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
+    color: #ffffff !important;
+    border-color: rgba(29,78,216,.34) !important;
+}
+.gradio-container button.secondary,
+.gradio-container .gr-button-secondary {
+    background: #f8fafc !important;
+    color: #334155 !important;
+    border-color: rgba(148,163,184,.34) !important;
+}
+@media (max-width: 1200px) {
+    .metric-strip {
+        grid-template-columns: repeat(2, minmax(220px, 1fr)) !important;
+    }
+}
+@media (max-width: 820px) {
+    .metric-strip {
+        grid-template-columns: 1fr !important;
+    }
+}
+"""
+
+
 def launch_app() -> None:
     app = build_app()
+    app.queue(status_update_rate=0.5, default_concurrency_limit=1)
     # Default to local launch so the dashboard reliably binds to the configured port without
     # depending on Gradio's share tunnel port allocation.
-    app.launch(server_name="127.0.0.1", server_port=7863, share=True)
+    app.launch(
+        server_name="127.0.0.1",
+        server_port=7863,
+        share=True,
+        theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
+        css=LAUNCH_CSS,
+    )
 
 
 if __name__ == "__main__":

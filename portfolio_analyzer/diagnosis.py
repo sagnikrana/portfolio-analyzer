@@ -322,6 +322,15 @@ class HoldingActionRecommendation(BaseModel):
     position_reduction_pct: float = 0.0
     shares_to_sell: Optional[float] = None
     value_to_sell: Optional[float] = None
+    short_term_sell_shares: Optional[float] = None
+    long_term_sell_shares: Optional[float] = None
+    short_term_sell_value: Optional[float] = None
+    long_term_sell_value: Optional[float] = None
+    short_term_sell_pct_of_action: Optional[float] = None
+    long_term_sell_pct_of_action: Optional[float] = None
+    selling_horizon_label: str = "Holding-period mix unknown"
+    selling_horizon_summary: str = "Lot-level holding-period details were not available."
+    selling_horizon_warning: Optional[str] = None
     target_weight_after_action: Optional[float] = None
     projected_weight_reduction_pct_points: Optional[float] = None
     projected_variance_reduction_pct_points: Optional[float] = None
@@ -800,6 +809,7 @@ def load_diagnosis_bundle(base_dir: Path) -> dict[str, Any]:
         "risk_metrics": _load_csv(base_dir / "risk_metric_scores.csv"),
         "risk_dimensions": _load_csv(base_dir / "risk_dimension_scores.csv"),
         "open_positions": _load_csv(base_dir / "open_positions.csv"),
+        "open_lots": _load_csv(base_dir / "open_lots.csv"),
         "holding_performance_context": _load_csv(base_dir / "holding_performance_context.csv"),
         "sector_allocation": _load_csv(base_dir / "sector_allocation.csv"),
         "performance_attribution": _load_csv(base_dir / "performance_attribution.csv"),
@@ -4274,6 +4284,127 @@ def replacement_candidates_from_user_preferences(
     )
 
 
+def _estimate_sale_holding_period_mix(
+    *,
+    open_lots: pd.DataFrame,
+    ticker: str,
+    shares_to_sell: Optional[float],
+    current_value: Optional[float],
+    quantity: Optional[float],
+    analysis_end_ts: pd.Timestamp,
+) -> dict[str, Any]:
+    """Estimate whether a proposed sale touches short-term or long-term lots.
+
+    The action engine decides *whether* to sell or trim before this helper runs.
+    This helper only explains *which age bucket* the proposed sale may draw from.
+
+    We intentionally use an illustrative oldest-lot-first estimate rather than
+    claiming to know the broker's eventual tax-lot disposal method. That makes
+    the output useful for user trust while staying cautious: the app can warn
+    that a sale may include shares held less than one year, but it should not
+    present that estimate as tax advice or as the exact lots that will be sold.
+    """
+    shares = _safe_float(shares_to_sell) or 0.0
+    total_quantity = _safe_float(quantity) or 0.0
+    value = _safe_float(current_value) or 0.0
+    if shares <= 0:
+        return {
+            "label": "No sale proposed",
+            "summary": "No shares are being sold in this action.",
+            "warning": None,
+        }
+    if open_lots is None or open_lots.empty or total_quantity <= 0 or value <= 0:
+        return {
+            "label": "Holding-period mix unknown",
+            "summary": "Lot-level holding-period details were not available for this sale estimate.",
+            "warning": "Check your broker's lot-level tax view before placing any sell order.",
+        }
+
+    lots = open_lots.copy()
+    lots["ticker"] = lots.get("ticker", "").astype(str)
+    lots = lots[lots["ticker"].str.upper() == str(ticker).upper()].copy()
+    if lots.empty:
+        return {
+            "label": "Holding-period mix unknown",
+            "summary": "No open lot records were available for this ticker.",
+            "warning": "Check your broker's lot-level tax view before placing any sell order.",
+        }
+
+    lots["quantity"] = pd.to_numeric(lots.get("quantity"), errors="coerce").fillna(0.0)
+    lots["buy_date"] = pd.to_datetime(lots.get("buy_date"), errors="coerce")
+    lots = lots[(lots["quantity"] > 0) & lots["buy_date"].notna()].sort_values("buy_date")
+    if lots.empty or pd.isna(analysis_end_ts):
+        return {
+            "label": "Holding-period mix unknown",
+            "summary": "Open lots were present, but lot age could not be calculated.",
+            "warning": "Check your broker's lot-level tax view before placing any sell order.",
+        }
+
+    current_price = value / total_quantity
+    remaining = min(shares, float(lots["quantity"].sum()))
+    short_shares = 0.0
+    long_shares = 0.0
+    for row in lots.to_dict(orient="records"):
+        if remaining <= 1e-9:
+            break
+        take = min(remaining, _safe_float(row.get("quantity")) or 0.0)
+        if take <= 0:
+            continue
+        hold_days = int((analysis_end_ts - row["buy_date"]).days)
+        if hold_days >= 365:
+            long_shares += take
+        else:
+            short_shares += take
+        remaining -= take
+
+    estimated_shares = short_shares + long_shares
+    if estimated_shares <= 0:
+        return {
+            "label": "Holding-period mix unknown",
+            "summary": "The proposed sale could not be matched to open lots.",
+            "warning": "Check your broker's lot-level tax view before placing any sell order.",
+        }
+
+    short_value = short_shares * current_price
+    long_value = long_shares * current_price
+    total_value = short_value + long_value
+    short_pct = short_value / total_value if total_value > 0 else 0.0
+    long_pct = long_value / total_value if total_value > 0 else 0.0
+    if short_pct >= 0.75:
+        label = "Mostly short-term lots"
+    elif long_pct >= 0.75:
+        label = "Mostly long-term lots"
+    else:
+        label = "Mixed short- and long-term lots"
+
+    summary = (
+        f"Oldest-lot estimate: {short_pct:.0%} short-term and {long_pct:.0%} "
+        "long-term by sale value."
+    )
+    warning = None
+    if short_pct >= 0.25:
+        warning = (
+            "A meaningful part of this sale may touch shares held less than one year. "
+            "Review tax-lot impact before placing orders."
+        )
+    elif long_pct >= 0.75:
+        warning = (
+            "Most estimated shares are older than one year, but verify lot selection "
+            "with your broker before trading."
+        )
+    return {
+        "label": label,
+        "summary": summary,
+        "warning": warning,
+        "short_term_shares": round(short_shares, 4),
+        "long_term_shares": round(long_shares, 4),
+        "short_term_value": round(short_value, 2),
+        "long_term_value": round(long_value, 2),
+        "short_term_pct": round(short_pct, 4),
+        "long_term_pct": round(long_pct, 4),
+    }
+
+
 def _build_holding_action_recommendations(
     bundle: dict[str, Any],
     holding_action_needs: list[HoldingActionNeed],
@@ -4288,6 +4419,7 @@ def _build_holding_action_recommendations(
     evidence help size the trim, but they do not create a sell call on their own.
     """
     positions = bundle["open_positions"].copy()
+    open_lots = bundle.get("open_lots", pd.DataFrame()).copy()
     performance_context = bundle["holding_performance_context"].copy()
     volatility = bundle["volatility_drivers"].copy()
     if positions.empty:
@@ -4472,6 +4604,14 @@ def _build_holding_action_recommendations(
 
         shares_to_sell = round((quantity or 0.0) * reduction_pct, 4) if quantity is not None else None
         value_to_sell = round((current_value or 0.0) * reduction_pct, 2) if current_value is not None else None
+        selling_horizon = _estimate_sale_holding_period_mix(
+            open_lots=open_lots,
+            ticker=ticker,
+            shares_to_sell=shares_to_sell,
+            current_value=current_value,
+            quantity=quantity,
+            analysis_end_ts=analysis_end_ts,
+        )
         target_weight_after_action = round(current_weight * (1.0 - reduction_pct), 4) if current_weight is not None else None
         is_actionable = reduction_pct > 0
         (
@@ -4501,6 +4641,7 @@ def _build_holding_action_recommendations(
                 f"Relative performance vs benchmark: {(excess_return_vs_benchmark or 0.0):.1%}",
                 f"Diagnosis pressure: {diagnosis_pressure_score:.1f}/100" if diagnosis_pressure_score else None,
                 f"Variance contribution (2025): {variance_contribution_pct:.1%}" if variance_contribution_pct else None,
+                selling_horizon.get("summary") if reduction_pct > 0 else None,
             ]
             + trailing_window_evidence
             + (list(getattr(action_need, "supporting_evidence", [])[:2]) if action_need is not None else [])
@@ -4528,6 +4669,8 @@ def _build_holding_action_recommendations(
             current_weight=current_weight,
             reduction_pct=reduction_pct,
         )
+        if reduction_pct > 0 and selling_horizon.get("warning"):
+            guardrail_notes = _unique_nonempty([*guardrail_notes, str(selling_horizon.get("warning"))])
 
         recommendations.append(
             HoldingActionRecommendation(
@@ -4541,6 +4684,18 @@ def _build_holding_action_recommendations(
                 position_reduction_pct=reduction_pct,
                 shares_to_sell=shares_to_sell,
                 value_to_sell=value_to_sell,
+                short_term_sell_shares=_safe_float(selling_horizon.get("short_term_shares")),
+                long_term_sell_shares=_safe_float(selling_horizon.get("long_term_shares")),
+                short_term_sell_value=_safe_float(selling_horizon.get("short_term_value")),
+                long_term_sell_value=_safe_float(selling_horizon.get("long_term_value")),
+                short_term_sell_pct_of_action=_safe_float(selling_horizon.get("short_term_pct")),
+                long_term_sell_pct_of_action=_safe_float(selling_horizon.get("long_term_pct")),
+                selling_horizon_label=str(selling_horizon.get("label") or "Holding-period mix unknown"),
+                selling_horizon_summary=str(
+                    selling_horizon.get("summary")
+                    or "Lot-level holding-period details were not available."
+                ),
+                selling_horizon_warning=selling_horizon.get("warning"),
                 target_weight_after_action=target_weight_after_action,
                 projected_weight_reduction_pct_points=projected_weight_reduction_pct_points,
                 projected_variance_reduction_pct_points=projected_variance_reduction_pct_points,
