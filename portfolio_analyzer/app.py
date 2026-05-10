@@ -5310,19 +5310,16 @@ def build_risk_action_feature_slots(
     market_data: dict[str, Any],
     limit: int = MAX_FEATURED_RISK_ACTION_COUNT,
 ) -> list[Any]:
-    """Return fixed Risk Action chart rows in Gradio output order."""
+    """Return fixed Risk Action card/plot values in Gradio output order."""
     actionable = [item for item in diagnosis.holding_action_recommendations if item.is_actionable]
     selected = actionable[: max(0, min(int(limit), MAX_FEATURED_RISK_ACTION_COUNT))]
-    row_outputs: list[Any] = []
     card_outputs: list[Any] = []
     plot_outputs: list[Any] = []
     for idx in range(MAX_FEATURED_RISK_ACTION_COUNT):
         item = selected[idx] if idx < len(selected) else None
-        is_visible = item is not None
-        row_outputs.append(gr.update(visible=is_visible))
-        card_outputs.append(build_risk_action_chart_card_html(item, idx + 1) if is_visible else "")
-        plot_outputs.append(plot_risk_action_candidate_chart(item, market_data) if is_visible else plot_risk_action_candidate_chart(None, None))
-    return [*row_outputs, *card_outputs, *plot_outputs]
+        card_outputs.append(build_risk_action_chart_card_html(item, idx + 1) if item is not None else "")
+        plot_outputs.append(plot_risk_action_candidate_chart(item, market_data) if item is not None else plot_risk_action_candidate_chart(None, None))
+    return [*card_outputs, *plot_outputs]
 
 
 def build_underperforming_risk_detail_cards(
@@ -7157,10 +7154,6 @@ def build_buy_idea_feature_slots(
 ) -> list[Any]:
     """Build fixed featured buy-idea rows in Gradio output order.
 
-    The `Buy Ideas` tab wires its outputs as:
-    1. all row visibility updates
-    2. all featured HTML cards
-
     The chart slots are intentionally omitted from the demo path. Plotly
     figures were the heaviest browser payload in this tab and could lock the
     page before the user even clicked a preference control.
@@ -7168,14 +7161,15 @@ def build_buy_idea_feature_slots(
     ordered = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))
     selected_limit = max(0, min(int(limit), MAX_FEATURED_BUY_IDEA_COUNT))
     featured = ordered[:selected_limit]
-    row_outputs: list[Any] = []
     card_outputs: list[Any] = []
     for idx in range(MAX_FEATURED_BUY_IDEA_COUNT):
         candidate = featured[idx] if idx < len(featured) else None
-        is_visible = candidate is not None
-        row_outputs.append(gr.update(visible=is_visible))
-        card_outputs.append(build_buy_idea_card_html(diagnosis, candidate, idx + 1, view_mode=view_mode) if is_visible else "")
-    return [*row_outputs, *card_outputs]
+        card_outputs.append(
+            build_buy_idea_card_html(diagnosis, candidate, idx + 1, view_mode=view_mode)
+            if candidate is not None
+            else ""
+        )
+    return card_outputs
 
 
 def update_buy_ideas_view(
@@ -7186,9 +7180,8 @@ def update_buy_ideas_view(
 ) -> list[Any]:
     """Re-render featured Buy Ideas when the user switches the explanation depth."""
     if not diagnosis_payload:
-        empty_rows = [gr.update(visible=False) for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
         empty_cards = ["" for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
-        return [*empty_rows, *empty_cards]
+        return empty_cards
     diagnosis = PortfolioRiskDiagnosis.model_validate(diagnosis_payload)
     candidates = [
         ReplacementCandidate.model_validate(item)
@@ -9239,431 +9232,7 @@ def build_app() -> gr.Blocks:
     with gr.Blocks(
         title="Portfolio Analyzer Dashboard",
         theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
-        css="""
-        .gradio-container {
-            background:
-                radial-gradient(circle at top left, rgba(59,130,246,.18), transparent 26%),
-                radial-gradient(circle at top right, rgba(20,184,166,.14), transparent 28%),
-                linear-gradient(180deg, #f8fbff 0%, #eef4ff 54%, #f8fafc 100%);
-            color: #0f172a !important;
-            max-width: 100vw !important;
-            padding-left: 18px !important;
-            padding-right: 18px !important;
-        }
-        .app-shell {width: 100%; max-width: 100% !important; margin: 0; align-items: start;}
-        .control-rail {
-            padding: 18px;
-            border: 1px solid rgba(148,163,184,.28);
-            border-radius: 22px;
-            background: linear-gradient(180deg, rgba(255,255,255,.94), rgba(248,250,252,.88));
-            box-shadow: 0 20px 48px rgba(15,23,42,.10);
-            backdrop-filter: blur(14px);
-        }
-        .app-heading,
-        .app-heading * {
-            color: #0f172a !important;
-            opacity: 1 !important;
-        }
-        .app-heading h1 {
-            margin-bottom: 6px !important;
-            letter-spacing: -.03em;
-        }
-        .app-heading p {
-            color: #334155 !important;
-            font-size: 15px !important;
-            line-height: 1.5 !important;
-        }
-        .control-rail,
-        .control-rail .markdown,
-        .control-rail .prose,
-        .control-rail p,
-        .control-rail li,
-        .control-rail span {
-            color: #0f172a !important;
-        }
-        .sidebar-notes {
-            margin-top: 14px;
-            padding: 16px 18px;
-            border: 1px solid rgba(148,163,184,.22);
-            border-radius: 18px;
-            background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.94));
-            box-shadow: 0 12px 28px rgba(15,23,42,.06);
-        }
-        .sidebar-notes,
-        .sidebar-notes * {
-            color: #0f172a !important;
-            opacity: 1 !important;
-        }
-        .sidebar-notes strong {
-            color: #111827 !important;
-            font-weight: 850 !important;
-        }
-        .sidebar-notes li {
-            color: #334155 !important;
-            margin: 5px 0 !important;
-        }
-        .sidebar-notes code {
-            color: #0f172a !important;
-            background: #f1f5f9 !important;
-            border: 1px solid rgba(148,163,184,.32);
-            border-radius: 6px;
-            padding: 1px 6px;
-        }
-        .sidebar-notes .advice-warning,
-        .sidebar-notes .advice-warning * {
-            color: #991b1b !important;
-        }
-        .content-rail {
-            width: 100%;
-            padding: 8px 0 0;
-        }
-        .summary-cards-wrap {
-            padding: 16px;
-            border: 1px solid rgba(96,165,250,.18);
-            border-radius: 28px;
-            background:
-                radial-gradient(circle at 10% 0%, rgba(59,130,246,.14), transparent 34%),
-                radial-gradient(circle at 92% 18%, rgba(20,184,166,.12), transparent 32%),
-                linear-gradient(135deg, rgba(255,255,255,.92), rgba(239,246,255,.72));
-            box-shadow: 0 22px 54px rgba(15,23,42,.10);
-            backdrop-filter: blur(14px);
-        }
-        .metric-strip {display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 16px; width: 100%; align-items: stretch;}
-        .metric-card {
-            position: relative;
-            isolation: isolate;
-            transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
-            background:
-                linear-gradient(145deg, rgba(255,255,255,.98), rgba(239,246,255,.90)) !important;
-            border-color: rgba(96,165,250,.22) !important;
-            box-shadow: 0 16px 34px rgba(30,64,175,.08) !important;
-        }
-        .metric-card::before {
-            content: "";
-            position: absolute;
-            inset: 0 auto 0 0;
-            width: 5px;
-            background: linear-gradient(180deg, #2563eb, #38bdf8);
-            z-index: -1;
-        }
-        .metric-card::after {
-            content: "";
-            position: absolute;
-            right: -42px;
-            top: -48px;
-            width: 150px;
-            height: 150px;
-            border-radius: 999px;
-            background: radial-gradient(circle, rgba(59,130,246,.16), transparent 68%);
-            z-index: -1;
-        }
-        .metric-strip .metric-card:nth-child(2)::before,
-        .metric-strip .metric-card:nth-child(5)::before {
-            background: linear-gradient(180deg, #0f766e, #5eead4);
-        }
-        .metric-strip .metric-card:nth-child(3)::before,
-        .metric-strip .metric-card:nth-child(6)::before {
-            background: linear-gradient(180deg, #f97316, #facc15);
-        }
-        .metric-card-label,
-        .metric-card-value,
-        .metric-card > div {
-            position: relative;
-            z-index: 1;
-        }
-        .metric-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 18px 44px rgba(15,23,42,.12);
-            border-color: rgba(37,99,235,.30) !important;
-        }
-        .gradio-container .tabitem {
-            padding: 18px !important;
-            border: 1px solid rgba(148,163,184,.24) !important;
-            border-radius: 0 22px 22px 22px !important;
-            background:
-                linear-gradient(180deg, rgba(255,255,255,.96), rgba(248,250,252,.88)) !important;
-            box-shadow: 0 18px 44px rgba(15,23,42,.08) !important;
-        }
-        .gradio-container .tabs {
-            position: relative;
-            padding: 0;
-            border-radius: 0;
-            background: transparent;
-            border: 0;
-            box-shadow: none;
-        }
-        .gradio-container [role="tablist"] {
-            display: none !important;
-        }
-        .content-rail .tabs {
-            display: block !important;
-        }
-        .side-section-nav {
-            margin-top: 16px;
-            padding: 16px;
-            border-radius: 20px;
-            background:
-                radial-gradient(circle at 0% 0%, rgba(59,130,246,.12), transparent 34%),
-                linear-gradient(180deg, rgba(255,255,255,.99), rgba(248,250,252,.96));
-            border: 1px solid rgba(148,163,184,.26);
-            box-shadow: 0 18px 42px rgba(15,23,42,.08);
-        }
-        .side-section-nav,
-        .side-section-nav * {
-            color: #0f172a !important;
-            opacity: 1 !important;
-        }
-        .side-section-nav .markdown,
-        .side-section-nav .prose {
-            margin-bottom: 10px !important;
-        }
-        .side-section-nav strong {
-            display: block;
-            color: #2563eb !important;
-            font-size: 12px !important;
-            letter-spacing: .11em;
-            text-transform: uppercase;
-            font-weight: 900 !important;
-        }
-        .side-section-nav .gr-button,
-        .side-section-nav button {
-            display: flex !important;
-            width: 100% !important;
-            justify-content: flex-start !important;
-            align-items: center !important;
-            text-align: left !important;
-            margin: 6px 0 !important;
-            border-radius: 14px !important;
-            padding: 11px 14px 11px 18px !important;
-            background:
-                linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96)) !important;
-            color: #334155 !important;
-            border: 1px solid rgba(148,163,184,.24) !important;
-            font-weight: 750 !important;
-            box-shadow: 0 8px 18px rgba(15,23,42,.04) !important;
-            position: relative !important;
-            overflow: hidden !important;
-        }
-        .side-section-nav .gr-button::before,
-        .side-section-nav button::before {
-            content: "";
-            position: absolute;
-            inset: 9px auto 9px 0;
-            width: 4px;
-            border-radius: 999px;
-            background: linear-gradient(180deg, #3b82f6, #60a5fa);
-        }
-        .side-section-nav .gr-button:hover,
-        .side-section-nav button:hover {
-            background: linear-gradient(180deg, rgba(219,234,254,.98), rgba(239,246,255,.94)) !important;
-            color: #1d4ed8 !important;
-            border-color: rgba(37,99,235,.30) !important;
-            transform: translateX(2px);
-        }
-        .content-rail .tabitem {
-            min-width: 0;
-        }
-        .tab-nav button {
-            position: relative !important;
-            overflow: hidden !important;
-            border-radius: 14px !important;
-            padding: 12px 14px 12px 18px !important;
-            font-weight: 600 !important;
-            letter-spacing: .01em;
-            color: #475569 !important;
-            background: rgba(255,255,255,.46) !important;
-            border: 1px solid transparent !important;
-            width: 100% !important;
-            justify-content: flex-start !important;
-            text-align: left !important;
-        }
-        .tab-nav button::before {
-            content: "";
-            position: absolute;
-            inset: 8px auto 8px 0;
-            width: 5px;
-            border-radius: 999px;
-            background: linear-gradient(180deg, #60a5fa, #93c5fd);
-        }
-        .tab-nav button:nth-of-type(2)::before {background: linear-gradient(180deg, #f97316, #facc15);}
-        .tab-nav button:nth-of-type(3)::before {background: linear-gradient(180deg, #ef4444, #fb7185);}
-        .tab-nav button:nth-of-type(4)::before {background: linear-gradient(180deg, #14b8a6, #5eead4);}
-        .tab-nav button:nth-of-type(5)::before {background: linear-gradient(180deg, #6366f1, #a78bfa);}
-        .tab-nav button:nth-of-type(6)::before {background: linear-gradient(180deg, #0ea5e9, #67e8f9);}
-        .tab-nav button:nth-of-type(7)::before {background: linear-gradient(180deg, #22c55e, #86efac);}
-        .tab-nav button:nth-of-type(8)::before {background: linear-gradient(180deg, #f59e0b, #fde68a);}
-        .tab-nav button:nth-of-type(9)::before {background: linear-gradient(180deg, #8b5cf6, #c4b5fd);}
-        .tab-nav button:nth-of-type(10)::before {background: linear-gradient(180deg, #64748b, #cbd5e1);}
-        .tab-nav button.selected {
-            background:
-                linear-gradient(180deg, rgba(219,234,254,.98), rgba(239,246,255,.94)) !important;
-            color: #1d4ed8 !important;
-            border-color: rgba(37,99,235,.36) !important;
-            box-shadow: 0 10px 24px rgba(37,99,235,.14) !important;
-        }
-        .control-rail .gr-button-primary {
-            min-height: 48px !important;
-            border-radius: 14px !important;
-            box-shadow: 0 12px 30px rgba(37,99,235,.28);
-        }
-        .control-rail .gr-box,
-        .control-rail .gr-form,
-        .control-rail .gradio-file,
-        .control-rail .gradio-slider,
-        .control-rail .gradio-radio,
-        .control-rail .gradio-markdown {
-            border-radius: 14px !important;
-        }
-        .risk-guide-link button {
-            min-height: 28px !important;
-            padding: 4px 10px !important;
-            border-radius: 999px !important;
-            font-size: 11px !important;
-            line-height: 1.1 !important;
-            width: auto !important;
-            min-width: 0 !important;
-        }
-        .summary-cards-wrap {margin-bottom: 8px;}
-        .risk-guide-link button {
-            opacity: .94;
-        }
-        .gradio-container h1,
-        .gradio-container h2,
-        .gradio-container h3,
-        .gradio-container label,
-        .gradio-container .markdown,
-        .gradio-container .prose,
-        .gradio-container .block-label {
-            color: #0f172a !important;
-        }
-        .gradio-container p,
-        .gradio-container li,
-        .gradio-container small,
-        .gradio-container span {
-            color: inherit;
-        }
-        .gradio-container .gr-form,
-        .gradio-container .gr-box,
-        .gradio-container .panel,
-        .gradio-container .wrap,
-        .gradio-container .block,
-        .gradio-container .table-wrap {
-            background-color: rgba(255,255,255,.82) !important;
-            border-color: rgba(148,163,184,.26) !important;
-            color: #0f172a !important;
-        }
-        .gradio-container textarea,
-        .gradio-container input,
-        .gradio-container select {
-            background: #ffffff !important;
-            color: #0f172a !important;
-            border-color: rgba(148,163,184,.36) !important;
-        }
-        .gradio-container table,
-        .gradio-container thead,
-        .gradio-container tbody,
-        .gradio-container tr,
-        .gradio-container td,
-        .gradio-container th {
-            background: #ffffff !important;
-            color: #0f172a !important;
-            border-color: rgba(148,163,184,.22) !important;
-        }
-        .gradio-container button.primary,
-        .gradio-container .gr-button-primary {
-            background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
-            color: #ffffff !important;
-            border-color: rgba(29,78,216,.34) !important;
-        }
-        .gradio-container button.secondary,
-        .gradio-container .gr-button-secondary {
-            background: #f8fafc !important;
-            color: #334155 !important;
-            border-color: rgba(148,163,184,.34) !important;
-        }
-        .gradio-container div[style*="rgba(30,41,59"],
-        .gradio-container div[style*="rgba(15,23,42"],
-        .gradio-container div[style*="rgba(17,24,39"],
-        .gradio-container section[style*="rgba(30,41,59"],
-        .gradio-container section[style*="rgba(15,23,42"],
-        .gradio-container section[style*="rgba(17,24,39"] {
-            background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96)) !important;
-            border-color: rgba(148,163,184,.26) !important;
-            box-shadow: 0 16px 34px rgba(15,23,42,.08) !important;
-        }
-        .gradio-container div[style*="#f8fafc"],
-        .gradio-container div[style*="#e2e8f0"],
-        .gradio-container li[style*="#e2e8f0"],
-        .gradio-container ul[style*="#e2e8f0"],
-        .gradio-container span[style*="#e2e8f0"],
-        .gradio-container strong[style*="#f8fafc"] {
-            color: #0f172a !important;
-        }
-        .gradio-container div[style*="#cbd5e1"],
-        .gradio-container span[style*="#cbd5e1"],
-        .gradio-container li[style*="#cbd5e1"] {
-            color: #475569 !important;
-        }
-        .gradio-container div[style*="#93c5fd"],
-        .gradio-container span[style*="#93c5fd"] {
-            color: #2563eb !important;
-        }
-        .gradio-container div[style*="#bbf7d0"],
-        .gradio-container span[style*="#bbf7d0"] {
-            color: #166534 !important;
-        }
-        .gradio-container div[style*="#a5f3fc"],
-        .gradio-container span[style*="#a5f3fc"] {
-            color: #0e7490 !important;
-        }
-        .gradio-container div[style*="#bfdbfe"],
-        .gradio-container span[style*="#bfdbfe"] {
-            color: #1d4ed8 !important;
-        }
-        .gradio-container div[style*="#ddd6fe"],
-        .gradio-container span[style*="#ddd6fe"] {
-            color: #6d28d9 !important;
-        }
-        .gradio-container div[style*="#fde68a"],
-        .gradio-container span[style*="#fde68a"] {
-            color: #92400e !important;
-        }
-        .gradio-container .metric-card {
-            background:
-                linear-gradient(145deg, rgba(255,255,255,.98), rgba(239,246,255,.90)) !important;
-            border-color: rgba(96,165,250,.22) !important;
-            box-shadow: 0 16px 34px rgba(30,64,175,.08) !important;
-        }
-        .gradio-container .metric-card-label {
-            color: #2563eb !important;
-        }
-        .gradio-container .metric-card-value {
-            color: #0f172a !important;
-        }
-        @media (max-width: 1200px) {
-            .metric-strip {grid-template-columns: repeat(2, minmax(220px, 1fr));}
-            .control-rail {padding: 16px;}
-            .content-rail .tabitem {
-                position: static;
-            }
-            .content-rail .tabs > .tab-nav {
-                left: 22px !important;
-                width: min(460px, calc(48vw - 34px)) !important;
-            }
-            .tab-nav button {
-                width: 100% !important;
-                min-width: 0 !important;
-            }
-        }
-        @media (max-width: 820px) {
-            .metric-strip {grid-template-columns: 1fr;}
-            .control-rail {padding: 14px;}
-            .gradio-container {
-                padding-left: 10px !important;
-                padding-right: 10px !important;
-            }
-        }
-        """,
+        css=LAUNCH_CSS,
     ) as demo:
         gr.Markdown(
             """
@@ -9838,11 +9407,10 @@ def build_app() -> gr.Blocks:
                             "<div style='font-size:13px;color:#475569;margin-top:6px'>Each ticker card sits next to its S&P 500 comparison and marks your weighted-average buy date.</div>"
                             "</div>"
                         )
-                        featured_risk_action_rows: list[gr.Row] = []
                         featured_risk_action_cards: list[gr.HTML] = []
                         featured_risk_action_plots: list[gr.Plot] = []
                         for idx in range(MAX_FEATURED_RISK_ACTION_COUNT):
-                            with gr.Row(equal_height=True, visible=False) as risk_action_row:
+                            with gr.Row(equal_height=True):
                                 with gr.Column(scale=1, min_width=320):
                                     risk_action_card = gr.HTML()
                                 with gr.Column(scale=2, min_width=520):
@@ -9850,7 +9418,6 @@ def build_app() -> gr.Blocks:
                                         value=plot_risk_action_candidate_chart(None, None),
                                         label=f"Risk Action #{idx + 1}: Stock vs S&P 500 Since Buy",
                                     )
-                            featured_risk_action_rows.append(risk_action_row)
                             featured_risk_action_cards.append(risk_action_card)
                             featured_risk_action_plots.append(risk_action_plot)
                         risk_actions_md = gr.HTML()
@@ -9949,11 +9516,9 @@ def build_app() -> gr.Blocks:
                             info="Quick Read keeps the card short. Evidence Detail adds the reason trail. Full Detail also shows recent external signals.",
                         )
                         buy_ideas_md = gr.HTML()
-                        featured_buy_idea_rows: list[Any] = []
                         featured_buy_idea_cards: list[gr.HTML] = []
                         for idx in range(MAX_FEATURED_BUY_IDEA_COUNT):
-                            with gr.Row(equal_height=False, visible=False) as featured_row:
-                                featured_buy_idea_rows.append(featured_row)
+                            with gr.Row(equal_height=False):
                                 featured_buy_idea_cards.append(gr.HTML())
                         buy_ideas_df = gr.HTML(
                             value=build_buy_ideas_table_html([]),
@@ -10012,7 +9577,6 @@ def build_app() -> gr.Blocks:
                 diagnosis_stock_filter,
                 risk_actions_md,
                 risk_actions_df,
-                *featured_risk_action_rows,
                 *featured_risk_action_cards,
                 *featured_risk_action_plots,
                 portfolio_gaps_md,
@@ -10022,7 +9586,6 @@ def build_app() -> gr.Blocks:
                 buy_preferences_md,
                 buy_preferences_df,
                 buy_ideas_md,
-                *featured_buy_idea_rows,
                 *featured_buy_idea_cards,
                 buy_ideas_df,
                 rebalance_plan_md,
@@ -10054,7 +9617,6 @@ def build_app() -> gr.Blocks:
                 *metric_card_components,
             ],
             show_progress="full",
-            show_progress_on=[cards],
         )
 
         diagnosis_stock_filter.change(
@@ -10079,7 +9641,6 @@ def build_app() -> gr.Blocks:
             fn=update_buy_ideas_view,
             inputs=[diagnosis_state, buy_candidates_state, buy_ideas_view, buy_idea_limit],
             outputs=[
-                *featured_buy_idea_rows,
                 *featured_buy_idea_cards,
             ],
             show_progress="hidden",
@@ -10107,7 +9668,6 @@ def build_app() -> gr.Blocks:
                 buy_preferences_state,
                 buy_candidates_state,
                 buy_ideas_md,
-                *featured_buy_idea_rows,
                 *featured_buy_idea_cards,
                 buy_ideas_df,
                 rebalance_plan_md,
@@ -10119,7 +9679,6 @@ def build_app() -> gr.Blocks:
             ],
             scroll_to_output=True,
             show_progress="full",
-            show_progress_on=[buy_preferences_md],
         )
 
         for metric_key, button in zip(metric_navigation_order(), metric_buttons):
@@ -10612,15 +10171,13 @@ LAUNCH_CSS = """
 
 def launch_app() -> None:
     app = build_app()
-    app.queue(status_update_rate=0.5, default_concurrency_limit=1)
+    app.queue(status_update_rate=0.5)
     # Default to local launch so the dashboard reliably binds to the configured port without
     # depending on Gradio's share tunnel port allocation.
     app.launch(
         server_name="127.0.0.1",
         server_port=7863,
         share=True,
-        theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
-        css=LAUNCH_CSS,
     )
 
 
