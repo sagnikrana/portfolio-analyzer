@@ -102,8 +102,11 @@ RECENT_RISK_CHART_DAYS = round(365.25 * 1.5)
 RISK_CHART_START_DATE = "2024-01-01"
 WEEKLY_FLOW_DOMINANCE_LIMIT = 0.25
 MAX_STABLE_WEEKLY_RETURN = 0.75
-MAX_FEATURED_BUY_IDEA_COUNT = 20
-MAX_FEATURED_RISK_ACTION_COUNT = 10
+# Rendering many Plotly charts in one Gradio update can lock the browser tab.
+# Keep the detailed card/chart view demo-safe; the full ranked table still
+# carries the broader candidate list.
+MAX_FEATURED_BUY_IDEA_COUNT = 5
+MAX_FEATURED_RISK_ACTION_COUNT = 5
 
 
 def benchmark_display_name(symbol: str | None = None) -> str:
@@ -6718,6 +6721,73 @@ def build_buy_ideas_frame(candidates: list[ReplacementCandidate]) -> pd.DataFram
     return pd.DataFrame(rows)
 
 
+def build_buy_ideas_table_html(candidates: list[ReplacementCandidate], limit: int = 25) -> str:
+    """Render ranked buy ideas without Gradio's heavy dataframe grid.
+
+    The Gradio dataframe component can be expensive for wide tables and was
+    throwing browser-side call-stack errors when the Buy Ideas tab opened.
+    Static HTML keeps the tab responsive while preserving the ranked evidence.
+    """
+    frame = build_buy_ideas_frame(candidates).head(limit)
+    if frame.empty:
+        return (
+            "<div style='padding:16px;border:1px dashed rgba(148,163,184,.45);border-radius:16px;"
+            "background:#fff;color:#475569'>Run analysis to see the ranked buy candidate review.</div>"
+        )
+    html_table = frame.to_html(index=False, escape=True, border=0)
+    return (
+        "<div style='margin-top:18px;padding:18px;border:1px solid rgba(148,163,184,.18);border-radius:18px;"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc);box-shadow:0 14px 32px rgba(15,23,42,.06)'>"
+        "<div style='font-size:20px;font-weight:900;color:#0f172a;margin-bottom:10px'>Ranked Buy Candidate Review</div>"
+        f"<div style='font-size:13px;color:#64748b;margin-bottom:12px'>Showing the top {len(frame)} rows in a lightweight table so this tab stays responsive.</div>"
+        "<style>"
+        ".buy-ideas-lite-table table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;color:#0f172a}"
+        ".buy-ideas-lite-table th{position:sticky;top:0;background:#e0f2fe;color:#0f172a;text-align:left;padding:10px;border-bottom:1px solid #bae6fd;white-space:nowrap}"
+        ".buy-ideas-lite-table td{padding:10px;border-bottom:1px solid #e2e8f0;vertical-align:top;white-space:nowrap}"
+        ".buy-ideas-lite-table tr:nth-child(even) td{background:#f8fafc}"
+        "</style>"
+        f"<div class='buy-ideas-lite-table' style='overflow:auto;max-height:520px'>{html_table}</div>"
+        "</div>"
+    )
+
+
+def build_lightweight_table_html(
+    frame: pd.DataFrame | None,
+    title: str,
+    empty_message: str = "Run analysis to see this table.",
+    limit: int = 60,
+) -> str:
+    """Render small dashboard tables as static HTML instead of Gradio grids.
+
+    This app has several evidence tables, but Gradio's dataframe/grid component
+    can initialize even inside inactive tabs and has caused browser-side
+    call-stack failures in the demo build. Static HTML is intentionally less
+    interactive, but it keeps tab switching and preference updates responsive.
+    """
+    if frame is None or frame.empty:
+        return (
+            "<div style='padding:16px;border:1px dashed rgba(148,163,184,.45);border-radius:16px;"
+            "background:#fff;color:#475569'>"
+            f"<strong style='color:#0f172a'>{html.escape(title)}</strong><br>{html.escape(empty_message)}</div>"
+        )
+    display_frame = frame.head(limit).copy()
+    html_table = display_frame.to_html(index=False, escape=True, border=0)
+    return (
+        "<div style='margin-top:12px;padding:16px;border:1px solid rgba(148,163,184,.18);border-radius:18px;"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc);box-shadow:0 12px 28px rgba(15,23,42,.05)'>"
+        f"<div style='font-size:18px;font-weight:900;color:#0f172a;margin-bottom:8px'>{html.escape(title)}</div>"
+        f"<div style='font-size:12px;color:#64748b;margin-bottom:10px'>Showing {len(display_frame)} of {len(frame)} rows.</div>"
+        "<style>"
+        ".dashboard-lite-table table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;color:#0f172a}"
+        ".dashboard-lite-table th{background:#eff6ff;color:#0f172a;text-align:left;padding:9px;border-bottom:1px solid #bfdbfe;white-space:nowrap}"
+        ".dashboard-lite-table td{padding:9px;border-bottom:1px solid #e2e8f0;vertical-align:top}"
+        ".dashboard-lite-table tr:nth-child(even) td{background:#f8fafc}"
+        "</style>"
+        f"<div class='dashboard-lite-table' style='overflow:auto;max-height:440px'>{html_table}</div>"
+        "</div>"
+    )
+
+
 def build_buy_score_breakdown_frame(candidates: list[ReplacementCandidate]) -> pd.DataFrame:
     """Show the auditable ingredients behind each buy idea rank."""
     columns = [
@@ -7088,26 +7158,24 @@ def build_buy_idea_feature_slots(
     """Build fixed featured buy-idea rows in Gradio output order.
 
     The `Buy Ideas` tab wires its outputs as:
-    1. all featured HTML cards
-    2. all featured plots
+    1. all row visibility updates
+    2. all featured HTML cards
 
-    So this helper must return values in that same grouped order. Returning
-    alternating `card, plot, card, plot` values causes Gradio to receive a
-    plain string where a `gr.Plot` is expected.
+    The chart slots are intentionally omitted from the demo path. Plotly
+    figures were the heaviest browser payload in this tab and could lock the
+    page before the user even clicked a preference control.
     """
     ordered = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))
     selected_limit = max(0, min(int(limit), MAX_FEATURED_BUY_IDEA_COUNT))
     featured = ordered[:selected_limit]
     row_outputs: list[Any] = []
     card_outputs: list[Any] = []
-    plot_outputs: list[Any] = []
     for idx in range(MAX_FEATURED_BUY_IDEA_COUNT):
         candidate = featured[idx] if idx < len(featured) else None
         is_visible = candidate is not None
         row_outputs.append(gr.update(visible=is_visible))
         card_outputs.append(build_buy_idea_card_html(diagnosis, candidate, idx + 1, view_mode=view_mode) if is_visible else "")
-        plot_outputs.append(plot_buy_idea_chart(candidate) if is_visible else plot_buy_idea_chart(None))
-    return [*row_outputs, *card_outputs, *plot_outputs]
+    return [*row_outputs, *card_outputs]
 
 
 def update_buy_ideas_view(
@@ -7120,8 +7188,7 @@ def update_buy_ideas_view(
     if not diagnosis_payload:
         empty_rows = [gr.update(visible=False) for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
         empty_cards = ["" for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
-        empty_plots = [plot_buy_idea_chart(None) for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
-        return [*empty_rows, *empty_cards, *empty_plots]
+        return [*empty_rows, *empty_cards]
     diagnosis = PortfolioRiskDiagnosis.model_validate(diagnosis_payload)
     candidates = [
         ReplacementCandidate.model_validate(item)
@@ -7166,19 +7233,7 @@ def build_user_portfolio_preferences(
     buy_idea_limit: int,
     buy_ideas_view_mode: str = "Quick Read",
     progress: gr.Progress = gr.Progress(track_tqdm=True),
-) -> tuple[
-    str,
-    pd.DataFrame,
-    dict[str, Any],
-    list[dict[str, Any]],
-    str,
-    go.Figure,
-    pd.DataFrame,
-    str,
-    pd.DataFrame,
-    go.Figure,
-    pd.DataFrame,
-]:
+) -> tuple[Any, ...]:
     """Create a user-defined `PortfolioPreferences` object from tab inputs.
 
     This updates both the preference review surface and the downstream buy ideas
@@ -7244,7 +7299,7 @@ def build_user_portfolio_preferences(
         }
     )
     candidate_payload = [item.model_dump(mode="json") for item in candidates]
-    progress(0.82, desc="Rendering buy idea cards and 5-year comparison charts...")
+    progress(0.82, desc="Rendering lightweight buy idea cards...")
     featured_buy_outputs = build_buy_idea_feature_slots(
         diagnosis,
         candidates,
@@ -7254,17 +7309,17 @@ def build_user_portfolio_preferences(
     progress(1.0, desc="Updated buy preferences are ready.")
     return (
         build_buy_preferences_html(preferences),
-        build_portfolio_preferences_frame(preferences),
+        build_lightweight_table_html(build_portfolio_preferences_frame(preferences), "Preference Settings"),
         preferences.model_dump(mode="json"),
         candidate_payload,
         build_buy_ideas_html(diagnosis, preferences, candidates),
         *featured_buy_outputs,
-        build_buy_ideas_frame(candidates),
+        build_buy_ideas_table_html(candidates),
         build_rebalance_plan_html(diagnosis),
         plot_rebalance_sectors(diagnosis),
-        build_rebalance_holdings_frame(diagnosis),
+        build_lightweight_table_html(build_rebalance_holdings_frame(diagnosis), "Holding Changes In The Plan"),
         build_next_steps_html(diagnosis),
-        build_next_steps_frame(diagnosis),
+        build_lightweight_table_html(build_next_steps_frame(diagnosis), "Execution Summary"),
         gr.update(selected="buy-ideas"),
     )
 
@@ -9027,7 +9082,10 @@ def run_analysis(
     portfolio_preferences_df = build_portfolio_preferences_frame(diagnosis.portfolio_preferences)
     buy_preferences_html = build_buy_preferences_html(diagnosis.portfolio_preferences)
     base_preferences = diagnosis.portfolio_preferences
-    buy_idea_limit = base_preferences.buy_idea_limit if base_preferences is not None else 10
+    buy_idea_limit = min(
+        int(base_preferences.buy_idea_limit if base_preferences is not None else MAX_FEATURED_BUY_IDEA_COUNT),
+        MAX_FEATURED_BUY_IDEA_COUNT,
+    )
     buy_ideas_html = build_buy_ideas_html(
         diagnosis,
         diagnosis.portfolio_preferences,
@@ -9039,7 +9097,7 @@ def run_analysis(
         limit=min(int(buy_idea_limit or MAX_FEATURED_BUY_IDEA_COUNT), MAX_FEATURED_BUY_IDEA_COUNT),
         view_mode="Quick Read",
     )
-    buy_ideas_df = build_buy_ideas_frame(diagnosis.replacement_candidates)
+    buy_ideas_df = build_buy_ideas_table_html(diagnosis.replacement_candidates)
     buy_candidates_payload = [item.model_dump(mode="json") for item in diagnosis.replacement_candidates]
 
     progress(0.84, desc="Building the rebalancing plan and next-step checklist...")
@@ -9107,9 +9165,9 @@ def run_analysis(
         diagnosis.model_dump(mode="json"),
         (base_preferences.model_dump(mode="json") if base_preferences is not None else {}),
         buy_candidates_payload,
-        tables["holdings"],
-        tables["attribution"],
-        tables["volatility_drivers"],
+        build_lightweight_table_html(tables["holdings"], "Open Holdings"),
+        build_lightweight_table_html(tables["attribution"], "Performance Attribution"),
+        build_lightweight_table_html(tables["volatility_drivers"], "Volatility Drivers"),
         eq_fig,
         sector_fig,
         dd_fig,
@@ -9121,22 +9179,22 @@ def run_analysis(
         diagnosis_chart_payload,
         gr.update(choices=diagnosis_stock_choices, value="Portfolio"),
         risk_actions_html,
-        risk_actions_df,
+        build_lightweight_table_html(risk_actions_df, "Recommendation Detail"),
         *featured_risk_action_outputs,
         portfolio_gaps_html,
         portfolio_gap_fig,
-        portfolio_gaps_df,
-        portfolio_preferences_df,
+        build_lightweight_table_html(portfolio_gaps_df, "Gap Quick Read"),
+        build_lightweight_table_html(portfolio_preferences_df, "Preferences and Constraints"),
         buy_preferences_html,
-        build_portfolio_preferences_frame(diagnosis.portfolio_preferences),
+        build_lightweight_table_html(build_portfolio_preferences_frame(diagnosis.portfolio_preferences), "Preference Settings"),
         buy_ideas_html,
         *featured_buy_outputs,
         buy_ideas_df,
         rebalance_plan_html,
         rebalance_sectors_fig,
-        rebalance_holdings_df,
+        build_lightweight_table_html(rebalance_holdings_df, "Holding Changes In The Plan"),
         next_steps_html,
-        next_steps_df,
+        build_lightweight_table_html(next_steps_df, "Execution Summary"),
         gr.update(choices=buy_preference_sector_choices, value=(base_preferences.sector_preferences if base_preferences is not None else [])),
         base_preferences.budget_to_deploy if base_preferences is not None else None,
         reinvest_choice,
@@ -9147,12 +9205,12 @@ def run_analysis(
         prefer_low_expense_for_dividend_etfs,
         include_existing_holdings,
         buy_idea_limit,
-        diagnosis_supporting_metrics_df,
-        diagnosis_holding_fundamentals_df,
-        diagnosis_narrative_evidence_df,
+        build_lightweight_table_html(diagnosis_supporting_metrics_df, "Supporting Evidence"),
+        build_lightweight_table_html(diagnosis_holding_fundamentals_df, "Holding Fundamentals"),
+        build_lightweight_table_html(diagnosis_narrative_evidence_df, "Filing and News Evidence"),
         recent_volatility_fig,
         diagnosis_macro_html,
-        diagnosis_coverage_df,
+        build_lightweight_table_html(diagnosis_coverage_df, "Source Coverage"),
         diagnosis_confidence_html,
         sector_fig,
         dd_fig,
@@ -9163,8 +9221,8 @@ def run_analysis(
 
 
 def build_app() -> gr.Blocks:
-    buy_universe_entries, buy_universe_raw_df, buy_universe_enriched_source_df = load_buy_candidate_universe_review_data()
-    buy_universe_enriched_df = build_buy_candidate_enriched_frame(buy_universe_enriched_source_df)
+    # Keep app boot light. The buy engine loads its candidate universe when
+    # analysis/preferences run, not while the browser is mounting every tab.
     section_nav_specs = [
         ("Overview", "overview"),
         ("Risk Diagnosis", "risk-diagnosis"),
@@ -9173,7 +9231,6 @@ def build_app() -> gr.Blocks:
         ("Buy Preferences", "buy-preferences"),
         ("Buy Ideas", "buy-ideas"),
         ("Portfolio Rebalancing Plan", "portfolio-rebalancing-plan"),
-        ("Backtesting", "backtesting"),
         ("Next Steps", "next-steps"),
         ("Risk Guide", "risk-guide"),
         ("Holdings", "holdings"),
@@ -9701,11 +9758,7 @@ def build_app() -> gr.Blocks:
                                         )
                                         metric_card_components.append(card)
                                         metric_buttons.append(button)
-                        volatility_drivers_df = gr.Dataframe(
-                            label="Top Drivers of 2025 Volatility",
-                            interactive=False,
-                            visible=False,
-                        )
+                        volatility_drivers_df = gr.HTML(visible=False)
                         recent_volatility_plot = gr.Plot(
                             value=empty_dashboard_plot("Run analysis to see volatility versus the S&P 500"),
                             label="Volatility vs S&P 500",
@@ -9762,25 +9815,10 @@ def build_app() -> gr.Blocks:
                                 label="Evidence Behind Top Risk Signals",
                                 visible=False,
                             )
-                            diagnosis_supporting_metrics_df = gr.Dataframe(
-                                label="Supporting Evidence",
-                                interactive=False,
-                                wrap=True,
-                            )
-                            diagnosis_holding_fundamentals_df = gr.Dataframe(
-                                label="Holding Fundamentals",
-                                interactive=False,
-                                wrap=True,
-                            )
-                            diagnosis_narrative_evidence_df = gr.Dataframe(
-                                label="Filing and News Evidence",
-                                interactive=False,
-                                wrap=True,
-                            )
-                            diagnosis_coverage_df = gr.Dataframe(
-                                label="Source Coverage",
-                                interactive=False,
-                            )
+                            diagnosis_supporting_metrics_df = gr.HTML()
+                            diagnosis_holding_fundamentals_df = gr.HTML()
+                            diagnosis_narrative_evidence_df = gr.HTML()
+                            diagnosis_coverage_df = gr.HTML()
                             diagnosis_confidence_md = gr.HTML(visible=False)
                         with gr.Accordion("Diagnosis Snapshot and Alignment", open=False):
                             diagnosis_summary_md = gr.HTML()
@@ -9816,12 +9854,7 @@ def build_app() -> gr.Blocks:
                             featured_risk_action_cards.append(risk_action_card)
                             featured_risk_action_plots.append(risk_action_plot)
                         risk_actions_md = gr.HTML()
-                        risk_actions_df = gr.Dataframe(
-                            label="Recommendation Detail",
-                            interactive=False,
-                            wrap=True,
-                            visible=False,
-                        )
+                        risk_actions_df = gr.HTML(visible=False)
                     with gr.Tab("Portfolio Gaps", id="portfolio-gaps"):
                         portfolio_gaps_md = gr.HTML()
                         portfolio_gap_plot = gr.Plot(
@@ -9829,17 +9862,9 @@ def build_app() -> gr.Blocks:
                             label="What The Portfolio Still Needs Most",
                             visible=False,
                         )
-                        portfolio_gaps_df = gr.Dataframe(
-                            label="Gap Quick Read",
-                            interactive=False,
-                            wrap=True,
-                        )
+                        portfolio_gaps_df = gr.HTML()
                         with gr.Accordion("Preferences and Constraints", open=False):
-                            portfolio_preferences_df = gr.Dataframe(
-                                label="Preferences and Constraints",
-                                interactive=False,
-                                wrap=True,
-                            )
+                            portfolio_preferences_df = gr.HTML()
                     with gr.Tab("Buy Preferences", id="buy-preferences"):
                         with gr.Row(equal_height=False):
                             with gr.Column(scale=1, min_width=300):
@@ -9899,42 +9924,23 @@ def build_app() -> gr.Blocks:
                                 )
                                 buy_idea_limit = gr.Dropdown(
                                     label="How many buy ideas should we show?",
-                                    choices=[5, 10, 15, 20],
-                                    value=10,
-                                    info="Use a larger list when you want to explore more alternatives.",
+                                    choices=[5],
+                                    value=5,
+                                    info="For demo stability, detailed cards and charts are capped at 5. The full ranked table still shows the broader list.",
                                 )
                                 apply_buy_preferences_btn = gr.Button("Apply Buy Preferences", variant="primary")
                             with gr.Column(scale=2, min_width=360):
                                 buy_preferences_md = gr.HTML()
-                                buy_preferences_df = gr.Dataframe(
-                                    label="Preference Settings",
-                                    interactive=False,
-                                    wrap=True,
-                                    visible=False,
-                                )
-                        with gr.Accordion("Candidate Universe Review", open=False):
-                            gr.HTML(
-                                value=(
-                                    "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.18);border-radius:18px;"
-                                    "background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));"
-                                    "box-shadow:0 12px 28px rgba(15,23,42,.05)'>"
-                                    "<div style='font-size:18px;font-weight:900;color:#0f172a'>Candidate universe used by Buy Ideas</div>"
-                                    "<div style='font-size:13px;color:#475569;margin-top:6px'>These are the curated names and enriched review fields the buy-side engine can draw from after preferences are applied.</div>"
-                                    "</div>"
-                                )
+                                buy_preferences_df = gr.HTML(visible=False)
+                        gr.HTML(
+                            value=(
+                                "<div style='margin-top:16px;padding:14px 16px;border:1px solid rgba(148,163,184,.18);"
+                                "border-radius:16px;background:linear-gradient(180deg,#ffffff,#f8fafc);color:#475569'>"
+                                "<strong style='color:#0f172a'>Demo note:</strong> the full buy universe is still used by the engine, "
+                                "but the heavy raw universe tables are hidden from this tab so preference changes stay responsive."
+                                "</div>"
                             )
-                            gr.Dataframe(
-                                value=buy_universe_raw_df,
-                                label="Curated Candidate Universe",
-                                interactive=False,
-                                wrap=True,
-                            )
-                            gr.Dataframe(
-                                value=buy_universe_enriched_df,
-                                label="Enriched Candidate Review",
-                                interactive=False,
-                                wrap=True,
-                            )
+                        )
                     with gr.Tab("Buy Ideas", id="buy-ideas"):
                         buy_ideas_view = gr.Radio(
                             choices=["Quick Read", "Evidence Detail", "Full Detail"],
@@ -9945,23 +9951,13 @@ def build_app() -> gr.Blocks:
                         buy_ideas_md = gr.HTML()
                         featured_buy_idea_rows: list[Any] = []
                         featured_buy_idea_cards: list[gr.HTML] = []
-                        featured_buy_idea_plots: list[gr.Plot] = []
                         for idx in range(MAX_FEATURED_BUY_IDEA_COUNT):
                             with gr.Row(equal_height=False, visible=False) as featured_row:
                                 featured_buy_idea_rows.append(featured_row)
-                                with gr.Column(scale=6, min_width=520):
-                                    featured_buy_idea_cards.append(gr.HTML())
-                                with gr.Column(scale=6, min_width=520):
-                                    featured_buy_idea_plots.append(
-                                        gr.Plot(
-                                            value=empty_dashboard_plot("Apply analysis to see this buy idea chart"),
-                                            label=f"Featured Buy Idea #{idx + 1}: 5Y vs S&P 500",
-                                        )
-                                    )
-                        buy_ideas_df = gr.Dataframe(
+                                featured_buy_idea_cards.append(gr.HTML())
+                        buy_ideas_df = gr.HTML(
+                            value=build_buy_ideas_table_html([]),
                             label="Full Ranked Buy Candidate Review",
-                            interactive=False,
-                            wrap=True,
                         )
                     with gr.Tab("Portfolio Rebalancing Plan", id="portfolio-rebalancing-plan"):
                         rebalance_plan_md = gr.HTML()
@@ -9969,74 +9965,24 @@ def build_app() -> gr.Blocks:
                             value=empty_dashboard_plot("Run analysis to compare before and after sector mix"),
                             label="Before vs After Sector Mix",
                         )
-                        rebalance_holdings_df = gr.Dataframe(
-                            label="Holding Changes In The Plan",
-                            interactive=False,
-                            wrap=True,
-                        )
-                    with gr.Tab("Backtesting", id="backtesting"):
+                        rebalance_holdings_df = gr.HTML()
+                    with gr.Tab("Backtesting", id="backtesting", visible=False):
                         gr.HTML(
                             "<div style='padding:20px;border:1px solid rgba(148,163,184,.22);border-radius:22px;"
                             "background:linear-gradient(180deg,#ffffff,#f8fafc);box-shadow:0 18px 42px rgba(15,23,42,.08)'>"
                             "<div style='font-size:28px;font-weight:950;color:#0f172a'>Backtesting</div>"
                             "<div style='margin-top:8px;color:#475569;font-size:15px;line-height:1.55'>"
-                            "Pick a historical date. The app rebuilds the recommendation set as of that date, hypothetically follows the sell/trim and buy path, "
-                            "and compares it against the dollars you would have left in the ignored risk names."
+                            "Temporarily hidden for the demo build. The backtesting engine remains in code, but the heavy UI is disabled until we lazy-load it."
                             "</div></div>"
                         )
-                        with gr.Row(equal_height=False):
-                            with gr.Column(scale=1, min_width=300):
-                                backtest_cutoff_date = gr.Textbox(
-                                    label="Backtest cutoff date",
-                                    placeholder="YYYY-MM-DD",
-                                    value="2025-10-01",
-                                    info="The app only uses transactions and prices available on or before this date.",
-                                )
-                                backtest_use_idle_cash = gr.Checkbox(
-                                    label="Also use uninvested available cash",
-                                    value=False,
-                                    info="Off by default. When off, the counterfactual uses only cash freed by sells and trims.",
-                                )
-                                backtest_btn = gr.Button("Run Backtest", variant="primary")
-                            with gr.Column(scale=2, min_width=480):
-                                backtest_summary_md = gr.HTML(
-                                    value=(
-                                        "<div style='padding:18px;border:1px dashed rgba(148,163,184,.34);border-radius:18px;"
-                                        "background:#fff;color:#475569'>Run a backtest to estimate the cost of ignoring a past recommendation set.</div>"
-                                    )
-                                )
-                        backtest_plot = gr.Plot(
-                            value=empty_dashboard_plot("Run a backtest to compare ignored versus followed recommendations"),
-                            label="Ignored vs Followed Recommendation Path",
-                        )
-                        with gr.Accordion("Backtest Details", open=True):
-                            backtest_actions_df = gr.Dataframe(
-                                label="Sell / Trim Actions As Of Cutoff",
-                                interactive=False,
-                                wrap=True,
-                            )
-                            backtest_buys_df = gr.Dataframe(
-                                label="Hypothetical Buy Ideas Funded",
-                                interactive=False,
-                                wrap=True,
-                            )
-                            backtest_trades_df = gr.Dataframe(
-                                label="Counterfactual Trade List",
-                                interactive=False,
-                                wrap=True,
-                            )
                     with gr.Tab("Next Steps", id="next-steps"):
                         next_steps_md = gr.HTML()
-                        next_steps_df = gr.Dataframe(
-                            label="Execution Summary",
-                            interactive=False,
-                            wrap=True,
-                        )
+                        next_steps_df = gr.HTML()
                     with gr.Tab("Risk Guide", id="risk-guide"):
                         risk_guide_md = gr.HTML()
                     with gr.Tab("Holdings", id="holdings"):
-                        holdings_df = gr.Dataframe(label="Open Holdings", interactive=False)
-                        attribution_df = gr.Dataframe(label="Performance Attribution", interactive=False)
+                        holdings_df = gr.HTML(value=build_lightweight_table_html(None, "Open Holdings"))
+                        attribution_df = gr.HTML(value=build_lightweight_table_html(None, "Performance Attribution"))
 
         analyze_btn.click(
             fn=run_analysis,
@@ -10078,7 +10024,6 @@ def build_app() -> gr.Blocks:
                 buy_ideas_md,
                 *featured_buy_idea_rows,
                 *featured_buy_idea_cards,
-                *featured_buy_idea_plots,
                 buy_ideas_df,
                 rebalance_plan_md,
                 rebalance_sectors_plot,
@@ -10112,26 +10057,6 @@ def build_app() -> gr.Blocks:
             show_progress_on=[cards],
         )
 
-        backtest_btn.click(
-            fn=run_backtest,
-            inputs=[
-                upload,
-                dataset_source,
-                risk_profile,
-                backtest_cutoff_date,
-                backtest_use_idle_cash,
-            ],
-            outputs=[
-                backtest_summary_md,
-                backtest_plot,
-                backtest_actions_df,
-                backtest_buys_df,
-                backtest_trades_df,
-            ],
-            show_progress="full",
-            show_progress_on=[backtest_summary_md],
-        )
-
         diagnosis_stock_filter.change(
             fn=update_diagnosis_stock_plots,
             inputs=[diagnosis_stock_filter, diagnosis_chart_state],
@@ -10156,7 +10081,6 @@ def build_app() -> gr.Blocks:
             outputs=[
                 *featured_buy_idea_rows,
                 *featured_buy_idea_cards,
-                *featured_buy_idea_plots,
             ],
             show_progress="hidden",
         )
@@ -10185,7 +10109,6 @@ def build_app() -> gr.Blocks:
                 buy_ideas_md,
                 *featured_buy_idea_rows,
                 *featured_buy_idea_cards,
-                *featured_buy_idea_plots,
                 buy_ideas_df,
                 rebalance_plan_md,
                 rebalance_sectors_plot,
@@ -10194,8 +10117,9 @@ def build_app() -> gr.Blocks:
                 next_steps_df,
                 main_tabs,
             ],
+            scroll_to_output=True,
             show_progress="full",
-            show_progress_on=[buy_ideas_md],
+            show_progress_on=[buy_preferences_md],
         )
 
         for metric_key, button in zip(metric_navigation_order(), metric_buttons):

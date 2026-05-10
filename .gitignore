@@ -217,3 +217,4 @@ data/processed/diagnosis/
 data/interim/diagnosis_runs/
 data/processed/unstructured/
 data/vector/
+.gradio/
