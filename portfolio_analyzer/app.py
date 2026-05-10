@@ -7152,16 +7152,12 @@ def build_buy_idea_feature_slots(
     limit: int = MAX_FEATURED_BUY_IDEA_COUNT,
     view_mode: str = "Quick Read",
 ) -> list[Any]:
-    """Build fixed featured buy-idea rows in Gradio output order.
-
-    The chart slots are intentionally omitted from the demo path. Plotly
-    figures were the heaviest browser payload in this tab and could lock the
-    page before the user even clicked a preference control.
-    """
+    """Build fixed featured buy-idea rows in Gradio output order."""
     ordered = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))
     selected_limit = max(0, min(int(limit), MAX_FEATURED_BUY_IDEA_COUNT))
     featured = ordered[:selected_limit]
     card_outputs: list[Any] = []
+    plot_outputs: list[Any] = []
     for idx in range(MAX_FEATURED_BUY_IDEA_COUNT):
         candidate = featured[idx] if idx < len(featured) else None
         card_outputs.append(
@@ -7169,7 +7165,8 @@ def build_buy_idea_feature_slots(
             if candidate is not None
             else ""
         )
-    return card_outputs
+        plot_outputs.append(plot_buy_idea_chart(candidate) if candidate is not None else plot_buy_idea_chart(None))
+    return [*card_outputs, *plot_outputs]
 
 
 def update_buy_ideas_view(
@@ -7181,7 +7178,8 @@ def update_buy_ideas_view(
     """Re-render featured Buy Ideas when the user switches the explanation depth."""
     if not diagnosis_payload:
         empty_cards = ["" for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
-        return empty_cards
+        empty_plots = [plot_buy_idea_chart(None) for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
+        return [*empty_cards, *empty_plots]
     diagnosis = PortfolioRiskDiagnosis.model_validate(diagnosis_payload)
     candidates = [
         ReplacementCandidate.model_validate(item)
@@ -9070,7 +9068,7 @@ def run_analysis(
 
     progress(0.75, desc="Finding portfolio gaps and generating buy ideas...")
     portfolio_gaps_html = build_portfolio_gaps_html(diagnosis)
-    portfolio_gap_fig = gr.update(visible=False)
+    portfolio_gap_fig = plot_portfolio_gaps(diagnosis)
     portfolio_gaps_df = build_portfolio_gap_frame(diagnosis)
     portfolio_preferences_df = build_portfolio_preferences_frame(diagnosis.portfolio_preferences)
     buy_preferences_html = build_buy_preferences_html(diagnosis.portfolio_preferences)
@@ -9225,8 +9223,6 @@ def build_app() -> gr.Blocks:
         ("Buy Ideas", "buy-ideas"),
         ("Portfolio Rebalancing Plan", "portfolio-rebalancing-plan"),
         ("Next Steps", "next-steps"),
-        ("Risk Guide", "risk-guide"),
-        ("Holdings", "holdings"),
     ]
 
     with gr.Blocks(
@@ -9517,9 +9513,15 @@ def build_app() -> gr.Blocks:
                         )
                         buy_ideas_md = gr.HTML()
                         featured_buy_idea_cards: list[gr.HTML] = []
+                        featured_buy_idea_plots: list[gr.Plot] = []
                         for idx in range(MAX_FEATURED_BUY_IDEA_COUNT):
                             with gr.Row(equal_height=False):
-                                featured_buy_idea_cards.append(gr.HTML())
+                                with gr.Column(scale=6, min_width=320):
+                                    featured_buy_idea_cards.append(gr.HTML())
+                                with gr.Column(scale=5, min_width=320):
+                                    featured_buy_idea_plots.append(
+                                        gr.Plot(value=plot_buy_idea_chart(None), label=f"Featured Buy Idea Chart {idx + 1}")
+                                    )
                         buy_ideas_df = gr.HTML(
                             value=build_buy_ideas_table_html([]),
                             label="Full Ranked Buy Candidate Review",
@@ -9543,9 +9545,8 @@ def build_app() -> gr.Blocks:
                     with gr.Tab("Next Steps", id="next-steps"):
                         next_steps_md = gr.HTML()
                         next_steps_df = gr.HTML()
-                    with gr.Tab("Risk Guide", id="risk-guide"):
+                    with gr.Group(visible=False):
                         risk_guide_md = gr.HTML()
-                    with gr.Tab("Holdings", id="holdings"):
                         holdings_df = gr.HTML(value=build_lightweight_table_html(None, "Open Holdings"))
                         attribution_df = gr.HTML(value=build_lightweight_table_html(None, "Performance Attribution"))
 
@@ -9587,6 +9588,7 @@ def build_app() -> gr.Blocks:
                 buy_preferences_df,
                 buy_ideas_md,
                 *featured_buy_idea_cards,
+                *featured_buy_idea_plots,
                 buy_ideas_df,
                 rebalance_plan_md,
                 rebalance_sectors_plot,
@@ -9642,6 +9644,7 @@ def build_app() -> gr.Blocks:
             inputs=[diagnosis_state, buy_candidates_state, buy_ideas_view, buy_idea_limit],
             outputs=[
                 *featured_buy_idea_cards,
+                *featured_buy_idea_plots,
             ],
             show_progress="hidden",
         )
@@ -9669,6 +9672,7 @@ def build_app() -> gr.Blocks:
                 buy_candidates_state,
                 buy_ideas_md,
                 *featured_buy_idea_cards,
+                *featured_buy_idea_plots,
                 buy_ideas_df,
                 rebalance_plan_md,
                 rebalance_sectors_plot,
