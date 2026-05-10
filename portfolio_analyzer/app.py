@@ -9620,12 +9620,17 @@ def build_app() -> gr.Blocks:
         with gr.Row(elem_classes=["app-shell"]):
             section_nav_buttons: list[tuple[str, gr.Button]] = []
             with gr.Column(scale=1, min_width=280, elem_classes=["control-rail"]):
-                upload = gr.File(label="Robinhood CSV", file_types=[".csv"])
+                upload = gr.File(
+                    label="Robinhood CSV",
+                    file_types=[".csv"],
+                    elem_classes=["sidebar-upload"],
+                )
                 dataset_source = gr.Radio(
                     choices=["Upload my CSV", "Use bundled fake dataset"],
                     value="Upload my CSV",
                     label="Dataset Source",
                     info="Use the fake dataset if you want to explore the dashboard without a Robinhood export.",
+                    elem_classes=["sidebar-dataset-source"],
                 )
                 risk_profile = gr.Slider(
                     minimum=0,
@@ -10252,6 +10257,12 @@ LAUNCH_CSS = """
         radial-gradient(circle at 0% 0%, rgba(59,130,246,.10), transparent 28%),
         linear-gradient(180deg, rgba(255,255,255,.99), rgba(248,250,252,.95)) !important;
     box-shadow: 0 24px 60px rgba(15,23,42,.11) !important;
+    --body-text-color: #0f172a !important;
+    --body-text-color-subdued: #475569 !important;
+    --block-title-text-color: #0f172a !important;
+    --block-label-text-color: #0f172a !important;
+    --input-text-color: #0f172a !important;
+    --button-secondary-text-color: #0f172a !important;
 }
 .control-rail, .control-rail * {
     color: #0f172a !important;
@@ -10298,6 +10309,115 @@ LAUNCH_CSS = """
 .control-rail .gr-button-secondary {
     color: #334155 !important;
     background: linear-gradient(180deg, #ffffff, #f8fafc) !important;
+}
+.control-rail [data-testid],
+.control-rail [data-testid] *,
+.control-rail .file-preview,
+.control-rail .file-preview *,
+.control-rail .file-name,
+.control-rail .file-name *,
+.control-rail .upload-container,
+.control-rail .upload-container *,
+.control-rail .file,
+.control-rail .file *,
+.control-rail .radio,
+.control-rail .radio *,
+.control-rail [role="radiogroup"],
+.control-rail [role="radiogroup"] *,
+.control-rail .wrap label,
+.control-rail .wrap label *,
+.control-rail .label-wrap,
+.control-rail .label-wrap *,
+.control-rail .info,
+.control-rail .info *,
+.control-rail .secondary-wrap,
+.control-rail .secondary-wrap * {
+    color: #0f172a !important;
+    opacity: 1 !important;
+    text-shadow: none !important;
+}
+.control-rail .info,
+.control-rail .secondary-wrap,
+.control-rail .block-info,
+.control-rail small {
+    color: #475569 !important;
+}
+.control-rail [aria-disabled="true"],
+.control-rail [aria-disabled="true"] *,
+.control-rail [disabled],
+.control-rail [disabled] *,
+.control-rail fieldset[disabled],
+.control-rail fieldset[disabled] *,
+.control-rail .disabled,
+.control-rail .disabled * {
+    color: #334155 !important;
+    opacity: 1 !important;
+    -webkit-text-fill-color: #334155 !important;
+}
+.control-rail svg,
+.control-rail svg * {
+    color: #2563eb !important;
+    stroke: currentColor !important;
+}
+.sidebar-upload,
+.sidebar-dataset-source {
+    background:
+        radial-gradient(circle at 0% 0%, rgba(59,130,246,.10), transparent 34%),
+        linear-gradient(180deg, #ffffff, #f8fbff) !important;
+    border: 1px solid rgba(148,163,184,.24) !important;
+    border-radius: 18px !important;
+    box-shadow: 0 12px 28px rgba(15,23,42,.06) !important;
+    opacity: 1 !important;
+}
+.sidebar-upload *,
+.sidebar-dataset-source * {
+    color: #0f172a !important;
+    opacity: 1 !important;
+    text-shadow: none !important;
+    -webkit-text-fill-color: #0f172a !important;
+}
+.sidebar-upload label,
+.sidebar-upload .label-wrap,
+.sidebar-upload .block-label,
+.sidebar-dataset-source label,
+.sidebar-dataset-source .label-wrap,
+.sidebar-dataset-source .block-label {
+    color: #0f172a !important;
+    background: #dbeafe !important;
+    border-radius: 9px !important;
+    padding: 4px 8px !important;
+    width: fit-content !important;
+    font-weight: 900 !important;
+}
+.sidebar-upload [class*="drop"],
+.sidebar-upload [class*="upload"],
+.sidebar-upload [class*="file"],
+.sidebar-upload [data-testid],
+.sidebar-dataset-source [role="radiogroup"],
+.sidebar-dataset-source [data-testid] {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    border-color: rgba(148,163,184,.24) !important;
+    opacity: 1 !important;
+    -webkit-text-fill-color: #0f172a !important;
+}
+.sidebar-dataset-source .info,
+.sidebar-dataset-source .block-info,
+.sidebar-dataset-source small {
+    color: #475569 !important;
+    -webkit-text-fill-color: #475569 !important;
+}
+.sidebar-upload button,
+.sidebar-dataset-source button {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+}
+.sidebar-upload button.primary,
+.sidebar-dataset-source button.primary,
+.sidebar-upload .selected,
+.sidebar-dataset-source .selected {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
 }
 .content-rail {
     width: 100% !important;
@@ -10473,6 +10593,85 @@ LAUNCH_CSS = """
     background: #f8fafc !important;
     color: #334155 !important;
     border-color: rgba(148,163,184,.34) !important;
+}
+/* Final sidebar input rescue: Gradio's native file/radio widgets can inherit
+   washed-out disabled styles during processing, so make them explicitly dark
+   and high-contrast. */
+.control-rail .sidebar-upload,
+.control-rail .sidebar-dataset-source {
+    background:
+        radial-gradient(circle at 12% 0%, rgba(96,165,250,.28), transparent 34%),
+        linear-gradient(145deg, #0f172a 0%, #1e293b 100%) !important;
+    border: 1px solid rgba(96,165,250,.42) !important;
+    border-radius: 18px !important;
+    box-shadow: 0 16px 38px rgba(15,23,42,.20) !important;
+    opacity: 1 !important;
+    filter: none !important;
+}
+.control-rail .sidebar-upload,
+.control-rail .sidebar-upload *,
+.control-rail .sidebar-dataset-source,
+.control-rail .sidebar-dataset-source * {
+    color: #f8fafc !important;
+    -webkit-text-fill-color: #f8fafc !important;
+    opacity: 1 !important;
+    filter: none !important;
+    text-shadow: none !important;
+}
+.control-rail .sidebar-upload label,
+.control-rail .sidebar-upload .block-label,
+.control-rail .sidebar-upload .label-wrap,
+.control-rail .sidebar-dataset-source label,
+.control-rail .sidebar-dataset-source .block-label,
+.control-rail .sidebar-dataset-source .label-wrap {
+    color: #f8fafc !important;
+    -webkit-text-fill-color: #f8fafc !important;
+    background: rgba(37,99,235,.55) !important;
+    border: 1px solid rgba(147,197,253,.38) !important;
+    border-radius: 10px !important;
+    padding: 5px 9px !important;
+    font-weight: 900 !important;
+}
+.control-rail .sidebar-upload [data-testid],
+.control-rail .sidebar-upload [class*="drop"],
+.control-rail .sidebar-upload [class*="upload"],
+.control-rail .sidebar-upload [class*="file"],
+.control-rail .sidebar-dataset-source [data-testid],
+.control-rail .sidebar-dataset-source [role="radiogroup"],
+.control-rail .sidebar-dataset-source .wrap {
+    background: rgba(15,23,42,.62) !important;
+    border-color: rgba(147,197,253,.30) !important;
+    color: #f8fafc !important;
+    -webkit-text-fill-color: #f8fafc !important;
+    opacity: 1 !important;
+    filter: none !important;
+}
+.control-rail .sidebar-dataset-source .info,
+.control-rail .sidebar-dataset-source .block-info,
+.control-rail .sidebar-dataset-source small {
+    color: #cbd5e1 !important;
+    -webkit-text-fill-color: #cbd5e1 !important;
+}
+.control-rail .sidebar-upload button,
+.control-rail .sidebar-dataset-source button {
+    color: #f8fafc !important;
+    -webkit-text-fill-color: #f8fafc !important;
+    background: rgba(30,41,59,.90) !important;
+    border-color: rgba(147,197,253,.32) !important;
+}
+.control-rail .sidebar-upload button.primary,
+.control-rail .sidebar-dataset-source button.primary,
+.control-rail .sidebar-upload .selected,
+.control-rail .sidebar-dataset-source .selected {
+    background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+}
+.control-rail .sidebar-upload svg,
+.control-rail .sidebar-dataset-source svg {
+    color: #93c5fd !important;
+    stroke: currentColor !important;
+    opacity: 1 !important;
 }
 @media (max-width: 1200px) {
     .metric-strip {
