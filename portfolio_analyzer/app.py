@@ -2365,8 +2365,8 @@ def run_backtest(
     dataset_source: str,
     risk_profile: int,
     cutoff_date_text: str,
-    use_uninvested_cash: bool,
-    include_soft_signals: bool,
+    use_uninvested_cash: Any,
+    include_soft_signals: Any,
     progress: gr.Progress = gr.Progress(track_tqdm=True),
 ) -> tuple[str, go.Figure, str, str, str]:
     """Run a recommendation counterfactual from a historical cutoff date.
@@ -2377,6 +2377,15 @@ def run_backtest(
     "if the flagged risk dollars had been moved into the app's buy ideas on the
     cutoff date, how much better or worse would that specific sleeve look now?"
     """
+    def _coerce_toggle(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().lower()
+        return text in {"yes", "true", "1", "on"}
+
+    use_uninvested_cash = _coerce_toggle(use_uninvested_cash)
+    include_soft_signals = _coerce_toggle(include_soft_signals)
+
     progress(0.03, desc="Preparing historical backtest inputs...")
     if dataset_source == "Use bundled fake dataset":
         csv_path = REPO_ROOT / "data" / "raw" / "fake_mantis_invest.csv"
@@ -9437,8 +9446,6 @@ def build_app() -> gr.Blocks:
 
     with gr.Blocks(
         title="Portfolio Analyzer Dashboard",
-        theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
-        css=LAUNCH_CSS,
     ) as demo:
         gr.Markdown(
             """
@@ -9756,39 +9763,52 @@ def build_app() -> gr.Blocks:
                         )
                         with gr.Row(equal_height=False):
                             with gr.Column(scale=2, min_width=320, elem_classes=["backtest-controls"]):
-                                backtest_cutoff_date = gr.Textbox(
-                                    label="Backtest cutoff date",
-                                    value=(pd.Timestamp.today().normalize() - pd.Timedelta(days=180)).strftime("%Y-%m-%d"),
-                                    info="Use YYYY-MM-DD. The app will rebuild the portfolio exactly as it looked on that date.",
+                                gr.HTML(
+                                    "<div class='backtest-field-copy'>"
+                                    "<div class='backtest-field-title'>Backtest cutoff date</div>"
+                                    "<div class='backtest-field-sub'>Use YYYY-MM-DD. The app rebuilds the portfolio exactly as it looked on that date.</div>"
+                                    "</div>"
                                 )
-                                with gr.Row(elem_classes=["backtest-toggle-row"]):
-                                    backtest_use_uninvested_cash = gr.Checkbox(
-                                        label="",
-                                        value=False,
-                                        container=False,
-                                        elem_classes=["backtest-checkbox"],
-                                        min_width=40,
-                                    )
-                                    gr.HTML(
-                                        "<div class='backtest-toggle-copy'>"
-                                        "<div class='backtest-toggle-title'>Use uninvested available cash too</div>"
-                                        "<div class='backtest-toggle-sub'>If off, the backtest only redeploys dollars freed by the app's sell or trim actions.</div>"
-                                        "</div>"
-                                    )
-                                with gr.Row(elem_classes=["backtest-toggle-row"]):
-                                    backtest_include_soft_signals = gr.Checkbox(
-                                        label="",
-                                        value=False,
-                                        container=False,
-                                        elem_classes=["backtest-checkbox"],
-                                        min_width=40,
-                                    )
-                                    gr.HTML(
-                                        "<div class='backtest-toggle-copy'>"
-                                        "<div class='backtest-toggle-title'>Include soft signals in backtest</div>"
-                                        "<div class='backtest-toggle-sub'>If on, the app also simulates modest trims for meaningful laggards that were still below the live action threshold.</div>"
-                                        "</div>"
-                                    )
+                                recent_backtest_dates = [
+                                    (pd.Timestamp.today().normalize() - pd.DateOffset(months=offset)).strftime("%Y-%m-%d")
+                                    for offset in range(1, 25)
+                                ]
+                                backtest_cutoff_date = gr.Dropdown(
+                                    label="",
+                                    choices=recent_backtest_dates,
+                                    value=(pd.Timestamp.today().normalize() - pd.Timedelta(days=180)).strftime("%Y-%m-%d"),
+                                    allow_custom_value=True,
+                                    container=False,
+                                    elem_classes=["backtest-date-dropdown"],
+                                )
+                                gr.HTML(
+                                    "<div class='backtest-field-copy'>"
+                                    "<div class='backtest-field-title'>Use uninvested available cash too</div>"
+                                    "<div class='backtest-field-sub'>If set to Yes, the backtest adds idle cash on top of dollars freed by the app's sell or trim actions.</div>"
+                                    "</div>"
+                                )
+                                backtest_use_uninvested_cash = gr.Dropdown(
+                                    choices=["No", "Yes"],
+                                    value="No",
+                                    label="",
+                                    allow_custom_value=False,
+                                    container=False,
+                                    elem_classes=["backtest-toggle-select"],
+                                )
+                                gr.HTML(
+                                    "<div class='backtest-field-copy'>"
+                                    "<div class='backtest-field-title'>Include soft signals in backtest</div>"
+                                    "<div class='backtest-field-sub'>If set to Yes, the app also simulates modest trims for meaningful laggards that were still below the live action threshold.</div>"
+                                    "</div>"
+                                )
+                                backtest_include_soft_signals = gr.Dropdown(
+                                    choices=["No", "Yes"],
+                                    value="No",
+                                    label="",
+                                    allow_custom_value=False,
+                                    container=False,
+                                    elem_classes=["backtest-toggle-select"],
+                                )
                                 run_backtest_btn = gr.Button("Run Backtest", variant="primary")
                             with gr.Column(scale=5, min_width=420):
                                 backtest_summary_md = gr.HTML(
@@ -10481,19 +10501,85 @@ LAUNCH_CSS = """
     color: #0f172a !important;
     border-color: rgba(148,163,184,.30) !important;
 }
-.backtest-checkbox {
-    margin-top: 8px !important;
-    padding: 6px 0 !important;
+.backtest-date-box,
+.backtest-date-dropdown {
+    margin-top: 6px !important;
+    margin-bottom: 12px !important;
 }
-.backtest-checkbox label,
-.backtest-checkbox .wrap label,
-.backtest-checkbox .label-wrap,
-.backtest-checkbox .block-label,
-.backtest-checkbox [role="checkbox"],
-.backtest-checkbox [role="checkbox"] * {
+.backtest-date-box input,
+.backtest-date-box textarea,
+.backtest-date-dropdown input,
+.backtest-date-dropdown select,
+.backtest-date-dropdown button {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    border: 2px solid rgba(37,99,235,.28) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 8px 20px rgba(37,99,235,.08) !important;
+    font-size: 16px !important;
+    font-weight: 700 !important;
+    padding: 12px 14px !important;
+}
+.backtest-date-box input::placeholder,
+.backtest-date-box textarea::placeholder,
+.backtest-date-dropdown input::placeholder {
+    color: #94a3b8 !important;
+    -webkit-text-fill-color: #94a3b8 !important;
+    opacity: 1 !important;
+}
+.backtest-date-box label,
+.backtest-date-box .block-label,
+.backtest-date-box .label-wrap,
+.backtest-date-dropdown label,
+.backtest-date-dropdown .block-label,
+.backtest-date-dropdown .label-wrap {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    font-weight: 850 !important;
+}
+.backtest-field-copy {
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
     opacity: 1 !important;
+    margin-top: 8px !important;
+}
+.backtest-field-title {
+    font-size: 16px !important;
+    font-weight: 800 !important;
+    line-height: 1.35 !important;
+    color: #0f172a !important;
+}
+.backtest-field-sub {
+    margin-top: 4px !important;
+    font-size: 13px !important;
+    line-height: 1.45 !important;
+    color: #64748b !important;
+    margin-bottom: 8px !important;
+}
+.backtest-toggle-select {
+    margin: 2px 0 10px 0 !important;
+}
+.backtest-toggle-select,
+.backtest-toggle-select * {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    opacity: 1 !important;
+}
+.backtest-toggle-select .wrap,
+.backtest-toggle-select [data-testid],
+.backtest-toggle-select select,
+.backtest-toggle-select input,
+.backtest-toggle-select button {
+    background: #ffffff !important;
+    border: 1px solid rgba(148,163,184,.22) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 8px 18px rgba(15,23,42,.05) !important;
+    padding: 8px 10px !important;
+}
+.backtest-toggle-select label,
+.backtest-toggle-select .wrap label {
+    font-weight: 700 !important;
 }
 @media (max-width: 1200px) {
     .metric-strip {
@@ -10517,6 +10603,8 @@ def launch_app() -> None:
         server_name="127.0.0.1",
         server_port=7863,
         share=True,
+        theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
+        css=LAUNCH_CSS,
     )
 
 
