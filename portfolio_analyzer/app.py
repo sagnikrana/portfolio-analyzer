@@ -106,6 +106,7 @@ MAX_STABLE_WEEKLY_RETURN = 0.75
 # Keep the detailed card/chart view demo-safe; the full ranked table still
 # carries the broader candidate list.
 MAX_FEATURED_BUY_IDEA_COUNT = 5
+BACKTEST_BUY_IDEA_COUNT = 15
 MAX_FEATURED_RISK_ACTION_COUNT = 5
 
 
@@ -2110,9 +2111,14 @@ def _build_backtest_diagnosis(
     return diagnosis, market_metrics, cutoff_market_data, portfolio_summary
 
 
-def _backtest_candidate_weights(candidates: list[ReplacementCandidate], limit: int = 8) -> list[tuple[ReplacementCandidate, float]]:
+def _backtest_candidate_weights(
+    candidates: list[ReplacementCandidate],
+    limit: int | None = None,
+) -> list[tuple[ReplacementCandidate, float]]:
     """Convert buy candidates into normalized deployment weights for backtesting."""
-    usable = sorted(candidates, key=lambda item: (-float(item.fit_score or 0.0), item.ticker))[:limit]
+    usable = sorted(candidates, key=lambda item: (-float(item.fit_score or 0.0), item.ticker))
+    if limit is not None:
+        usable = usable[:limit]
     if not usable:
         return []
     raw_weights: list[float] = []
@@ -2128,34 +2134,134 @@ def _backtest_candidate_weights(candidates: list[ReplacementCandidate], limit: i
     return [(candidate, raw / total) for candidate, raw in zip(usable, raw_weights)]
 
 
+def _soft_backtest_action_candidates(
+    recommendations: list[Any],
+    *,
+    existing_tickers: set[str],
+) -> list[Any]:
+    """Turn softer watchlist signals into modest hypothetical trims for backtests.
+
+    This path is intentionally opt-in and only affects counterfactual analysis.
+    It lets the user ask a broader question than the live action engine asks:
+
+    "What if I had also acted on meaningful laggards that were still below the
+    dashboard's high-conviction action threshold?"
+    """
+    soft_actions: list[Any] = []
+    for recommendation in recommendations:
+        ticker = str(getattr(recommendation, "ticker", "") or "").strip()
+        if not ticker or ticker in existing_tickers:
+            continue
+        if getattr(recommendation, "is_actionable", False):
+            continue
+
+        relative_lag = float(getattr(recommendation, "relative_performance_vs_benchmark", 0.0) or 0.0)
+        current_value = float(getattr(recommendation, "current_value", 0.0) or 0.0)
+        current_weight = float(getattr(recommendation, "current_weight", 0.0) or 0.0)
+        diagnosis_pressure = float(getattr(recommendation, "diagnosis_pressure_score", 0.0) or 0.0)
+        quantity = float(getattr(recommendation, "quantity", 0.0) or 0.0)
+
+        if relative_lag > -0.08:
+            continue
+        if current_value < 500 and current_weight < 0.005:
+            continue
+        if quantity <= 0 or current_value <= 0:
+            continue
+
+        reduction_pct = 0.10
+        if relative_lag <= -0.30 or diagnosis_pressure >= 30:
+            reduction_pct = 0.15
+        if relative_lag <= -0.60 and (current_value >= 1000 or current_weight >= 0.01):
+            reduction_pct = 0.20
+
+        shares_to_sell = round(quantity * reduction_pct, 4)
+        value_to_sell = round(current_value * reduction_pct, 2)
+        if shares_to_sell <= 0 or value_to_sell <= 0:
+            continue
+
+        label = f"Soft trim {int(round(reduction_pct * 100))}%"
+        summary = (
+            f"{ticker} was not a hard sell/trim at the cutoff, but it was still trailing the S&P 500 by "
+            f"{relative_lag:.1%}. Because soft-signal mode is enabled, the backtest simulates a modest "
+            f"{int(round(reduction_pct * 100))}% trim to measure whether acting earlier would have helped."
+        )
+        updates = {
+            "recommendation_label": label,
+            "recommendation_code": "backtest_soft_signal",
+            "position_reduction_pct": reduction_pct,
+            "shares_to_sell": shares_to_sell,
+            "value_to_sell": value_to_sell,
+            "target_weight_after_action": round(current_weight * (1.0 - reduction_pct), 4),
+            "recommendation_summary": summary,
+            "is_actionable": True,
+        }
+        if hasattr(recommendation, "model_copy"):
+            soft_actions.append(recommendation.model_copy(update=updates))
+        else:
+            soft_actions.append(recommendation.copy(update=updates))
+    return soft_actions
+
+
 def _plot_backtest_counterfactual(
     timeline: pd.DataFrame,
     cutoff_date: pd.Timestamp,
     benefit: float,
 ) -> go.Figure:
     """Plot ignored recommendations against the counterfactual recommendation path."""
-    fig = go.Figure()
     if timeline.empty:
         return empty_dashboard_plot("Run a backtest to compare ignored versus followed recommendations")
-    fig.add_trace(
-        go.Scatter(
-            x=timeline.index,
-            y=timeline["Ignored recommendation path"],
-            mode="lines",
-            name="Ignored recommendations",
-            line={"color": "#ef4444", "width": 3},
-            hovertemplate="%{x|%Y-%m-%d}<br>Ignored path: $%{y:,.2f}<extra></extra>",
-        )
+
+    ignored = pd.to_numeric(timeline["Ignored recommendation path"], errors="coerce").ffill().fillna(0.0)
+    followed = pd.to_numeric(timeline["Followed app path"], errors="coerce").ffill().fillna(0.0)
+    start_ignored = float(ignored.iloc[0]) if len(ignored) else 0.0
+    start_followed = float(followed.iloc[0]) if len(followed) else 0.0
+    ignored_index = np.where(start_ignored > 0, (ignored / start_ignored) * 100.0, 100.0)
+    followed_index = np.where(start_followed > 0, (followed / start_followed) * 100.0, 100.0)
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        column_widths=[0.76, 0.24],
+        horizontal_spacing=0.1,
+        specs=[[{"type": "xy"}, {"type": "bar"}]],
+        subplot_titles=(
+            "Growth of the moved sleeve since the backtest date",
+            "Ending sleeve value today",
+        ),
     )
     fig.add_trace(
         go.Scatter(
             x=timeline.index,
-            y=timeline["Followed app path"],
+            y=ignored_index,
+            mode="lines",
+            name="Ignored recommendations",
+            line={"color": "#ef4444", "width": 3},
+            customdata=np.column_stack([ignored.to_numpy()]),
+            hovertemplate=(
+                "%{x|%Y-%m-%d}<br>"
+                "Ignored path: %{y:.1f} index<br>"
+                "Actual sleeve value: $%{customdata[0]:,.2f}<extra></extra>"
+            ),
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=timeline.index,
+            y=followed_index,
             mode="lines",
             name="Followed app recommendation",
             line={"color": "#2563eb", "width": 3},
-            hovertemplate="%{x|%Y-%m-%d}<br>App path: $%{y:,.2f}<extra></extra>",
-        )
+            customdata=np.column_stack([followed.to_numpy()]),
+            hovertemplate=(
+                "%{x|%Y-%m-%d}<br>"
+                "App path: %{y:.1f} index<br>"
+                "Actual sleeve value: $%{customdata[0]:,.2f}<extra></extra>"
+            ),
+        ),
+        row=1,
+        col=1,
     )
     cutoff_x = pd.Timestamp(cutoff_date).strftime("%Y-%m-%d")
     fig.add_shape(
@@ -2179,13 +2285,17 @@ def _plot_backtest_counterfactual(
         bgcolor="rgba(255,255,255,0.88)",
     )
     final_date = timeline.index[-1]
-    final_app = float(timeline["Followed app path"].iloc[-1])
-    final_ignored = float(timeline["Ignored recommendation path"].iloc[-1])
+    final_app = float(followed.iloc[-1])
+    final_ignored = float(ignored.iloc[-1])
+    final_app_index = float(followed_index[-1])
+    final_ignored_index = float(ignored_index[-1])
     color = "#15803d" if benefit >= 0 else "#b91c1c"
     fig.add_annotation(
         x=final_date,
-        y=final_app,
-        text=f"App path: {money_text(final_app)}",
+        y=final_app_index,
+        xref="x",
+        yref="y",
+        text=f"App: {final_app_index:.1f} | {money_text(final_app)}",
         showarrow=True,
         arrowhead=2,
         ax=36,
@@ -2196,8 +2306,10 @@ def _plot_backtest_counterfactual(
     )
     fig.add_annotation(
         x=final_date,
-        y=final_ignored,
-        text=f"Ignored: {money_text(final_ignored)}",
+        y=final_ignored_index,
+        xref="x",
+        yref="y",
+        text=f"Ignored: {final_ignored_index:.1f} | {money_text(final_ignored)}",
         showarrow=True,
         arrowhead=2,
         ax=36,
@@ -2205,6 +2317,19 @@ def _plot_backtest_counterfactual(
         bgcolor="rgba(255,255,255,0.94)",
         bordercolor="#ef4444",
         font={"color": "#0f172a", "size": 12},
+    )
+    fig.add_trace(
+        go.Bar(
+            x=["Ignored", "Followed app"],
+            y=[final_ignored, final_app],
+            marker={"color": ["#ef4444", "#2563eb"]},
+            text=[money_text(final_ignored), money_text(final_app)],
+            textposition="outside",
+            hovertemplate="%{x}<br>Ending sleeve value: $%{y:,.2f}<extra></extra>",
+            showlegend=False,
+        ),
+        row=1,
+        col=2,
     )
     fig.update_layout(
         title=f"Cost of ignoring recommendation: {money_text(abs(benefit))} {'missed' if benefit >= 0 else 'worse if followed'}",
@@ -2217,8 +2342,21 @@ def _plot_backtest_counterfactual(
         margin={"l": 64, "r": 24, "t": 78, "b": 42},
         font={"color": "#0f172a"},
     )
-    fig.update_yaxes(title_text="Dollar value of moved sleeve", tickprefix="$", gridcolor="rgba(148,163,184,0.24)")
-    fig.update_xaxes(title_text="Date", gridcolor="rgba(148,163,184,0.20)")
+    fig.update_yaxes(
+        title_text="Index (100 = cutoff date sleeve)",
+        gridcolor="rgba(148,163,184,0.24)",
+        row=1,
+        col=1,
+    )
+    fig.update_xaxes(title_text="Date", gridcolor="rgba(148,163,184,0.20)", row=1, col=1)
+    fig.update_yaxes(
+        title_text="Ending sleeve value",
+        tickprefix="$",
+        gridcolor="rgba(148,163,184,0.24)",
+        row=1,
+        col=2,
+    )
+    fig.update_xaxes(title_text="", row=1, col=2)
     return fig
 
 
@@ -2228,8 +2366,9 @@ def run_backtest(
     risk_profile: int,
     cutoff_date_text: str,
     use_uninvested_cash: bool,
+    include_soft_signals: bool,
     progress: gr.Progress = gr.Progress(track_tqdm=True),
-) -> tuple[str, go.Figure, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[str, go.Figure, str, str, str]:
     """Run a recommendation counterfactual from a historical cutoff date.
 
     The first version intentionally compares the *action sleeve* the app would
@@ -2244,7 +2383,10 @@ def run_backtest(
     else:
         if file_obj is None:
             raise gr.Error("Upload a Robinhood CSV export first or switch to the bundled fake dataset.")
-        csv_path = Path(file_obj.name)
+        if hasattr(file_obj, "name"):
+            csv_path = Path(file_obj.name)
+        else:
+            csv_path = Path(str(file_obj))
 
     cutoff_date = pd.to_datetime(cutoff_date_text, errors="coerce")
     if pd.isna(cutoff_date):
@@ -2274,6 +2416,23 @@ def run_backtest(
         cutoff_date=cutoff_date,
     )
 
+    # Backtesting should not inherit the lighter live-dashboard buy-card limit.
+    # Rebuild the replacement candidate list with a broader top-15 scope so the
+    # counterfactual actually tests the fuller app buy set.
+    base_preferences = getattr(diagnosis, "portfolio_preferences", None)
+    if base_preferences is not None:
+        if hasattr(base_preferences, "model_copy"):
+            backtest_preferences = base_preferences.model_copy(
+                update={"buy_idea_limit": BACKTEST_BUY_IDEA_COUNT}
+            )
+        else:
+            backtest_preferences = base_preferences.copy(update={"buy_idea_limit": BACKTEST_BUY_IDEA_COUNT})
+        diagnosis.replacement_candidates = replacement_candidates_from_user_preferences(
+            diagnosis=diagnosis,
+            preferences=backtest_preferences,
+        )
+        diagnosis.portfolio_preferences = backtest_preferences
+
     progress(0.48, desc="Measuring the actual post-cutoff account path...")
     full_lot_data = build_lot_analytics(transactions)
     full_portfolio_summary = summarize_portfolio(transactions, full_lot_data)
@@ -2295,10 +2454,20 @@ def run_backtest(
         stated_risk_score=int(risk_profile or 60),
     )
 
-    actions = [
+    hard_actions = [
         item for item in getattr(diagnosis, "holding_action_recommendations", []) or []
         if item.is_actionable and float(item.value_to_sell or 0.0) > 0
     ]
+    actions = list(hard_actions)
+    soft_action_count = 0
+    if include_soft_signals:
+        soft_actions = _soft_backtest_action_candidates(
+            getattr(diagnosis, "holding_action_recommendations", []) or [],
+            existing_tickers={item.ticker for item in hard_actions},
+        )
+        soft_action_count = len(soft_actions)
+        actions.extend(soft_actions)
+
     actions = sorted(
         actions,
         key=lambda item: (
@@ -2311,9 +2480,15 @@ def run_backtest(
         summary_html = (
             "<div style='padding:18px;border:1px solid rgba(148,163,184,.22);border-radius:18px;"
             "background:#fff;color:#0f172a'><b>No actionable sell/trim recommendations existed at that cutoff.</b><br>"
-            "Try a later date or review the Risk Actions tab for the current portfolio.</div>"
+            "Try a later date, or turn on <b>Include soft signals in backtest</b> to simulate smaller watchlist-style trims.</div>"
         )
-        return summary_html, empty_dashboard_plot("No actionable backtest recommendations for this date"), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return (
+            summary_html,
+            empty_dashboard_plot("No actionable backtest recommendations for this date"),
+            build_lightweight_table_html(None, "Sell / Trim Actions As Of Cutoff"),
+            build_lightweight_table_html(None, "Hypothetical Buys As Of Cutoff"),
+            build_lightweight_table_html(None, "Counterfactual Execution Steps"),
+        )
 
     idle_cash = float(market_metrics.get("headline_metrics", {}).get("cash_balance_estimate", 0.0) or 0.0)
     idle_cash = max(idle_cash, 0.0)
@@ -2323,7 +2498,10 @@ def run_backtest(
         raise gr.Error("The selected cutoff did not produce cash to redeploy.")
 
     progress(0.66, desc="Pricing the ignored-risk sleeve and hypothetical buys...")
-    candidate_weights = _backtest_candidate_weights(getattr(diagnosis, "replacement_candidates", []) or [], limit=8)
+    candidate_weights = _backtest_candidate_weights(
+        getattr(diagnosis, "replacement_candidates", []) or [],
+        limit=BACKTEST_BUY_IDEA_COUNT,
+    )
     if not candidate_weights:
         raise gr.Error("No buy candidates were available for this cutoff date.")
 
@@ -2430,6 +2608,15 @@ def run_backtest(
         else "Only freed cash from sell/trim actions was deployed. Idle cash was not used."
     )
     outcome_word = "benefit" if benefit >= 0 else "shortfall"
+    signal_mode_text = (
+        f"The run included {soft_action_count} softer watchlist signal(s) alongside the hard action set."
+        if include_soft_signals and soft_action_count > 0
+        else (
+            "Soft-signal mode was on, but no additional watchlist trims met the minimum economic-impact floor."
+            if include_soft_signals
+            else "Only hard sell/trim actions were tested."
+        )
+    )
     summary_html = f"""
     <div style="display:grid;gap:16px">
       <div style="padding:20px;border:1px solid rgba(148,163,184,.22);border-radius:22px;background:linear-gradient(180deg,#ffffff,#f8fafc);box-shadow:0 18px 42px rgba(15,23,42,.08)">
@@ -2442,15 +2629,18 @@ def run_backtest(
       <div class="metric-strip">
         {metric_card("Ignored-recommendation cost" if benefit >= 0 else "App-path shortfall", money_text(abs(benefit)), f"Estimated {outcome_word} on the moved sleeve")}
         {metric_card("Cash redeployed", money_text(deployable_cash), cash_policy)}
-        {metric_card("Actions tested", str(len(action_rows)), f"{len(buy_rows)} buy idea(s) funded")}
+        {metric_card("Actions tested", str(len(action_rows)), f"{len(buy_rows)} of the top {BACKTEST_BUY_IDEA_COUNT} buy idea(s) were funded")}
       </div>
       <div class="metric-strip">
         {metric_card("Actual account today", money_text(actual_account_today), "From the uploaded transaction path")}
         {metric_card("Counterfactual estimate", money_text(counterfactual_account_today), "Actual path plus the app action-sleeve impact")}
         {metric_card("Estimated dollar difference", money_text(benefit), "Positive means the app path would have helped")}
       </div>
-      <div style="padding:16px 18px;border:1px solid rgba(148,163,184,.20);border-radius:18px;background:#fff;color:#334155;line-height:1.55">
-        <b>How to read this:</b> this isolates the part of the portfolio the app would have changed. Untouched holdings are excluded from both sides because they cancel out.
+        <div style="padding:16px 18px;border:1px solid rgba(148,163,184,.20);border-radius:18px;background:#fff;color:#334155;line-height:1.55">
+        <b>How to read this:</b> this isolates the part of the portfolio the app would have changed. Every actionable sell/trim recommendation is executed first,
+        and the full redeployable amount is then spread across the top {BACKTEST_BUY_IDEA_COUNT} buy ideas that were available as of the cutoff date.
+        Untouched holdings are excluded from both sides because they cancel out.
+        {signal_mode_text}
         The ignored path starts around {money_text(initial_ignored)} and ended at {money_text(ignored_final)}.
         The app path starts around {money_text(initial_app)} and ended at {money_text(app_final)}.
         The actual account value still comes from your uploaded post-cutoff transaction path; the counterfactual estimate overlays the app's action-sleeve impact on top of it.
@@ -2483,10 +2673,26 @@ def run_backtest(
     return (
         summary_html,
         _plot_backtest_counterfactual(timeline, cutoff_date, benefit),
-        pd.DataFrame(action_rows),
-        pd.DataFrame(buy_rows),
-        pd.DataFrame(trades_rows),
+        build_lightweight_table_html(pd.DataFrame(action_rows), "Sell / Trim Actions As Of Cutoff"),
+        build_lightweight_table_html(pd.DataFrame(buy_rows), "Hypothetical Buys As Of Cutoff"),
+        build_lightweight_table_html(pd.DataFrame(trades_rows), "Counterfactual Execution Steps"),
     )
+
+
+def capture_uploaded_csv_path(file_obj: Any) -> str | None:
+    """Persist the uploaded CSV path so action buttons do not depend on the raw file widget value.
+
+    Gradio's file widget can serialize differently across reloads and browser
+    sessions. We normalize the upload once, store the resolved path in state,
+    and then let Run Analysis / Backtesting consume that lightweight state
+    instead of asking Gradio to re-preprocess the file object on every click.
+    """
+    if file_obj is None:
+        return None
+    if hasattr(file_obj, "name"):
+        return str(Path(file_obj.name))
+    text = str(file_obj)
+    return text or None
 
 
 def call_ollama(
@@ -8998,7 +9204,10 @@ def run_analysis(
     else:
         if file_obj is None:
             raise gr.Error("Upload a Robinhood CSV export first or switch to the bundled fake dataset.")
-        csv_path = Path(file_obj.name)
+        if hasattr(file_obj, "name"):
+            csv_path = Path(file_obj.name)
+        else:
+            csv_path = Path(str(file_obj))
 
     progress(0.05, desc="Reading transactions from the uploaded file...")
     transactions = load_transactions(csv_path)
@@ -9195,7 +9404,7 @@ def run_analysis(
         prefer_high_dividend_etfs,
         prefer_low_expense_for_dividend_etfs,
         include_existing_holdings,
-        buy_idea_limit,
+        gr.update(choices=[5], value=5),
         build_lightweight_table_html(diagnosis_supporting_metrics_df, "Supporting Evidence"),
         build_lightweight_table_html(diagnosis_holding_fundamentals_df, "Holding Fundamentals"),
         build_lightweight_table_html(diagnosis_narrative_evidence_df, "Filing and News Evidence"),
@@ -9222,6 +9431,7 @@ def build_app() -> gr.Blocks:
         ("Buy Preferences", "buy-preferences"),
         ("Buy Ideas", "buy-ideas"),
         ("Portfolio Rebalancing Plan", "portfolio-rebalancing-plan"),
+        ("Backtesting", "backtesting"),
         ("Next Steps", "next-steps"),
     ]
 
@@ -9284,6 +9494,7 @@ def build_app() -> gr.Blocks:
                         section_nav_buttons.append((section_id, section_button))
 
             with gr.Column(scale=3, elem_classes=["content-rail"]):
+                upload_path_state = gr.State(value=None)
                 risk_state = gr.State(value=None)
                 diagnosis_state = gr.State(value={})
                 diagnosis_chart_state = gr.State(value={})
@@ -9533,14 +9744,75 @@ def build_app() -> gr.Blocks:
                             label="Before vs After Sector Mix",
                         )
                         rebalance_holdings_df = gr.HTML()
-                    with gr.Tab("Backtesting", id="backtesting", visible=False):
+                    with gr.Tab("Backtesting", id="backtesting"):
                         gr.HTML(
                             "<div style='padding:20px;border:1px solid rgba(148,163,184,.22);border-radius:22px;"
                             "background:linear-gradient(180deg,#ffffff,#f8fafc);box-shadow:0 18px 42px rgba(15,23,42,.08)'>"
                             "<div style='font-size:28px;font-weight:950;color:#0f172a'>Backtesting</div>"
                             "<div style='margin-top:8px;color:#475569;font-size:15px;line-height:1.55'>"
-                            "Temporarily hidden for the demo build. The backtesting engine remains in code, but the heavy UI is disabled until we lazy-load it."
+                            "Enter a historical cutoff date, let the app rebuild the recommendation set as of that day, "
+                            "and measure the cost of ignoring those sell and buy actions through today."
                             "</div></div>"
+                        )
+                        with gr.Row(equal_height=False):
+                            with gr.Column(scale=2, min_width=320, elem_classes=["backtest-controls"]):
+                                backtest_cutoff_date = gr.Textbox(
+                                    label="Backtest cutoff date",
+                                    value=(pd.Timestamp.today().normalize() - pd.Timedelta(days=180)).strftime("%Y-%m-%d"),
+                                    info="Use YYYY-MM-DD. The app will rebuild the portfolio exactly as it looked on that date.",
+                                )
+                                with gr.Row(elem_classes=["backtest-toggle-row"]):
+                                    backtest_use_uninvested_cash = gr.Checkbox(
+                                        label="",
+                                        value=False,
+                                        container=False,
+                                        elem_classes=["backtest-checkbox"],
+                                        min_width=40,
+                                    )
+                                    gr.HTML(
+                                        "<div class='backtest-toggle-copy'>"
+                                        "<div class='backtest-toggle-title'>Use uninvested available cash too</div>"
+                                        "<div class='backtest-toggle-sub'>If off, the backtest only redeploys dollars freed by the app's sell or trim actions.</div>"
+                                        "</div>"
+                                    )
+                                with gr.Row(elem_classes=["backtest-toggle-row"]):
+                                    backtest_include_soft_signals = gr.Checkbox(
+                                        label="",
+                                        value=False,
+                                        container=False,
+                                        elem_classes=["backtest-checkbox"],
+                                        min_width=40,
+                                    )
+                                    gr.HTML(
+                                        "<div class='backtest-toggle-copy'>"
+                                        "<div class='backtest-toggle-title'>Include soft signals in backtest</div>"
+                                        "<div class='backtest-toggle-sub'>If on, the app also simulates modest trims for meaningful laggards that were still below the live action threshold.</div>"
+                                        "</div>"
+                                    )
+                                run_backtest_btn = gr.Button("Run Backtest", variant="primary")
+                            with gr.Column(scale=5, min_width=420):
+                                backtest_summary_md = gr.HTML(
+                                    value=(
+                                        "<div style='padding:18px;border:1px dashed rgba(148,163,184,.35);border-radius:18px;"
+                                        "background:#fff;color:#475569'>Run a backtest to compare what actually happened "
+                                        "against the app's counterfactual recommendation path.</div>"
+                                    )
+                                )
+                        backtest_plot = gr.Plot(
+                            value=empty_dashboard_plot("Run a backtest to compare ignored versus followed recommendations"),
+                            label="Ignored Recommendations vs App Counterfactual",
+                        )
+                        with gr.Row(equal_height=False):
+                            with gr.Column(scale=1, min_width=280):
+                                backtest_actions_df = gr.HTML(
+                                    value=build_lightweight_table_html(None, "Sell / Trim Actions As Of Cutoff")
+                                )
+                            with gr.Column(scale=1, min_width=280):
+                                backtest_buys_df = gr.HTML(
+                                    value=build_lightweight_table_html(None, "Hypothetical Buys As Of Cutoff")
+                                )
+                        backtest_steps_df = gr.HTML(
+                            value=build_lightweight_table_html(None, "Counterfactual Execution Steps")
                         )
                     with gr.Tab("Next Steps", id="next-steps"):
                         next_steps_md = gr.HTML()
@@ -9550,9 +9822,15 @@ def build_app() -> gr.Blocks:
                         holdings_df = gr.HTML(value=build_lightweight_table_html(None, "Open Holdings"))
                         attribution_df = gr.HTML(value=build_lightweight_table_html(None, "Performance Attribution"))
 
+        upload.change(
+            fn=capture_uploaded_csv_path,
+            inputs=[upload],
+            outputs=[upload_path_state],
+        )
+
         analyze_btn.click(
             fn=run_analysis,
-            inputs=[upload, risk_profile, dataset_source, risk_actions_view],
+            inputs=[upload_path_state, risk_profile, dataset_source, risk_actions_view],
             outputs=[
                 cards,
                 sector_overview_md,
@@ -9681,6 +9959,21 @@ def build_app() -> gr.Blocks:
                 next_steps_df,
                 main_tabs,
             ],
+            scroll_to_output=True,
+            show_progress="full",
+        )
+
+        run_backtest_btn.click(
+            fn=run_backtest,
+            inputs=[
+                upload_path_state,
+                dataset_source,
+                risk_profile,
+                backtest_cutoff_date,
+                backtest_use_uninvested_cash,
+                backtest_include_soft_signals,
+            ],
+            outputs=[backtest_summary_md, backtest_plot, backtest_actions_df, backtest_buys_df, backtest_steps_df],
             scroll_to_output=True,
             show_progress="full",
         )
@@ -10158,6 +10451,48 @@ LAUNCH_CSS = """
 .control-rail .sidebar-dataset-source svg {
     color: #93c5fd !important;
     stroke: currentColor !important;
+    opacity: 1 !important;
+}
+.backtest-controls {
+    padding: 12px !important;
+    border: 1px solid rgba(148,163,184,.18) !important;
+    border-radius: 18px !important;
+    background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.95)) !important;
+    box-shadow: 0 12px 28px rgba(15,23,42,.05) !important;
+}
+.backtest-controls,
+.backtest-controls * {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    opacity: 1 !important;
+    text-shadow: none !important;
+}
+.backtest-controls .block-info,
+.backtest-controls .info,
+.backtest-controls small,
+.backtest-controls .secondary-wrap {
+    color: #64748b !important;
+    -webkit-text-fill-color: #64748b !important;
+}
+.backtest-controls input,
+.backtest-controls textarea,
+.backtest-controls select {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    border-color: rgba(148,163,184,.30) !important;
+}
+.backtest-checkbox {
+    margin-top: 8px !important;
+    padding: 6px 0 !important;
+}
+.backtest-checkbox label,
+.backtest-checkbox .wrap label,
+.backtest-checkbox .label-wrap,
+.backtest-checkbox .block-label,
+.backtest-checkbox [role="checkbox"],
+.backtest-checkbox [role="checkbox"] * {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
     opacity: 1 !important;
 }
 @media (max-width: 1200px) {

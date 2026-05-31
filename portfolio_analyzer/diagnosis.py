@@ -714,7 +714,10 @@ def _load_csv(path: Path) -> pd.DataFrame:
     """
     if not path.exists():
         return pd.DataFrame()
-    return pd.read_csv(path)
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
 def _severity_band(score: Optional[float]) -> str:
@@ -1130,17 +1133,16 @@ def _candidate_driver_rows(bundle: dict[str, Any], limit: int = 10) -> list[dict
     if positions.empty:
         return []
 
+    if "ticker" not in volatility.columns:
+        volatility = pd.DataFrame(columns=["ticker"])
     if not volatility.empty:
         volatility = volatility.rename(columns={"avg_weight_pct": "avg_weight_pct_2025"})
     merged = positions.merge(volatility, on="ticker", how="left")
 
-    merged["current_weight"] = pd.to_numeric(merged.get("current_weight"), errors="coerce").fillna(0.0)
-    merged["variance_contribution_pct"] = pd.to_numeric(
-        merged.get("variance_contribution_pct"), errors="coerce"
-    ).fillna(0.0)
-    merged["excess_return_vs_benchmark"] = pd.to_numeric(
-        merged.get("excess_return_vs_benchmark"), errors="coerce"
-    ).fillna(0.0)
+    for metric_name in ["current_weight", "variance_contribution_pct", "excess_return_vs_benchmark"]:
+        if metric_name not in merged.columns:
+            merged[metric_name] = 0.0
+        merged[metric_name] = pd.to_numeric(merged[metric_name], errors="coerce").fillna(0.0)
 
     # A light-weight preselection score. This is not the final diagnosis score;
     # it simply helps us decide which holdings deserve deeper enrichment first.
@@ -2173,6 +2175,109 @@ def _normalize_recommendation_reduction(reduction_pct: float) -> float:
     if reduction_pct >= 0.1:
         return 0.1
     return 0.0
+
+
+def _apply_quality_compounder_guardrail(
+    *,
+    reduction_pct: float,
+    current_weight: float,
+    excess_return_vs_benchmark: Optional[float],
+    diagnosis_pressure_score: float,
+    underperform_windows: int,
+    outperform_windows: int,
+    rel_3y: Optional[float],
+    rel_5y: Optional[float],
+) -> tuple[float, bool]:
+    """Soften trims on large proven winners during temporary relative weakness.
+
+    Backtesting showed that trimming high-quality mega-cap compounders too early
+    was one of the most common ways the action layer gave back performance. The
+    guardrail below does not block all trims; it simply requires a stronger case
+    before we cut large holdings that still have meaningful medium/long-term
+    relative strength.
+    """
+    is_large_compounder = current_weight >= 0.04 and (
+        (rel_3y is not None and rel_3y >= -0.15)
+        or (rel_5y is not None and rel_5y >= -0.10)
+        or outperform_windows >= 1
+    )
+    if not is_large_compounder:
+        return reduction_pct, False
+
+    if diagnosis_pressure_score >= 55 or underperform_windows >= 3:
+        return reduction_pct, False
+
+    # If the evidence is only a modest since-buy lag on a large proven
+    # compounder, prefer monitoring over trimming. Backtests showed this was
+    # one of the main sources of false-positive sells.
+    if diagnosis_pressure_score < 40 and underperform_windows <= 1:
+        softened = 0.0
+    elif (
+        excess_return_vs_benchmark is not None
+        and excess_return_vs_benchmark > -0.25
+        and diagnosis_pressure_score < 45
+        and underperform_windows <= 2
+        and (rel_3y is None or rel_3y > -0.15)
+    ):
+        if diagnosis_pressure_score < 35 and abs(excess_return_vs_benchmark) < 0.20:
+            softened = 0.0
+        else:
+            softened = min(reduction_pct, 0.10)
+    else:
+        softened = max(0.0, reduction_pct - 0.25)
+    if softened < 0.10:
+        softened = 0.0
+    return softened, softened != reduction_pct
+
+
+def _apply_non_core_laggard_escalation(
+    *,
+    reduction_pct: float,
+    current_weight: float,
+    excess_return_vs_benchmark: Optional[float],
+    diagnosis_pressure_score: float,
+    underperform_windows: int,
+    outperform_windows: int,
+    linked_primary_concern: Optional[str],
+) -> tuple[float, bool]:
+    """Escalate trims on weak non-core names once the lag is meaningful.
+
+    The backtests were strongest when the system exited or trimmed weak
+    side-positions decisively instead of letting them linger as small but
+    persistent losers.
+    """
+    if excess_return_vs_benchmark is None or excess_return_vs_benchmark >= -0.30:
+        return reduction_pct, False
+    if current_weight >= 0.08:
+        return reduction_pct, False
+    if outperform_windows > 0:
+        return reduction_pct, False
+    if linked_primary_concern not in {"Company-specific risk", "Market-relative risk", None}:
+        return reduction_pct, False
+
+    bump = 0.10
+    if abs(excess_return_vs_benchmark) >= 0.50 or diagnosis_pressure_score >= 40 or underperform_windows >= 2:
+        bump += 0.05
+    escalated = min(1.0, reduction_pct + bump)
+    return escalated, escalated != reduction_pct
+
+
+def _should_suppress_tiny_action(
+    *,
+    value_to_sell: Optional[float],
+    current_weight: float,
+    reduction_pct: float,
+) -> bool:
+    """Hide de minimis trims that clutter the app without moving outcomes much."""
+    if reduction_pct >= 0.999:
+        return False
+    if value_to_sell is None:
+        return False
+    if value_to_sell < 250.0 and current_weight < 0.01:
+        return True
+    if value_to_sell < 100.0 and reduction_pct <= 0.20:
+        return True
+    return False
 
 
 def _build_explicit_sell_modifiers(
@@ -3804,6 +3909,25 @@ def _gap_score_for_candidate(
     elif rel_5y is not None and rel_5y < -0.30:
         score -= 10
 
+    if candidate.asset_type == "Stock":
+        positive_windows = sum(
+            1 for value in [rel_1y, rel_3y, rel_5y]
+            if value is not None and value > 0
+        )
+        if positive_windows >= 2:
+            score += 8
+            reasons.append("it has beaten the S&P 500 across multiple trailing windows")
+        if rel_5y is not None and rel_5y >= 0.20:
+            score += 8
+            reasons.append("its five-year relative return profile is strong enough to compete as a gain-seeking add")
+    elif candidate.sector == "Broad Market":
+        if rel_5y is not None and rel_5y < 0.03:
+            score -= 10
+            reasons.append("it looks more like a stabilizer than a gain-maximizing add")
+        elif rel_3y is not None and rel_3y < 0.02:
+            score -= 5
+            reasons.append("its medium-term excess return has been modest for a top-ranked buy idea")
+
     if candidate.sector == "Broad Market" and rel_5y is not None:
         if rel_5y < -0.015:
             score -= 12
@@ -4425,22 +4549,28 @@ def _build_holding_action_recommendations(
     if positions.empty:
         return []
 
-    positions["current_weight"] = pd.to_numeric(positions.get("current_weight"), errors="coerce").fillna(0.0)
-    positions["current_value"] = pd.to_numeric(positions.get("current_value"), errors="coerce")
-    positions["quantity"] = pd.to_numeric(positions.get("quantity"), errors="coerce")
-    positions["unrealized_return_pct"] = pd.to_numeric(positions.get("unrealized_return_pct"), errors="coerce")
-    positions["benchmark_return_since_buy"] = pd.to_numeric(positions.get("benchmark_return_since_buy"), errors="coerce")
-    positions["excess_return_vs_benchmark"] = pd.to_numeric(
-        positions.get("excess_return_vs_benchmark"), errors="coerce"
-    )
+    for metric_name in [
+        "current_weight",
+        "current_value",
+        "quantity",
+        "unrealized_return_pct",
+        "benchmark_return_since_buy",
+        "excess_return_vs_benchmark",
+    ]:
+        if metric_name not in positions.columns:
+            positions[metric_name] = 0.0
+        positions[metric_name] = pd.to_numeric(positions[metric_name], errors="coerce")
+    positions["current_weight"] = positions["current_weight"].fillna(0.0)
     if not volatility.empty:
         volatility = volatility[["ticker", "variance_contribution_pct"]].copy()
         volatility["variance_contribution_pct"] = pd.to_numeric(
-            volatility.get("variance_contribution_pct"), errors="coerce"
+            volatility["variance_contribution_pct"], errors="coerce"
         ).fillna(0.0)
         positions = positions.merge(volatility, on="ticker", how="left")
+    if "variance_contribution_pct" not in positions.columns:
+        positions["variance_contribution_pct"] = 0.0
     positions["variance_contribution_pct"] = pd.to_numeric(
-        positions.get("variance_contribution_pct"), errors="coerce"
+        positions["variance_contribution_pct"], errors="coerce"
     ).fillna(0.0)
     performance_lookup = {}
     if not performance_context.empty:
@@ -4476,6 +4606,8 @@ def _build_holding_action_recommendations(
         )
         performance_row = performance_lookup.get(ticker, {})
         underperform_windows, outperform_windows, trailing_window_evidence = _relative_window_readout(performance_row)
+        relative_3y_return_pct = _safe_float(performance_row.get("relative_3y_return_pct"))
+        relative_5y_return_pct = _safe_float(performance_row.get("relative_5y_return_pct"))
         linked_primary_concern = (
             action_need.linked_primary_concern
             if action_need is not None
@@ -4568,6 +4700,29 @@ def _build_holding_action_recommendations(
             ):
                 reduction_pct = 1.0
                 recommendation_code = "sell_all_persistent_underperformer"
+            reduction_pct, escalated_non_core = _apply_non_core_laggard_escalation(
+                reduction_pct=reduction_pct,
+                current_weight=current_weight,
+                excess_return_vs_benchmark=excess_return_vs_benchmark,
+                diagnosis_pressure_score=diagnosis_pressure_score,
+                underperform_windows=underperform_windows,
+                outperform_windows=outperform_windows,
+                linked_primary_concern=linked_primary_concern,
+            )
+            if escalated_non_core:
+                recommendation_code = "non_core_laggard_escalation"
+            reduction_pct, softened_quality = _apply_quality_compounder_guardrail(
+                reduction_pct=reduction_pct,
+                current_weight=current_weight,
+                excess_return_vs_benchmark=excess_return_vs_benchmark,
+                diagnosis_pressure_score=diagnosis_pressure_score,
+                underperform_windows=underperform_windows,
+                outperform_windows=outperform_windows,
+                rel_3y=relative_3y_return_pct,
+                rel_5y=relative_5y_return_pct,
+            )
+            if softened_quality:
+                recommendation_code = "quality_compounder_guardrail"
             reduction_pct = _normalize_recommendation_reduction(reduction_pct)
             recommendation_label = _recommendation_label_from_reduction(reduction_pct)
             reasoning_points = [
@@ -4601,9 +4756,30 @@ def _build_holding_action_recommendations(
                 reasoning_points.append(
                     "The weakness is now persistent enough across the longer trailing windows that the system no longer sees a strong reason to keep a small residual position."
                 )
+            if softened_quality:
+                reasoning_points.append(
+                    "The trim was deliberately softened because this is still a large proven winner with supportive medium/long-term relative strength."
+                )
+            if escalated_non_core:
+                reasoning_points.append(
+                    "The trim was deliberately made more aggressive because this is a non-core laggard with little offsetting long-term support."
+                )
 
         shares_to_sell = round((quantity or 0.0) * reduction_pct, 4) if quantity is not None else None
         value_to_sell = round((current_value or 0.0) * reduction_pct, 2) if current_value is not None else None
+        if _should_suppress_tiny_action(
+            value_to_sell=value_to_sell,
+            current_weight=current_weight,
+            reduction_pct=reduction_pct,
+        ):
+            reduction_pct = 0.0
+            shares_to_sell = 0.0 if quantity is not None else None
+            value_to_sell = 0.0 if current_value is not None else None
+            recommendation_label = "Watch only"
+            recommendation_code = "de_minimis_trim_suppressed"
+            reasoning_points.append(
+                "The raw trim amount is too small to matter economically, so the app is treating this as a watchlist item instead of a live action."
+            )
         selling_horizon = _estimate_sale_holding_period_mix(
             open_lots=open_lots,
             ticker=ticker,
