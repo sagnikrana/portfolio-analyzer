@@ -3995,9 +3995,9 @@ def build_rebalance_plan_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     if plan is None or plan.before_snapshot is None or plan.after_snapshot is None:
         return (
             "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Portfolio Rebalancing Plan</div>"
-            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No rebalance plan is available yet.</div>"
+            "background:linear-gradient(180deg, #ffffff, #f8fafc)'>"
+            "<div style='font-size:22px;font-weight:800;color:#0f172a'>Portfolio Rebalancing Plan</div>"
+            "<div style='font-size:15px;color:#475569;margin-top:10px'>No rebalance plan is available yet.</div>"
             "</div>"
         )
 
@@ -4012,19 +4012,19 @@ def build_rebalance_plan_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     return (
         "<div style='display:flex;flex-direction:column;gap:16px'>"
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Portfolio Rebalancing Plan</div>"
+        "background:linear-gradient(180deg, #ffffff, #f8fafc)'>"
+        "<div style='font-size:22px;font-weight:800;color:#0f172a'>Portfolio Rebalancing Plan</div>"
         f"{section_provenance_note('Rule-based', 'sell actions + buy slices + portfolio math', 'rule')}"
-        f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>{render_bold_markers(plan.summary)}</div>"
+        f"<div style='font-size:15px;color:#475569;margin-top:10px'>{render_bold_markers(plan.summary)}</div>"
         "</div>"
         "<div style='display:grid;grid-template-columns:minmax(280px,1fr) minmax(280px,1fr);gap:16px'>"
-        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:18px;font-weight:800;color:#f8fafc'>What likely improves</div>"
-        f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{bullets}</ul>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:18px;font-weight:800;color:#0f172a !important'>What likely improves</div>"
+        f"<ul style='margin:12px 0 0 18px;color:#334155 !important;line-height:1.6'>{bullets}</ul>"
         "</div>"
-        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:18px;font-weight:800;color:#f8fafc'>Plan assumptions</div>"
-        f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{assumptions}</ul>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:18px;font-weight:800;color:#0f172a !important'>Plan assumptions</div>"
+        f"<ul style='margin:12px 0 0 18px;color:#334155 !important;line-height:1.6'>{assumptions}</ul>"
         "</div>"
         "</div>"
     )
@@ -4207,10 +4207,10 @@ def build_next_steps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     next_steps = diagnosis.portfolio_next_steps
     if next_steps is None or not next_steps.actions:
         return (
-            "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Next Steps</div>"
-            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No execution summary is available yet.</div>"
+            "<div style='padding:20px;border:1px solid #dbe4f0;border-radius:18px;"
+            "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+            "<div style='font-size:22px;font-weight:800;color:#0f172a'>Next Steps</div>"
+            "<div style='font-size:15px;color:#475569;margin-top:10px'>No execution summary is available yet.</div>"
             "</div>"
         )
 
@@ -4233,26 +4233,26 @@ def build_next_steps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         ticker_label = f"{item.ticker} " if item.ticker else ""
         security_tail = f"{item.security_name}" if item.security_name and item.security_name != item.ticker else ""
         action_cards += (
-            "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
-            "background:rgba(15,23,42,.34);margin-bottom:14px'>"
+            "<div style='padding:16px 18px;border:1px solid #dbe4f0;border-radius:18px;"
+            "background:#ffffff;margin-bottom:14px;box-shadow:0 10px 24px rgba(15,23,42,.06)'>"
             "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
             "<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
-            f"<div style='padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.16);border:1px solid rgba(59,130,246,.22);color:#bfdbfe;font-size:12px;font-weight:800'>Step {item.step_number}</div>"
-            f"<div style='font-size:18px;font-weight:800;color:#f8fafc'>{item.action_type}</div>"
-            f"<div style='font-size:15px;color:#e2e8f0'>{ticker_label}{security_tail}</div>"
+            f"<div style='padding:6px 10px;border-radius:999px;background:#eff6ff;border:1px solid #bfdbfe;color:#2563eb;font-size:12px;font-weight:800'>Step {item.step_number}</div>"
+            f"<div style='font-size:18px;font-weight:800;color:#0f172a'>{item.action_type}</div>"
+            f"<div style='font-size:15px;color:#334155'>{ticker_label}{security_tail}</div>"
             "</div>"
-            f"<div style='padding:8px 12px;border-radius:999px;background:rgba(15,23,42,.72);border:1px solid rgba(148,163,184,.16);color:#93c5fd;font-size:12px;font-weight:700'>{item.action_stage}</div>"
+            f"<div style='padding:8px 12px;border-radius:999px;background:#f8fafc;border:1px solid #dbe4f0;color:#2563eb;font-size:12px;font-weight:700'>{item.action_stage}</div>"
             "</div>"
-            f"<div style='font-size:15px;line-height:1.55;color:#f8fafc;margin-top:12px'>{render_bold_markers(item.instruction)}</div>"
-            f"<div style='font-size:14px;line-height:1.55;color:#93c5fd;margin-top:8px'>{render_bold_markers(item.amount_text)}</div>"
+            f"<div style='font-size:15px;line-height:1.55;color:#0f172a;margin-top:12px'>{render_bold_markers(item.instruction)}</div>"
+            f"<div style='font-size:14px;line-height:1.55;color:#2563eb;margin-top:8px'>{render_bold_markers(item.amount_text)}</div>"
             "<div style='display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);gap:14px;margin-top:14px'>"
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Why now</div>"
-            f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_bold_markers(item.why_this_step)}</div>"
+            "<div style='padding:14px 16px;border-radius:14px;background:#f8fafc;border:1px solid #dbe4f0'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:700'>Why now</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:8px'>{render_bold_markers(item.why_this_step)}</div>"
             "</div>"
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What this should improve</div>"
-            f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_bold_markers(item.expected_portfolio_change)}</div>"
+            "<div style='padding:14px 16px;border-radius:14px;background:#f8fafc;border:1px solid #dbe4f0'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:700'>What this should improve</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:8px'>{render_bold_markers(item.expected_portfolio_change)}</div>"
             "</div>"
             "</div>"
             "</div>"
@@ -4260,21 +4260,21 @@ def build_next_steps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
 
     return (
         "<div style='display:flex;flex-direction:column;gap:16px'>"
-        "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Next Steps</div>"
+        "<div style='padding:20px;border:1px solid #dbe4f0;border-radius:18px;"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:22px;font-weight:800;color:#0f172a'>Next Steps</div>"
         f"{section_provenance_note('Rule-based', 'ordered from deterministic action objects', 'rule')}"
-        f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>{render_bold_markers(next_steps.summary)}</div>"
+        f"<div style='font-size:15px;color:#475569 !important;margin-top:10px'>{render_bold_markers(next_steps.summary)}</div>"
         f"<div class='metric-strip' style='margin-top:14px'>{top_cards}</div>"
         "</div>"
         "<div style='display:grid;grid-template-columns:minmax(280px,1fr) minmax(280px,1fr);gap:16px'>"
-        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:18px;font-weight:800;color:#f8fafc'>Recommended order</div>"
-        f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{sequence_html}</ul>"
+        "<div style='padding:18px;border:1px solid #dbe4f0;border-radius:18px;background:#ffffff;box-shadow:0 10px 24px rgba(15,23,42,.05)'>"
+        "<div style='font-size:18px;font-weight:800;color:#0f172a !important'>Recommended order</div>"
+        f"<ul style='margin:12px 0 0 18px;color:#334155 !important;line-height:1.6'>{sequence_html}</ul>"
         "</div>"
-        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:18px;font-weight:800;color:#f8fafc'>Watchouts</div>"
-        f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{watchout_html}</ul>"
+        "<div style='padding:18px;border:1px solid #dbe4f0;border-radius:18px;background:#ffffff;box-shadow:0 10px 24px rgba(15,23,42,.05)'>"
+        "<div style='font-size:18px;font-weight:800;color:#0f172a !important'>Watchouts</div>"
+        f"<ul style='margin:12px 0 0 18px;color:#334155 !important;line-height:1.6'>{watchout_html}</ul>"
         "</div>"
         "</div>"
         f"{action_cards}"
@@ -9582,20 +9582,46 @@ def build_app() -> gr.Blocks:
         ("Next Steps", "next-steps"),
     ]
 
+    # Pin dark-mode variants to light values — macOS dark mode adds class="dark"
+    # to the Gradio container, and Gradio's .dark{} CSS block flips backgrounds
+    # to var(--neutral-950) (very dark). We override every relevant variable so
+    # the app always looks light regardless of OS color scheme.
     _theme = gr.themes.Soft(
         primary_hue="blue",
         secondary_hue="slate",
         neutral_hue="slate",
         font=gr.themes.GoogleFont("Inter"),
     ).set(
+        # ── Light mode ──────────────────────────────────────────
         body_text_color="#1e293b",
         body_text_color_subdued="#64748b",
+        body_background_fill="#f1f5f9",
+        background_fill_primary="#ffffff",
+        background_fill_secondary="#f8fafc",
+        block_background_fill="#ffffff",
         block_label_text_color="*primary_600",
         block_info_text_color="#64748b",
+        block_title_text_color="#0f172a",
+        panel_background_fill="#ffffff",
         checkbox_label_text_color="#334155",
         checkbox_label_text_color_selected="#2563eb",
+        checkbox_label_background_fill="#ffffff",
         input_background_fill="#ffffff",
-        body_background_fill="#f1f5f9",
+        # ── Dark mode pinned identical to light ─────────────────
+        body_text_color_dark="#1e293b",
+        body_text_color_subdued_dark="#64748b",
+        body_background_fill_dark="#f1f5f9",
+        background_fill_primary_dark="#ffffff",
+        background_fill_secondary_dark="#f8fafc",
+        block_background_fill_dark="#ffffff",
+        block_label_text_color_dark="*primary_600",
+        block_info_text_color_dark="#64748b",
+        block_title_text_color_dark="#0f172a",
+        panel_background_fill_dark="#ffffff",
+        checkbox_label_text_color_dark="#334155",
+        checkbox_label_text_color_selected_dark="#2563eb",
+        checkbox_label_background_fill_dark="#ffffff",
+        input_background_fill_dark="#ffffff",
     )
     with gr.Blocks(
         title="Portfolio Analyzer Dashboard",
@@ -9925,25 +9951,37 @@ def build_app() -> gr.Blocks:
                         with gr.Row(equal_height=False):
                             with gr.Column(scale=1, min_width=300):
                                 with gr.Group(elem_classes=["backtest-controls"]):
+                                    gr.HTML(
+                                        "<div class='simple-field-label'>Backtest cutoff date</div>"
+                                        "<div class='simple-field-help'>Type a YYYY-MM-DD date. The app rebuilds the portfolio exactly as it looked on that date.</div>"
+                                    )
                                     backtest_cutoff_date = gr.Textbox(
-                                        label="Backtest cutoff date",
-                                        info="Type a YYYY-MM-DD date. The app rebuilds the portfolio exactly as it looked on that date.",
+                                        show_label=False,
+                                        container=False,
                                         value=(pd.Timestamp.today().normalize() - pd.Timedelta(days=180)).strftime("%Y-%m-%d"),
                                         placeholder="YYYY-MM-DD",
                                         elem_id="bt-cutoff-date",
                                     )
-                                    backtest_use_uninvested_cash = gr.Dropdown(
-                                        label="Use uninvested available cash too",
-                                        info="Yes adds idle cash on top of dollars freed by sell/trim actions.",
+                                    gr.HTML(
+                                        "<div class='simple-field-label'>Use uninvested available cash too</div>"
+                                        "<div class='simple-field-help'>If turned on, idle cash is added on top of dollars freed by sell and trim actions.</div>"
+                                    )
+                                    backtest_use_uninvested_cash = gr.Radio(
                                         choices=["No", "Yes"],
                                         value="No",
+                                        show_label=False,
+                                        container=False,
                                         elem_id="bt-cash-toggle",
                                     )
-                                    backtest_include_soft_signals = gr.Dropdown(
-                                        label="Include soft signals in backtest",
-                                        info="Yes also simulates modest trims for laggards that were just below the live action threshold.",
+                                    gr.HTML(
+                                        "<div class='simple-field-label'>Include soft signals in backtest</div>"
+                                        "<div class='simple-field-help'>If turned on, the app also simulates modest trims for meaningful laggards that were just below the live action threshold.</div>"
+                                    )
+                                    backtest_include_soft_signals = gr.Radio(
                                         choices=["No", "Yes"],
                                         value="No",
+                                        show_label=False,
+                                        container=False,
                                         elem_id="bt-soft-signals",
                                     )
                                 run_backtest_btn = gr.Button("Run Backtest", variant="primary")
@@ -10190,9 +10228,15 @@ def build_app() -> gr.Blocks:
 
 LAUNCH_CSS = """
 /* ── Root & container ───────────────────────────────────── */
+/* Force light color scheme at root so OS dark mode doesn't affect form elements */
+:root { color-scheme: light !important; }
+
+/* Force light mode even when macOS dark mode adds class="dark" to the container */
+.dark.gradio-container,
+.dark .gradio-container,
 .gradio-container {
     background: #f1f5f9 !important;
-    color: #0f172a !important;
+    color-scheme: light !important;
     max-width: 100vw !important;
     padding: 0 20px 20px !important;
     font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif !important;
@@ -10236,86 +10280,56 @@ LAUNCH_CSS = """
     border-radius: 16px !important;
     background: #ffffff !important;
     box-shadow: 0 1px 4px rgba(15,23,42,.06), 0 4px 12px rgba(15,23,42,.04) !important;
-    --body-text-color: #0f172a !important;
-    --body-text-color-subdued: #64748b !important;
-    --block-title-text-color: #0f172a !important;
-    --block-label-text-color: #0f172a !important;
-    --input-text-color: #0f172a !important;
 }
-.control-rail, .control-rail * {
-    color: #0f172a !important;
-    opacity: 1 !important;
-}
-.control-rail .block,
-.control-rail .form,
-.control-rail .gr-form,
-.control-rail .gr-box,
-.control-rail fieldset {
-    background: #ffffff !important;
-    border-color: #e2e8f0 !important;
-    box-shadow: none !important;
-}
-.control-rail label,
 .control-rail .block-label,
-.control-rail .label-wrap {
+.control-rail .label-wrap,
+.control-rail label {
     color: #0f172a !important;
     font-weight: 600 !important;
-    font-size: 13px !important;
 }
 .control-rail .info,
-.control-rail .secondary-wrap,
 .control-rail .block-info,
 .control-rail small {
     color: #64748b !important;
     -webkit-text-fill-color: #64748b !important;
-    font-size: 12px !important;
 }
-.control-rail input,
-.control-rail textarea,
-.control-rail select {
-    background: #f8fafc !important;
-    color: #0f172a !important;
-    border-color: #e2e8f0 !important;
-}
-.control-rail [data-testid] *,
-.control-rail .file-preview *,
-.control-rail .file-name *,
-.control-rail .upload-container *,
-.control-rail .file *,
-.control-rail .radio *,
-.control-rail [role="radiogroup"] *,
-.control-rail .wrap label *,
-.control-rail .label-wrap *,
-.control-rail .info *,
-.control-rail .secondary-wrap * {
-    color: #0f172a !important;
-    opacity: 1 !important;
-    text-shadow: none !important;
-}
-.control-rail [aria-disabled="true"],
-.control-rail [aria-disabled="true"] *,
-.control-rail [disabled],
-.control-rail [disabled] *,
-.control-rail .disabled,
-.control-rail .disabled * {
-    color: #475569 !important;
-    opacity: 1 !important;
-    -webkit-text-fill-color: #475569 !important;
-}
-.control-rail svg { color: #3b82f6 !important; stroke: currentColor !important; }
-
-/* ── Upload & dataset source widgets ───────────────────── */
-/* Theme .set() handles text/label colors. Only override container layout here.
-   Do NOT strip block-label padding/background/border — that collapses the chip. */
-.sidebar-upload,
-.sidebar-dataset-source,
-.control-rail .sidebar-upload,
-.control-rail .sidebar-dataset-source {
-    background: #f8fafc !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 12px !important;
+#csv-upload,
+#dataset-source-radio,
+.backtest-controls {
+    background: #ffffff !important;
+    border: 1px solid #dbe4f0 !important;
+    border-radius: 14px !important;
     box-shadow: none !important;
-    filter: none !important;
+    padding: 12px !important;
+}
+#csv-upload,
+#dataset-source-radio,
+#csv-upload *,
+#dataset-source-radio * {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+}
+#csv-upload svg,
+#dataset-source-radio svg {
+    color: #475569 !important;
+    stroke: currentColor !important;
+}
+#dataset-source-radio input[type="radio"],
+#bt-cash-toggle input[type="radio"],
+#bt-soft-signals input[type="radio"] {
+    accent-color: #2563eb !important;
+}
+.simple-field-label {
+    color: #0f172a !important;
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    margin: 0 0 6px !important;
+}
+.simple-field-help {
+    color: #64748b !important;
+    font-size: 12px !important;
+    line-height: 1.45 !important;
+    margin: 0 0 8px !important;
 }
 
 /* ── Buttons (global) ───────────────────────────────────── */
@@ -10494,165 +10508,24 @@ LAUNCH_CSS = """
 
 /* ── Backtest controls ──────────────────────────────────── */
 .backtest-controls {
-    padding: 14px !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 12px !important;
-    background: #ffffff !important;
-    box-shadow: none !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 12px !important;
 }
-.backtest-controls, .backtest-controls * {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    opacity: 1 !important;
-    text-shadow: none !important;
+#bt-cutoff-date,
+#bt-cash-toggle,
+#bt-soft-signals {
+    background: transparent !important;
+    border: 0 !important;
+    padding: 0 !important;
 }
-.backtest-controls .block-info,
-.backtest-controls .info,
-.backtest-controls small,
-.backtest-controls .secondary-wrap {
-    color: #64748b !important;
-    -webkit-text-fill-color: #64748b !important;
-}
-.backtest-control-copy { margin: 8px 0 6px !important; }
-.backtest-control-title {
-    color: #0f172a !important;
-    font-size: 14px !important;
-    font-weight: 700 !important;
-    line-height: 1.35 !important;
-}
-.backtest-control-sub {
-    margin-top: 3px !important;
-    color: #64748b !important;
-    font-size: 12px !important;
-    line-height: 1.45 !important;
-}
-.backtest-plain-input,
-.backtest-plain-select {
-    margin: 0 0 10px 0 !important;
-}
-.backtest-plain-input,
-.backtest-plain-input *,
-.backtest-plain-select,
-.backtest-plain-select * {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    opacity: 1 !important;
-}
-.backtest-plain-input input,
-.backtest-plain-input textarea,
-.backtest-plain-select select,
-.backtest-plain-select input,
-.backtest-plain-select button,
-#bt-cutoff-date-input input,
-#bt-cash-toggle-input select,
-#bt-cash-toggle-input button,
-#bt-soft-signals-input select,
-#bt-soft-signals-input button {
-    min-height: 44px !important;
-    background: #ffffff !important;
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    border: 1.5px solid #cbd5e1 !important;
-    border-radius: 8px !important;
-    box-shadow: none !important;
-    font-size: 14px !important;
-    font-weight: 500 !important;
-    padding: 10px 12px !important;
-}
-.backtest-plain-input input::placeholder,
-#bt-cutoff-date-input input::placeholder {
-    color: #94a3b8 !important;
-    -webkit-text-fill-color: #94a3b8 !important;
-    opacity: 1 !important;
-}
-.backtest-plain-select .wrap,
-#bt-cash-toggle-input .wrap,
-#bt-soft-signals-input .wrap {
+#bt-cutoff-date .wrap,
+#bt-cash-toggle .wrap,
+#bt-soft-signals .wrap {
     background: transparent !important;
     border: 0 !important;
     box-shadow: none !important;
     padding: 0 !important;
-}
-/* ── Upload widget: every inner element visible ─────────── */
-#csv-upload, #csv-upload * {
-    color: #334155 !important;
-    -webkit-text-fill-color: #334155 !important;
-    opacity: 1 !important;
-    text-shadow: none !important;
-}
-#csv-upload .block-label, #csv-upload label {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    font-weight: 600 !important;
-    font-size: 13px !important;
-}
-#csv-upload svg {
-    color: #3b82f6 !important;
-    opacity: 1 !important;
-}
-
-/* ── Dataset source radio: every inner element visible ──── */
-#dataset-source-radio, #dataset-source-radio * {
-    color: #334155 !important;
-    -webkit-text-fill-color: #334155 !important;
-    opacity: 1 !important;
-    text-shadow: none !important;
-}
-#dataset-source-radio .block-label, #dataset-source-radio label {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    font-weight: 600 !important;
-    font-size: 13px !important;
-}
-#dataset-source-radio .info, #dataset-source-radio small {
-    color: #64748b !important;
-    -webkit-text-fill-color: #64748b !important;
-    font-size: 12px !important;
-}
-/* Selected radio option text */
-#dataset-source-radio input[type="radio"]:checked + span,
-#dataset-source-radio .selected span,
-#dataset-source-radio [aria-checked="true"] span {
-    color: #2563eb !important;
-    -webkit-text-fill-color: #2563eb !important;
-    font-weight: 600 !important;
-}
-
-/* ── Backtest dropdowns: all content visible ────────────── */
-#bt-cutoff-date .wrap, #bt-cash-toggle .wrap, #bt-soft-signals .wrap {
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 8px !important;
-    background: #ffffff !important;
-    padding: 2px 4px !important;
-    min-height: 36px !important;
-}
-#bt-cutoff-date *, #bt-cash-toggle *, #bt-soft-signals * {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    opacity: 1 !important;
-    text-shadow: none !important;
-}
-#bt-cutoff-date .block-label, #bt-cash-toggle .block-label, #bt-soft-signals .block-label {
-    font-weight: 600 !important;
-    font-size: 13px !important;
-}
-#bt-cutoff-date .info, #bt-cash-toggle .info, #bt-soft-signals .info {
-    color: #64748b !important;
-    -webkit-text-fill-color: #64748b !important;
-    font-size: 12px !important;
-}
-#bt-cutoff-date input, #bt-cutoff-date select,
-#bt-cash-toggle input, #bt-cash-toggle select,
-#bt-soft-signals input, #bt-soft-signals select {
-    background: transparent !important;
-    font-size: 13px !important;
-    font-weight: 500 !important;
-}
-#bt-cutoff-date svg, #bt-cash-toggle svg, #bt-soft-signals svg,
-#bt-cutoff-date svg *, #bt-cash-toggle svg *, #bt-soft-signals svg * {
-    color: #64748b !important;
-    stroke: #64748b !important;
-    opacity: 1 !important;
 }
 
 /* ── Responsive ─────────────────────────────────────────── */
