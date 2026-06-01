@@ -2755,8 +2755,8 @@ def run_backtest(
     )
 
 
-def capture_uploaded_csv_path(file_obj: Any) -> str | None:
-    """Persist the uploaded CSV path so action buttons do not depend on the raw file widget value.
+def capture_uploaded_csv_details(file_obj: Any) -> tuple[str | None, str]:
+    """Persist the uploaded CSV path and a human-readable filename for the sidebar.
 
     Gradio's file widget can serialize differently across reloads and browser
     sessions. We normalize the upload once, store the resolved path in state,
@@ -2764,11 +2764,18 @@ def capture_uploaded_csv_path(file_obj: Any) -> str | None:
     instead of asking Gradio to re-preprocess the file object on every click.
     """
     if file_obj is None:
-        return None
+        return None, "No CSV selected yet"
     if hasattr(file_obj, "name"):
-        return str(Path(file_obj.name))
+        resolved = str(Path(file_obj.name))
+        return resolved, Path(resolved).name
     text = str(file_obj)
-    return text or None
+    resolved = text or None
+    return resolved, (Path(resolved).name if resolved else "No CSV selected yet")
+
+
+def capture_uploaded_csv_path(file_obj: Any) -> str | None:
+    """Return only the normalized CSV path for stateful callbacks."""
+    return capture_uploaded_csv_details(file_obj)[0]
 
 
 def call_ollama(
@@ -4012,17 +4019,17 @@ def build_rebalance_plan_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     return (
         "<div style='display:flex;flex-direction:column;gap:16px'>"
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, #ffffff, #f8fafc)'>"
+        "background:linear-gradient(180deg, #ffffff, #f8fafc) !important;color:#0f172a !important'>"
         "<div style='font-size:22px;font-weight:800;color:#0f172a'>Portfolio Rebalancing Plan</div>"
         f"{section_provenance_note('Rule-based', 'sell actions + buy slices + portfolio math', 'rule')}"
         f"<div style='font-size:15px;color:#475569;margin-top:10px'>{render_bold_markers(plan.summary)}</div>"
         "</div>"
         "<div style='display:grid;grid-template-columns:minmax(280px,1fr) minmax(280px,1fr);gap:16px'>"
-        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg,#ffffff,#f8fafc) !important;color:#0f172a !important'>"
         "<div style='font-size:18px;font-weight:800;color:#0f172a !important'>What likely improves</div>"
         f"<ul style='margin:12px 0 0 18px;color:#334155 !important;line-height:1.6'>{bullets}</ul>"
         "</div>"
-        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;background:linear-gradient(180deg,#ffffff,#f8fafc) !important;color:#0f172a !important'>"
         "<div style='font-size:18px;font-weight:800;color:#0f172a !important'>Plan assumptions</div>"
         f"<ul style='margin:12px 0 0 18px;color:#334155 !important;line-height:1.6'>{assumptions}</ul>"
         "</div>"
@@ -9643,16 +9650,16 @@ def build_app() -> gr.Blocks:
                 upload = gr.File(
                     label="Robinhood CSV",
                     file_types=[".csv"],
-                    elem_id="csv-upload",
-                    elem_classes=["sidebar-upload"],
+                    type="filepath",
+                    elem_id="csv-upload-input",
                 )
-                dataset_source = gr.Radio(
+                dataset_source = gr.Dropdown(
                     choices=["Upload my CSV", "Use bundled fake dataset"],
                     value="Upload my CSV",
                     label="Dataset Source",
                     info="Use the fake dataset if you want to explore the dashboard without a Robinhood export.",
-                    elem_id="dataset-source-radio",
-                    elem_classes=["sidebar-dataset-source"],
+                    interactive=True,
+                    elem_id="dataset-source-select",
                 )
                 risk_profile = gr.Slider(
                     minimum=0,
@@ -10293,8 +10300,8 @@ LAUNCH_CSS = """
     color: #64748b !important;
     -webkit-text-fill-color: #64748b !important;
 }
-#csv-upload,
-#dataset-source-radio,
+#csv-upload-input,
+#dataset-source-select,
 .backtest-controls {
     background: #ffffff !important;
     border: 1px solid #dbe4f0 !important;
@@ -10302,22 +10309,43 @@ LAUNCH_CSS = """
     box-shadow: none !important;
     padding: 12px !important;
 }
-#csv-upload,
-#dataset-source-radio,
-#csv-upload *,
-#dataset-source-radio * {
+#csv-upload-input,
+#dataset-source-select,
+#csv-upload-input *,
+#dataset-source-select * {
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
 }
-#csv-upload svg,
-#dataset-source-radio svg {
+#csv-upload-input svg,
+#dataset-source-select svg {
     color: #475569 !important;
     stroke: currentColor !important;
 }
-#dataset-source-radio input[type="radio"],
+#csv-upload-input input,
+#csv-upload-input textarea,
+#csv-upload-input button,
+#dataset-source-select input,
+#dataset-source-select textarea,
+#dataset-source-select button {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    background: #ffffff !important;
+}
 #bt-cash-toggle input[type="radio"],
 #bt-soft-signals input[type="radio"] {
     accent-color: #2563eb !important;
+}
+#csv-upload-input .wrap,
+#dataset-source-select .wrap {
+    background: #ffffff !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+#bt-cutoff-date textarea,
+#bt-cutoff-date input {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    background: #ffffff !important;
 }
 .simple-field-label {
     color: #0f172a !important;
