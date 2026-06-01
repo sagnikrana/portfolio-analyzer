@@ -257,6 +257,14 @@ def parse_quantity(value: Any) -> float:
 
 def load_transactions(csv_path: Path) -> pd.DataFrame:
     df = pd.read_csv(csv_path, encoding="utf-8-sig")
+    required_columns = {"Activity Date", "Instrument", "Trans Code"}
+    missing_columns = sorted(required_columns.difference(df.columns))
+    if missing_columns:
+        missing_text = ", ".join(missing_columns)
+        raise ValueError(
+            f"Selected CSV is missing required columns: {missing_text}. "
+            "Please upload a Robinhood transactions export."
+        )
     try:
         df["Activity Date"] = pd.to_datetime(df["Activity Date"], format="%m/%d/%y", errors="coerce")
     except Exception:
@@ -2441,7 +2449,10 @@ def run_backtest(
         raise gr.Error("Choose a cutoff date before today so the app can measure what happened afterward.")
 
     progress(0.12, desc="Reading transactions and applying the cutoff date...")
-    transactions = load_transactions(csv_path)
+    try:
+        transactions = load_transactions(csv_path)
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
     if transactions.empty:
         raise gr.Error("No valid transaction rows were found in the selected file.")
     transactions = transactions.sort_values("Activity Date")
@@ -9275,7 +9286,10 @@ def run_analysis(
             csv_path = Path(str(file_obj))
 
     progress(0.05, desc="Reading transactions from the uploaded file...")
-    transactions = load_transactions(csv_path)
+    try:
+        transactions = load_transactions(csv_path)
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
     if transactions.empty:
         raise gr.Error("No valid transaction rows were found in the selected file.")
 
@@ -9568,14 +9582,24 @@ def build_app() -> gr.Blocks:
         ("Next Steps", "next-steps"),
     ]
 
+    _theme = gr.themes.Soft(
+        primary_hue="blue",
+        secondary_hue="slate",
+        neutral_hue="slate",
+        font=gr.themes.GoogleFont("Inter"),
+    ).set(
+        body_text_color="#1e293b",
+        body_text_color_subdued="#64748b",
+        block_label_text_color="*primary_600",
+        block_info_text_color="#64748b",
+        checkbox_label_text_color="#334155",
+        checkbox_label_text_color_selected="#2563eb",
+        input_background_fill="#ffffff",
+        body_background_fill="#f1f5f9",
+    )
     with gr.Blocks(
         title="Portfolio Analyzer Dashboard",
-        theme=gr.themes.Soft(
-            primary_hue="blue",
-            secondary_hue="slate",
-            neutral_hue="slate",
-            font=gr.themes.GoogleFont("Inter"),
-        ),
+        theme=_theme,
         css=LAUNCH_CSS,
     ) as demo:
         gr.Markdown(
@@ -9593,6 +9617,7 @@ def build_app() -> gr.Blocks:
                 upload = gr.File(
                     label="Robinhood CSV",
                     file_types=[".csv"],
+                    elem_id="csv-upload",
                     elem_classes=["sidebar-upload"],
                 )
                 dataset_source = gr.Radio(
@@ -9600,6 +9625,7 @@ def build_app() -> gr.Blocks:
                     value="Upload my CSV",
                     label="Dataset Source",
                     info="Use the fake dataset if you want to explore the dashboard without a Robinhood export.",
+                    elem_id="dataset-source-radio",
                     elem_classes=["sidebar-dataset-source"],
                 )
                 risk_profile = gr.Slider(
@@ -9898,31 +9924,24 @@ def build_app() -> gr.Blocks:
                         ]
                         with gr.Row(equal_height=False):
                             with gr.Column(scale=1, min_width=300):
-                                with gr.Group(elem_classes=["backtest-controls"]):
-                                    backtest_cutoff_date = gr.Dropdown(
+                                with gr.Group():
+                                    backtest_cutoff_date = gr.Textbox(
                                         label="Backtest cutoff date",
-                                        info="Select a month or type a custom YYYY-MM-DD date. The app rebuilds the portfolio exactly as it looked on that date.",
-                                        choices=recent_backtest_dates,
+                                        info="Type a YYYY-MM-DD date. The app rebuilds the portfolio exactly as it looked on that date.",
                                         value=(pd.Timestamp.today().normalize() - pd.Timedelta(days=180)).strftime("%Y-%m-%d"),
-                                        allow_custom_value=True,
-                                        elem_id="bt-cutoff-date",
-                                        elem_classes=["backtest-date-dropdown"],
+                                        placeholder="YYYY-MM-DD",
                                     )
                                     backtest_use_uninvested_cash = gr.Dropdown(
-                                        label="Use uninvested cash too",
-                                        info="Yes = backtest adds idle cash on top of dollars freed by sell/trim actions.",
+                                        label="Use uninvested available cash too",
+                                        info="Yes adds idle cash on top of dollars freed by sell/trim actions.",
                                         choices=["No", "Yes"],
                                         value="No",
-                                        elem_id="bt-cash-toggle",
-                                        elem_classes=["backtest-toggle-select"],
                                     )
                                     backtest_include_soft_signals = gr.Dropdown(
-                                        label="Include soft signals",
-                                        info="Yes = also simulates modest trims for laggards that were just below the live action threshold.",
+                                        label="Include soft signals in backtest",
+                                        info="Yes also simulates modest trims for laggards that were just below the live action threshold.",
                                         choices=["No", "Yes"],
                                         value="No",
-                                        elem_id="bt-soft-signals",
-                                        elem_classes=["backtest-toggle-select"],
                                     )
                                 run_backtest_btn = gr.Button("Run Backtest", variant="primary")
                             with gr.Column(scale=2, min_width=420):
@@ -10225,7 +10244,6 @@ LAUNCH_CSS = """
     opacity: 1 !important;
 }
 .control-rail .block,
-.control-rail .wrap,
 .control-rail .form,
 .control-rail .gr-form,
 .control-rail .gr-box,
@@ -10284,115 +10302,17 @@ LAUNCH_CSS = """
 .control-rail svg { color: #3b82f6 !important; stroke: currentColor !important; }
 
 /* ── Upload & dataset source widgets ───────────────────── */
+/* Theme .set() handles text/label colors. Only override container layout here.
+   Do NOT strip block-label padding/background/border — that collapses the chip. */
 .sidebar-upload,
-.sidebar-dataset-source {
+.sidebar-dataset-source,
+.control-rail .sidebar-upload,
+.control-rail .sidebar-dataset-source {
     background: #f8fafc !important;
     border: 1px solid #e2e8f0 !important;
     border-radius: 12px !important;
     box-shadow: none !important;
-    opacity: 1 !important;
-}
-.sidebar-upload *, .sidebar-dataset-source * {
-    color: #0f172a !important;
-    opacity: 1 !important;
-    text-shadow: none !important;
-    -webkit-text-fill-color: #0f172a !important;
-}
-.sidebar-upload label, .sidebar-upload .label-wrap, .sidebar-upload .block-label,
-.sidebar-dataset-source label, .sidebar-dataset-source .label-wrap, .sidebar-dataset-source .block-label {
-    color: #0f172a !important;
-    background: transparent !important;
-    font-weight: 600 !important;
-    font-size: 13px !important;
-    padding: 0 !important;
-    border: none !important;
-}
-.sidebar-upload [class*="drop"],
-.sidebar-upload [class*="upload"],
-.sidebar-upload [class*="file"],
-.sidebar-upload [data-testid],
-.sidebar-dataset-source [role="radiogroup"],
-.sidebar-dataset-source [data-testid] {
-    background: #ffffff !important;
-    color: #0f172a !important;
-    border-color: #e2e8f0 !important;
-    opacity: 1 !important;
-    -webkit-text-fill-color: #0f172a !important;
-}
-.sidebar-dataset-source .info,
-.sidebar-dataset-source .block-info,
-.sidebar-dataset-source small {
-    color: #64748b !important;
-    -webkit-text-fill-color: #64748b !important;
-}
-.control-rail .sidebar-upload, .control-rail .sidebar-dataset-source {
-    background: #f8fafc !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 12px !important;
-    box-shadow: none !important;
-    opacity: 1 !important;
     filter: none !important;
-}
-.control-rail .sidebar-upload, .control-rail .sidebar-upload *,
-.control-rail .sidebar-dataset-source, .control-rail .sidebar-dataset-source * {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    opacity: 1 !important;
-    filter: none !important;
-    text-shadow: none !important;
-}
-.control-rail .sidebar-upload label, .control-rail .sidebar-upload .block-label,
-.control-rail .sidebar-upload .label-wrap,
-.control-rail .sidebar-dataset-source label, .control-rail .sidebar-dataset-source .block-label,
-.control-rail .sidebar-dataset-source .label-wrap {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    background: transparent !important;
-    border: none !important;
-    padding: 0 !important;
-    font-weight: 600 !important;
-    font-size: 13px !important;
-}
-.control-rail .sidebar-upload [data-testid],
-.control-rail .sidebar-upload [class*="drop"],
-.control-rail .sidebar-upload [class*="upload"],
-.control-rail .sidebar-upload [class*="file"],
-.control-rail .sidebar-dataset-source [data-testid],
-.control-rail .sidebar-dataset-source [role="radiogroup"],
-.control-rail .sidebar-dataset-source .wrap {
-    background: #ffffff !important;
-    border-color: #e2e8f0 !important;
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    opacity: 1 !important;
-    filter: none !important;
-}
-.control-rail .sidebar-dataset-source .info,
-.control-rail .sidebar-dataset-source .block-info,
-.control-rail .sidebar-dataset-source small {
-    color: #64748b !important;
-    -webkit-text-fill-color: #64748b !important;
-}
-.control-rail .sidebar-upload button,
-.control-rail .sidebar-dataset-source button {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    background: #ffffff !important;
-    border-color: #e2e8f0 !important;
-}
-.control-rail .sidebar-upload button.primary,
-.control-rail .sidebar-dataset-source button.primary,
-.control-rail .sidebar-upload .selected,
-.control-rail .sidebar-dataset-source .selected {
-    background: #2563eb !important;
-    color: #ffffff !important;
-    -webkit-text-fill-color: #ffffff !important;
-}
-.control-rail .sidebar-upload svg,
-.control-rail .sidebar-dataset-source svg {
-    color: #3b82f6 !important;
-    stroke: currentColor !important;
-    opacity: 1 !important;
 }
 
 /* ── Buttons (global) ───────────────────────────────────── */
@@ -10590,27 +10510,42 @@ LAUNCH_CSS = """
     color: #64748b !important;
     -webkit-text-fill-color: #64748b !important;
 }
-.backtest-controls .wrap {
-    background: #f8fafc !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 8px !important;
-    padding: 2px !important;
+.backtest-control-copy { margin: 8px 0 6px !important; }
+.backtest-control-title {
+    color: #0f172a !important;
+    font-size: 14px !important;
+    font-weight: 700 !important;
+    line-height: 1.35 !important;
 }
-.backtest-controls input,
-.backtest-controls textarea,
-.backtest-controls select {
-    background: #ffffff !important;
+.backtest-control-sub {
+    margin-top: 3px !important;
+    color: #64748b !important;
+    font-size: 12px !important;
+    line-height: 1.45 !important;
+}
+.backtest-plain-input,
+.backtest-plain-select {
+    margin: 0 0 10px 0 !important;
+}
+.backtest-plain-input,
+.backtest-plain-input *,
+.backtest-plain-select,
+.backtest-plain-select * {
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
-    border-color: transparent !important;
+    opacity: 1 !important;
 }
-.backtest-date-box, .backtest-date-dropdown {
-    margin-top: 4px !important;
-    margin-bottom: 10px !important;
-}
-.backtest-date-box input, .backtest-date-box textarea,
-.backtest-date-dropdown input, .backtest-date-dropdown select,
-.backtest-date-dropdown button {
+.backtest-plain-input input,
+.backtest-plain-input textarea,
+.backtest-plain-select select,
+.backtest-plain-select input,
+.backtest-plain-select button,
+#bt-cutoff-date-input input,
+#bt-cash-toggle-input select,
+#bt-cash-toggle-input button,
+#bt-soft-signals-input select,
+#bt-soft-signals-input button {
+    min-height: 44px !important;
     background: #ffffff !important;
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
@@ -10621,69 +10556,100 @@ LAUNCH_CSS = """
     font-weight: 500 !important;
     padding: 10px 12px !important;
 }
-.backtest-date-box input::placeholder,
-.backtest-date-dropdown input::placeholder {
+.backtest-plain-input input::placeholder,
+#bt-cutoff-date-input input::placeholder {
     color: #94a3b8 !important;
     -webkit-text-fill-color: #94a3b8 !important;
     opacity: 1 !important;
 }
-.backtest-date-box label, .backtest-date-box .block-label, .backtest-date-box .label-wrap,
-.backtest-date-dropdown label, .backtest-date-dropdown .block-label, .backtest-date-dropdown .label-wrap {
+.backtest-plain-select .wrap,
+#bt-cash-toggle-input .wrap,
+#bt-soft-signals-input .wrap {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+}
+/* ── Upload widget: every inner element visible ─────────── */
+#csv-upload, #csv-upload * {
+    color: #334155 !important;
+    -webkit-text-fill-color: #334155 !important;
+    opacity: 1 !important;
+    text-shadow: none !important;
+}
+#csv-upload .block-label, #csv-upload label {
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
     font-weight: 600 !important;
     font-size: 13px !important;
 }
-.backtest-field-copy { color: #0f172a !important; opacity: 1 !important; margin-top: 6px !important; }
-.backtest-field-title { font-size: 15px !important; font-weight: 700 !important; color: #0f172a !important; }
-.backtest-field-sub { margin-top: 3px !important; font-size: 13px !important; color: #64748b !important; margin-bottom: 6px !important; }
-.backtest-toggle-select { margin: 0 0 6px 0 !important; }
-.backtest-toggle-select, .backtest-toggle-select * {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
+#csv-upload svg {
+    color: #3b82f6 !important;
     opacity: 1 !important;
 }
-.backtest-toggle-select input, .backtest-toggle-select select,
-.backtest-toggle-select button, .backtest-toggle-select .wrap,
-.backtest-toggle-select [data-testid] {
-    background: #ffffff !important;
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    border: 1px solid #e2e8f0 !important;
-    border-radius: 8px !important;
-    font-size: 14px !important;
-    font-weight: 500 !important;
-    box-shadow: none !important;
-    padding: 8px 10px !important;
+
+/* ── Dataset source radio: every inner element visible ──── */
+#dataset-source-radio, #dataset-source-radio * {
+    color: #334155 !important;
+    -webkit-text-fill-color: #334155 !important;
+    opacity: 1 !important;
+    text-shadow: none !important;
 }
-.backtest-toggle-select label, .backtest-toggle-select .block-label,
-.backtest-toggle-select .label-wrap, .backtest-toggle-select .wrap label {
+#dataset-source-radio .block-label, #dataset-source-radio label {
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
     font-weight: 600 !important;
     font-size: 13px !important;
 }
-/* ID-based overrides for bt dropdowns */
+#dataset-source-radio .info, #dataset-source-radio small {
+    color: #64748b !important;
+    -webkit-text-fill-color: #64748b !important;
+    font-size: 12px !important;
+}
+/* Selected radio option text */
+#dataset-source-radio input[type="radio"]:checked + span,
+#dataset-source-radio .selected span,
+#dataset-source-radio [aria-checked="true"] span {
+    color: #2563eb !important;
+    -webkit-text-fill-color: #2563eb !important;
+    font-weight: 600 !important;
+}
+
+/* ── Backtest dropdowns: all content visible ────────────── */
 #bt-cutoff-date .wrap, #bt-cash-toggle .wrap, #bt-soft-signals .wrap {
     border: 1px solid #e2e8f0 !important;
     border-radius: 8px !important;
-    background: #f8fafc !important;
+    background: #ffffff !important;
     padding: 2px 4px !important;
     min-height: 36px !important;
+}
+#bt-cutoff-date *, #bt-cash-toggle *, #bt-soft-signals * {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    opacity: 1 !important;
+    text-shadow: none !important;
+}
+#bt-cutoff-date .block-label, #bt-cash-toggle .block-label, #bt-soft-signals .block-label {
+    font-weight: 600 !important;
+    font-size: 13px !important;
+}
+#bt-cutoff-date .info, #bt-cash-toggle .info, #bt-soft-signals .info {
+    color: #64748b !important;
+    -webkit-text-fill-color: #64748b !important;
+    font-size: 12px !important;
 }
 #bt-cutoff-date input, #bt-cutoff-date select,
 #bt-cash-toggle input, #bt-cash-toggle select,
 #bt-soft-signals input, #bt-soft-signals select {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
     background: transparent !important;
     font-size: 13px !important;
+    font-weight: 500 !important;
 }
-#bt-cutoff-date .block-label, #bt-cash-toggle .block-label, #bt-soft-signals .block-label {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    font-weight: 600 !important;
-    font-size: 13px !important;
+#bt-cutoff-date svg, #bt-cash-toggle svg, #bt-soft-signals svg,
+#bt-cutoff-date svg *, #bt-cash-toggle svg *, #bt-soft-signals svg * {
+    color: #64748b !important;
+    stroke: #64748b !important;
+    opacity: 1 !important;
 }
 
 /* ── Responsive ─────────────────────────────────────────── */
