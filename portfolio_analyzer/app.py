@@ -9924,24 +9924,27 @@ def build_app() -> gr.Blocks:
                         ]
                         with gr.Row(equal_height=False):
                             with gr.Column(scale=1, min_width=300):
-                                with gr.Group():
+                                with gr.Group(elem_classes=["backtest-controls"]):
                                     backtest_cutoff_date = gr.Textbox(
                                         label="Backtest cutoff date",
                                         info="Type a YYYY-MM-DD date. The app rebuilds the portfolio exactly as it looked on that date.",
                                         value=(pd.Timestamp.today().normalize() - pd.Timedelta(days=180)).strftime("%Y-%m-%d"),
                                         placeholder="YYYY-MM-DD",
+                                        elem_id="bt-cutoff-date",
                                     )
                                     backtest_use_uninvested_cash = gr.Dropdown(
                                         label="Use uninvested available cash too",
                                         info="Yes adds idle cash on top of dollars freed by sell/trim actions.",
                                         choices=["No", "Yes"],
                                         value="No",
+                                        elem_id="bt-cash-toggle",
                                     )
                                     backtest_include_soft_signals = gr.Dropdown(
                                         label="Include soft signals in backtest",
                                         info="Yes also simulates modest trims for laggards that were just below the live action threshold.",
                                         choices=["No", "Yes"],
                                         value="No",
+                                        elem_id="bt-soft-signals",
                                     )
                                 run_backtest_btn = gr.Button("Run Backtest", variant="primary")
                             with gr.Column(scale=2, min_width=420):
