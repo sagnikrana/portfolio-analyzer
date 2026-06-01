@@ -2213,16 +2213,21 @@ def _plot_backtest_counterfactual(
 
     ignored = pd.to_numeric(timeline["Ignored recommendation path"], errors="coerce").ffill().fillna(0.0)
     followed = pd.to_numeric(timeline["Followed app path"], errors="coerce").ffill().fillna(0.0)
+    # Use a shared normalization base so both lines start at exactly 100 on the same date.
+    # Average of the two starting values handles any residual difference from data timing.
     start_ignored = float(ignored.iloc[0]) if len(ignored) else 0.0
     start_followed = float(followed.iloc[0]) if len(followed) else 0.0
-    ignored_index = np.where(start_ignored > 0, (ignored / start_ignored) * 100.0, 100.0)
-    followed_index = np.where(start_followed > 0, (followed / start_followed) * 100.0, 100.0)
+    norm_base = (start_ignored + start_followed) / 2.0 if (start_ignored > 0 and start_followed > 0) else max(start_ignored, start_followed)
+    if norm_base <= 0:
+        norm_base = 1.0
+    ignored_index = (ignored.to_numpy() / norm_base) * 100.0
+    followed_index = (followed.to_numpy() / norm_base) * 100.0
 
     fig = make_subplots(
         rows=1,
         cols=2,
-        column_widths=[0.76, 0.24],
-        horizontal_spacing=0.1,
+        column_widths=[0.7, 0.3],
+        horizontal_spacing=0.14,
         specs=[[{"type": "xy"}, {"type": "bar"}]],
         subplot_titles=(
             "Growth of the moved sleeve since the backtest date",
@@ -2235,7 +2240,7 @@ def _plot_backtest_counterfactual(
             y=ignored_index,
             mode="lines",
             name="Ignored recommendations",
-            line={"color": "#ef4444", "width": 3},
+            line={"color": "#ef4444", "width": 3, "dash": "dash"},
             customdata=np.column_stack([ignored.to_numpy()]),
             hovertemplate=(
                 "%{x|%Y-%m-%d}<br>"
@@ -2289,34 +2294,36 @@ def _plot_backtest_counterfactual(
     final_ignored = float(ignored.iloc[-1])
     final_app_index = float(followed_index[-1])
     final_ignored_index = float(ignored_index[-1])
-    color = "#15803d" if benefit >= 0 else "#b91c1c"
-    fig.add_annotation(
-        x=final_date,
-        y=final_app_index,
-        xref="x",
-        yref="y",
-        text=f"App: {final_app_index:.1f} | {money_text(final_app)}",
-        showarrow=True,
-        arrowhead=2,
-        ax=36,
-        ay=-28,
-        bgcolor="rgba(255,255,255,0.94)",
-        bordercolor="#2563eb",
-        font={"color": "#0f172a", "size": 12},
+    app_is_higher = final_app_index >= final_ignored_index
+    fig.add_trace(
+        go.Scatter(
+            x=[final_date],
+            y=[final_ignored_index],
+            mode="markers+text",
+            marker={"color": "#ef4444", "size": 10, "symbol": "circle"},
+            text=[f"  Ignored {final_ignored_index:.1f}"],
+            textposition="middle right",
+            textfont={"color": "#b91c1c", "size": 11},
+            hoverinfo="skip",
+            showlegend=False,
+        ),
+        row=1,
+        col=1,
     )
-    fig.add_annotation(
-        x=final_date,
-        y=final_ignored_index,
-        xref="x",
-        yref="y",
-        text=f"Ignored: {final_ignored_index:.1f} | {money_text(final_ignored)}",
-        showarrow=True,
-        arrowhead=2,
-        ax=36,
-        ay=28,
-        bgcolor="rgba(255,255,255,0.94)",
-        bordercolor="#ef4444",
-        font={"color": "#0f172a", "size": 12},
+    fig.add_trace(
+        go.Scatter(
+            x=[final_date],
+            y=[final_app_index],
+            mode="markers+text",
+            marker={"color": "#2563eb", "size": 10, "symbol": "circle"},
+            text=[f"  App {final_app_index:.1f}"],
+            textposition="middle right",
+            textfont={"color": "#1d4ed8", "size": 11},
+            hoverinfo="skip",
+            showlegend=False,
+        ),
+        row=1,
+        col=1,
     )
     fig.add_trace(
         go.Bar(
@@ -2332,23 +2339,34 @@ def _plot_backtest_counterfactual(
         col=2,
     )
     fig.update_layout(
-        title=f"Cost of ignoring recommendation: {money_text(abs(benefit))} {'missed' if benefit >= 0 else 'worse if followed'}",
-        height=520,
+        height=480,
         template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(248,250,252,0.94)",
         hovermode="x unified",
-        legend={"orientation": "h", "x": 1, "xanchor": "right", "y": 1.08, "yanchor": "bottom"},
-        margin={"l": 64, "r": 24, "t": 78, "b": 42},
+        legend={"orientation": "h", "x": 0.02, "xanchor": "left", "y": 1.06, "yanchor": "bottom"},
+        margin={"l": 64, "r": 110, "t": 60, "b": 42},
         font={"color": "#0f172a"},
     )
+    all_index_vals = list(ignored_index) + list(followed_index)
+    y_min = max(0.0, float(min(all_index_vals)) * 0.94)
+    y_max = float(max(all_index_vals)) * 1.06
+    # Extend x-axis slightly beyond the last data point so endpoint labels don't clip.
+    x_end = (pd.Timestamp(final_date) + pd.Timedelta(days=30)).strftime("%Y-%m-%d")
     fig.update_yaxes(
-        title_text="Index (100 = cutoff date sleeve)",
+        title_text="Index (100 = sleeve value at cutoff)",
+        range=[y_min, y_max],
         gridcolor="rgba(148,163,184,0.24)",
         row=1,
         col=1,
     )
-    fig.update_xaxes(title_text="Date", gridcolor="rgba(148,163,184,0.20)", row=1, col=1)
+    fig.update_xaxes(
+        title_text="Date",
+        range=[cutoff_x, x_end],
+        gridcolor="rgba(148,163,184,0.20)",
+        row=1,
+        col=1,
+    )
     fig.update_yaxes(
         title_text="Ending sleeve value",
         tickprefix="$",
@@ -2356,7 +2374,7 @@ def _plot_backtest_counterfactual(
         row=1,
         col=2,
     )
-    fig.update_xaxes(title_text="", row=1, col=2)
+    fig.update_xaxes(title_text="", tickangle=20, row=1, col=2)
     return fig
 
 
@@ -2556,6 +2574,7 @@ def run_backtest(
 
     buy_rows: list[dict[str, Any]] = []
     buy_components: dict[str, float] = {}
+    total_buy_allocated = 0.0
     for candidate, weight in candidate_weights:
         ticker = candidate.ticker
         if ticker not in close.columns:
@@ -2570,6 +2589,7 @@ def run_backtest(
         _end_date, end_price = _price_at_or_before(close[ticker], pd.Timestamp.today().normalize())
         forward_return = ((end_price / start_price) - 1.0) if end_price and start_price else None
         buy_components[ticker] = buy_components.get(ticker, 0.0) + shares
+        total_buy_allocated += allocation
         buy_rows.append(
             {
                 "Ticker": ticker,
@@ -2581,22 +2601,40 @@ def run_backtest(
                 "Why It Was Picked": candidate.why_it_fits,
             }
         )
+    # Cash not deployed because some candidates lacked price data stays flat (as if held in cash).
+    buy_undeployed_cash = max(deployable_cash - total_buy_allocated, 0.0)
 
     if not ignored_components or not buy_components:
         raise gr.Error("The backtest could not price enough sell and buy symbols after the selected cutoff date.")
+
+    def _ticker_prices_for_timeline(series: pd.Series) -> pd.Series:
+        """Return a clean price series aligned to the timeline index.
+
+        Early NaN values (before a ticker's first available price) are filled with
+        that first available price so neither path suffers from a shifted start date.
+        Remaining gaps are forward-filled and any residual NaN is zeroed out.
+        """
+        prices = pd.to_numeric(series, errors="coerce")
+        if prices.notna().any():
+            first_valid_price = float(prices.dropna().iloc[0])
+            prices = prices.fillna(first_valid_price)
+        return prices.ffill().fillna(0.0)
 
     timeline = pd.DataFrame(index=close.index[close.index >= cutoff_date])
     timeline["Ignored recommendation path"] = 0.0
     for ticker, shares in ignored_components.items():
         if ticker in close.columns:
-            timeline["Ignored recommendation path"] += pd.to_numeric(close.loc[timeline.index, ticker], errors="coerce").ffill() * shares
+            prices = _ticker_prices_for_timeline(close.loc[timeline.index, ticker])
+            timeline["Ignored recommendation path"] += prices * shares
     if use_uninvested_cash:
         timeline["Ignored recommendation path"] += idle_cash
 
-    timeline["Followed app path"] = 0.0
+    # Undeployed cash sits flat — ensures both paths start from the same total sleeve value.
+    timeline["Followed app path"] = buy_undeployed_cash
     for ticker, shares in buy_components.items():
         if ticker in close.columns:
-            timeline["Followed app path"] += pd.to_numeric(close.loc[timeline.index, ticker], errors="coerce").ffill() * shares
+            prices = _ticker_prices_for_timeline(close.loc[timeline.index, ticker])
+            timeline["Followed app path"] += prices * shares
     timeline = timeline.dropna(how="all").ffill().dropna()
     if timeline.empty:
         raise gr.Error("The backtest timeline was empty after pricing the selected symbols.")
@@ -9446,6 +9484,8 @@ def build_app() -> gr.Blocks:
 
     with gr.Blocks(
         title="Portfolio Analyzer Dashboard",
+        theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
+        css=LAUNCH_CSS,
     ) as demo:
         gr.Markdown(
             """
@@ -9761,56 +9801,40 @@ def build_app() -> gr.Blocks:
                             "and measure the cost of ignoring those sell and buy actions through today."
                             "</div></div>"
                         )
+                        recent_backtest_dates = [
+                            (pd.Timestamp.today().normalize() - pd.DateOffset(months=offset)).strftime("%Y-%m-%d")
+                            for offset in range(1, 25)
+                        ]
                         with gr.Row(equal_height=False):
-                            with gr.Column(scale=2, min_width=320, elem_classes=["backtest-controls"]):
-                                gr.HTML(
-                                    "<div class='backtest-field-copy'>"
-                                    "<div class='backtest-field-title'>Backtest cutoff date</div>"
-                                    "<div class='backtest-field-sub'>Use YYYY-MM-DD. The app rebuilds the portfolio exactly as it looked on that date.</div>"
-                                    "</div>"
-                                )
-                                recent_backtest_dates = [
-                                    (pd.Timestamp.today().normalize() - pd.DateOffset(months=offset)).strftime("%Y-%m-%d")
-                                    for offset in range(1, 25)
-                                ]
-                                backtest_cutoff_date = gr.Dropdown(
-                                    label="",
-                                    choices=recent_backtest_dates,
-                                    value=(pd.Timestamp.today().normalize() - pd.Timedelta(days=180)).strftime("%Y-%m-%d"),
-                                    allow_custom_value=True,
-                                    container=False,
-                                    elem_classes=["backtest-date-dropdown"],
-                                )
-                                gr.HTML(
-                                    "<div class='backtest-field-copy'>"
-                                    "<div class='backtest-field-title'>Use uninvested available cash too</div>"
-                                    "<div class='backtest-field-sub'>If set to Yes, the backtest adds idle cash on top of dollars freed by the app's sell or trim actions.</div>"
-                                    "</div>"
-                                )
-                                backtest_use_uninvested_cash = gr.Dropdown(
-                                    choices=["No", "Yes"],
-                                    value="No",
-                                    label="",
-                                    allow_custom_value=False,
-                                    container=False,
-                                    elem_classes=["backtest-toggle-select"],
-                                )
-                                gr.HTML(
-                                    "<div class='backtest-field-copy'>"
-                                    "<div class='backtest-field-title'>Include soft signals in backtest</div>"
-                                    "<div class='backtest-field-sub'>If set to Yes, the app also simulates modest trims for meaningful laggards that were still below the live action threshold.</div>"
-                                    "</div>"
-                                )
-                                backtest_include_soft_signals = gr.Dropdown(
-                                    choices=["No", "Yes"],
-                                    value="No",
-                                    label="",
-                                    allow_custom_value=False,
-                                    container=False,
-                                    elem_classes=["backtest-toggle-select"],
-                                )
+                            with gr.Column(scale=1, min_width=300):
+                                with gr.Group(elem_classes=["backtest-controls"]):
+                                    backtest_cutoff_date = gr.Dropdown(
+                                        label="Backtest cutoff date",
+                                        info="Select a month or type a custom YYYY-MM-DD date. The app rebuilds the portfolio exactly as it looked on that date.",
+                                        choices=recent_backtest_dates,
+                                        value=(pd.Timestamp.today().normalize() - pd.Timedelta(days=180)).strftime("%Y-%m-%d"),
+                                        allow_custom_value=True,
+                                        elem_id="bt-cutoff-date",
+                                        elem_classes=["backtest-date-dropdown"],
+                                    )
+                                    backtest_use_uninvested_cash = gr.Dropdown(
+                                        label="Use uninvested cash too",
+                                        info="Yes = backtest adds idle cash on top of dollars freed by sell/trim actions.",
+                                        choices=["No", "Yes"],
+                                        value="No",
+                                        elem_id="bt-cash-toggle",
+                                        elem_classes=["backtest-toggle-select"],
+                                    )
+                                    backtest_include_soft_signals = gr.Dropdown(
+                                        label="Include soft signals",
+                                        info="Yes = also simulates modest trims for laggards that were just below the live action threshold.",
+                                        choices=["No", "Yes"],
+                                        value="No",
+                                        elem_id="bt-soft-signals",
+                                        elem_classes=["backtest-toggle-select"],
+                                    )
                                 run_backtest_btn = gr.Button("Run Backtest", variant="primary")
-                            with gr.Column(scale=5, min_width=420):
+                            with gr.Column(scale=2, min_width=420):
                                 backtest_summary_md = gr.HTML(
                                     value=(
                                         "<div style='padding:18px;border:1px dashed rgba(148,163,184,.35);border-radius:18px;"
@@ -10494,12 +10518,19 @@ LAUNCH_CSS = """
     color: #64748b !important;
     -webkit-text-fill-color: #64748b !important;
 }
+.backtest-controls .wrap {
+    background: #ffffff !important;
+    border: 1.5px solid rgba(148,163,184,.45) !important;
+    border-radius: 10px !important;
+    padding: 2px !important;
+}
 .backtest-controls input,
 .backtest-controls textarea,
 .backtest-controls select {
     background: #ffffff !important;
     color: #0f172a !important;
-    border-color: rgba(148,163,184,.30) !important;
+    -webkit-text-fill-color: #0f172a !important;
+    border-color: transparent !important;
 }
 .backtest-date-box,
 .backtest-date-dropdown {
@@ -10558,7 +10589,26 @@ LAUNCH_CSS = """
     margin-bottom: 8px !important;
 }
 .backtest-toggle-select {
-    margin: 2px 0 10px 0 !important;
+    margin: 0 0 8px 0 !important;
+}
+.backtest-toggle-select input,
+.backtest-toggle-select select,
+.backtest-toggle-select button,
+.backtest-toggle-select .wrap {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    border: 2px solid rgba(148,163,184,.35) !important;
+    border-radius: 10px !important;
+    font-size: 15px !important;
+    font-weight: 600 !important;
+}
+.backtest-toggle-select label,
+.backtest-toggle-select .block-label,
+.backtest-toggle-select .label-wrap {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    font-weight: 750 !important;
 }
 .backtest-toggle-select,
 .backtest-toggle-select * {
@@ -10580,6 +10630,36 @@ LAUNCH_CSS = """
 .backtest-toggle-select label,
 .backtest-toggle-select .wrap label {
     font-weight: 700 !important;
+}
+/* High-specificity rules for the three backtest dropdowns via elem_id.
+   These override Gradio Soft theme's Svelte-scoped styles reliably. */
+#bt-cutoff-date .wrap,
+#bt-cash-toggle .wrap,
+#bt-soft-signals .wrap {
+    border: 1.5px solid #cbd5e1 !important;
+    border-radius: 8px !important;
+    background: #f8fafc !important;
+    padding: 2px 4px !important;
+    min-height: 38px !important;
+}
+#bt-cutoff-date input,
+#bt-cutoff-date select,
+#bt-cash-toggle input,
+#bt-cash-toggle select,
+#bt-soft-signals input,
+#bt-soft-signals select {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    background: transparent !important;
+    font-size: 14px !important;
+}
+#bt-cutoff-date .block-label,
+#bt-cash-toggle .block-label,
+#bt-soft-signals .block-label {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    font-weight: 700 !important;
+    font-size: 13px !important;
 }
 @media (max-width: 1200px) {
     .metric-strip {
@@ -10603,8 +10683,6 @@ def launch_app() -> None:
         server_name="127.0.0.1",
         server_port=7863,
         share=True,
-        theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
-        css=LAUNCH_CSS,
     )
 
 
