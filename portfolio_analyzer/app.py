@@ -17,6 +17,23 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
+
+try:
+    from portfolio_analyzer.tracker import (
+        init_db,
+        save_snapshot as tracker_save_snapshot,
+        upsert_transactions,
+        run_attribution,
+        build_history_html as tracker_build_history_html,
+    )
+except ModuleNotFoundError:
+    from tracker import (
+        init_db,
+        save_snapshot as tracker_save_snapshot,
+        upsert_transactions,
+        run_attribution,
+        build_history_html as tracker_build_history_html,
+    )
 import gradio as gr
 import numpy as np
 import pandas as pd
@@ -81,6 +98,7 @@ BUY_SERIES_CACHE_DIR = APP_CACHE_DIR / "buy_series"
 LLM_EXPLANATION_CACHE_DIR = APP_CACHE_DIR / "llm_explanations"
 BUY_CANDIDATE_UNIVERSE_PATH = RAW_DIR / "buy_candidate_universe.csv"
 BUY_CANDIDATE_UNIVERSE_ENRICHED_PATH = STRUCTURED_DIR / "buy_candidate_universe_enriched.csv"
+TRACKER_DB_PATH = DATA_DIR / "user_data" / "tracker.db"
 PRIMARY_LLM_MODEL = "llama3.3:latest"
 FALLBACK_LLM_MODEL = "llama3.1:latest"
 FAST_DEV_LLM_MODEL = "gemma:2b"
@@ -9467,6 +9485,74 @@ def run_analysis(
     )
 
 
+def tracker_save(username: str, diagnosis_state_val: dict | None, upload_path: str | None) -> tuple[str, str]:
+    """Save current analysis as a snapshot and refresh history."""
+    username = (username or "").strip()
+    if not username:
+        return (
+            "<div style='color:#dc2626;font-size:13px;padding:8px 12px;background:#fef2f2;border-radius:8px'>Enter a username before saving.</div>",
+            "",
+        )
+    if not diagnosis_state_val:
+        return (
+            "<div style='color:#dc2626;font-size:13px;padding:8px 12px;background:#fef2f2;border-radius:8px'>Run an analysis first — no diagnosis loaded.</div>",
+            "",
+        )
+
+    try:
+        from portfolio_analyzer.diagnosis import PortfolioRiskDiagnosis
+    except ModuleNotFoundError:
+        from diagnosis import PortfolioRiskDiagnosis
+
+    diagnosis = PortfolioRiskDiagnosis(**diagnosis_state_val)
+    tracker_save_snapshot(TRACKER_DB_PATH, username, diagnosis)
+
+    # Upsert transactions from the currently loaded CSV
+    if upload_path:
+        try:
+            txs = load_transactions(Path(upload_path))
+            n = upsert_transactions(TRACKER_DB_PATH, username, txs)
+            run_attribution(TRACKER_DB_PATH, username)
+            tx_note = f" {n} new trade(s) imported and attributed."
+        except Exception:
+            tx_note = ""
+    else:
+        tx_note = ""
+
+    status = (
+        f"<div style='color:#16a34a;font-size:13px;padding:8px 12px;background:#f0fdf4;border-radius:8px'>"
+        f"Snapshot saved for <strong>{username}</strong>.{tx_note}</div>"
+    )
+    history = tracker_build_history_html(TRACKER_DB_PATH, username)
+    return status, history
+
+
+def tracker_load_history(username: str, upload_path: str | None) -> tuple[str, str]:
+    """Load recommendation history for a given username."""
+    username = (username or "").strip()
+    if not username:
+        return (
+            "<div style='color:#dc2626;font-size:13px;padding:8px 12px;background:#fef2f2;border-radius:8px'>Enter a username to load history.</div>",
+            "",
+        )
+
+    # Upsert latest transactions to pick up any trades since last save
+    if upload_path:
+        try:
+            txs = load_transactions(Path(upload_path))
+            upsert_transactions(TRACKER_DB_PATH, username, txs)
+            run_attribution(TRACKER_DB_PATH, username)
+        except Exception:
+            pass
+
+    status = (
+        f"<div style='color:#0369a1;font-size:13px;padding:8px 12px;background:#f0f9ff;border-radius:8px'>"
+        f"History loaded for <strong>{username}</strong>.</div>"
+    )
+    history = tracker_build_history_html(TRACKER_DB_PATH, username)
+    return status, history
+
+
 def build_app() -> gr.Blocks:
     # Keep app boot light. The buy engine loads its candidate universe when
     # analysis/preferences run, not while the browser is mounting every tab.
@@ -9484,7 +9570,12 @@ def build_app() -> gr.Blocks:
 
     with gr.Blocks(
         title="Portfolio Analyzer Dashboard",
-        theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
+        theme=gr.themes.Soft(
+            primary_hue="blue",
+            secondary_hue="slate",
+            neutral_hue="slate",
+            font=gr.themes.GoogleFont("Inter"),
+        ),
         css=LAUNCH_CSS,
     ) as demo:
         gr.Markdown(
@@ -9861,6 +9952,27 @@ def build_app() -> gr.Blocks:
                     with gr.Tab("Next Steps", id="next-steps"):
                         next_steps_md = gr.HTML()
                         next_steps_df = gr.HTML()
+                        gr.HTML(
+                            "<hr style='margin:28px 0 20px;border:none;border-top:1px solid #e2e8f0'>"
+                            "<div style='font-size:17px;font-weight:800;color:#0f172a;margin-bottom:4px'>Recommendation Tracker</div>"
+                            "<div style='font-size:13px;color:#64748b;margin-bottom:14px'>"
+                            "Save a snapshot after each analysis to record what the app recommended. "
+                            "Upload your CSV and load history to see which trades matched the recommendations.</div>"
+                        )
+                        with gr.Row(equal_height=False):
+                            with gr.Column(scale=1, min_width=220):
+                                tracker_username = gr.Textbox(
+                                    label="Your username",
+                                    placeholder="e.g. sagnik",
+                                    max_lines=1,
+                                    elem_id="tracker-username",
+                                )
+                            with gr.Column(scale=1, min_width=160):
+                                tracker_save_btn = gr.Button("Save Snapshot", variant="primary")
+                            with gr.Column(scale=1, min_width=160):
+                                tracker_load_btn = gr.Button("Load My History", variant="secondary")
+                        tracker_status_md = gr.HTML()
+                        tracker_history_md = gr.HTML()
                     with gr.Group(visible=False):
                         risk_guide_md = gr.HTML()
                         holdings_df = gr.HTML(value=build_lightweight_table_html(None, "Open Holdings"))
@@ -10037,56 +10149,76 @@ def build_app() -> gr.Blocks:
                 show_progress="hidden",
             )
 
+        tracker_save_btn.click(
+            fn=tracker_save,
+            inputs=[tracker_username, diagnosis_state, upload_path_state],
+            outputs=[tracker_status_md, tracker_history_md],
+            show_progress="hidden",
+        )
+
+        tracker_load_btn.click(
+            fn=tracker_load_history,
+            inputs=[tracker_username, upload_path_state],
+            outputs=[tracker_status_md, tracker_history_md],
+            show_progress="hidden",
+        )
+
     return demo
 
 
 LAUNCH_CSS = """
+/* ── Root & container ───────────────────────────────────── */
 .gradio-container {
-    background:
-        radial-gradient(circle at top left, rgba(59,130,246,.16), transparent 25%),
-        radial-gradient(circle at top right, rgba(20,184,166,.12), transparent 28%),
-        linear-gradient(180deg, #f8fbff 0%, #eef4ff 54%, #f8fafc 100%) !important;
+    background: #f1f5f9 !important;
     color: #0f172a !important;
     max-width: 100vw !important;
-    padding-left: 18px !important;
-    padding-right: 18px !important;
+    padding: 0 20px 20px !important;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif !important;
 }
 .gradio-container [role="tablist"] {
     display: none !important;
 }
+
+/* ── App heading ────────────────────────────────────────── */
 .app-heading, .app-heading * {
     color: #0f172a !important;
     opacity: 1 !important;
 }
 .app-heading h1 {
-    margin-bottom: 6px !important;
-    letter-spacing: -.03em !important;
+    margin-bottom: 4px !important;
+    font-size: 22px !important;
+    font-weight: 700 !important;
+    letter-spacing: -.02em !important;
+    color: #0f172a !important;
 }
 .app-heading p {
-    color: #334155 !important;
-    font-size: 15px !important;
+    color: #475569 !important;
+    font-size: 14px !important;
     line-height: 1.5 !important;
+    margin: 0 !important;
 }
+
+/* ── Layout shell ───────────────────────────────────────── */
 .app-shell {
     width: 100% !important;
     max-width: 100% !important;
     margin: 0 !important;
     align-items: start !important;
+    gap: 16px !important;
 }
+
+/* ── Control rail (left sidebar) ───────────────────────── */
 .control-rail {
-    padding: 18px !important;
-    border: 1px solid rgba(148,163,184,.28) !important;
-    border-radius: 22px !important;
-    background:
-        radial-gradient(circle at 0% 0%, rgba(59,130,246,.10), transparent 28%),
-        linear-gradient(180deg, rgba(255,255,255,.99), rgba(248,250,252,.95)) !important;
-    box-shadow: 0 24px 60px rgba(15,23,42,.11) !important;
+    padding: 20px !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 16px !important;
+    background: #ffffff !important;
+    box-shadow: 0 1px 4px rgba(15,23,42,.06), 0 4px 12px rgba(15,23,42,.04) !important;
     --body-text-color: #0f172a !important;
-    --body-text-color-subdued: #475569 !important;
+    --body-text-color-subdued: #64748b !important;
     --block-title-text-color: #0f172a !important;
     --block-label-text-color: #0f172a !important;
     --input-text-color: #0f172a !important;
-    --button-secondary-text-color: #0f172a !important;
 }
 .control-rail, .control-rail * {
     color: #0f172a !important;
@@ -10098,120 +10230,82 @@ LAUNCH_CSS = """
 .control-rail .gr-form,
 .control-rail .gr-box,
 .control-rail fieldset {
-    background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.95)) !important;
-    border-color: rgba(148,163,184,.22) !important;
+    background: #ffffff !important;
+    border-color: #e2e8f0 !important;
     box-shadow: none !important;
 }
 .control-rail label,
 .control-rail .block-label,
 .control-rail .label-wrap {
     color: #0f172a !important;
-    font-weight: 850 !important;
-}
-.control-rail .info,
-.control-rail .secondary-wrap,
-.control-rail small {
-    color: #64748b !important;
-}
-.control-rail input,
-.control-rail textarea,
-.control-rail select {
-    background: #ffffff !important;
-    color: #0f172a !important;
-    border-color: rgba(148,163,184,.34) !important;
-}
-.control-rail button {
-    color: #0f172a !important;
-}
-.control-rail button.primary,
-.control-rail .gr-button-primary {
-    color: #ffffff !important;
-    background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
-    box-shadow: 0 14px 30px rgba(37,99,235,.25) !important;
-}
-.control-rail button.secondary,
-.control-rail .gr-button-secondary {
-    color: #334155 !important;
-    background: linear-gradient(180deg, #ffffff, #f8fafc) !important;
-}
-.control-rail [data-testid],
-.control-rail [data-testid] *,
-.control-rail .file-preview,
-.control-rail .file-preview *,
-.control-rail .file-name,
-.control-rail .file-name *,
-.control-rail .upload-container,
-.control-rail .upload-container *,
-.control-rail .file,
-.control-rail .file *,
-.control-rail .radio,
-.control-rail .radio *,
-.control-rail [role="radiogroup"],
-.control-rail [role="radiogroup"] *,
-.control-rail .wrap label,
-.control-rail .wrap label *,
-.control-rail .label-wrap,
-.control-rail .label-wrap *,
-.control-rail .info,
-.control-rail .info *,
-.control-rail .secondary-wrap,
-.control-rail .secondary-wrap * {
-    color: #0f172a !important;
-    opacity: 1 !important;
-    text-shadow: none !important;
+    font-weight: 600 !important;
+    font-size: 13px !important;
 }
 .control-rail .info,
 .control-rail .secondary-wrap,
 .control-rail .block-info,
 .control-rail small {
-    color: #475569 !important;
+    color: #64748b !important;
+    -webkit-text-fill-color: #64748b !important;
+    font-size: 12px !important;
+}
+.control-rail input,
+.control-rail textarea,
+.control-rail select {
+    background: #f8fafc !important;
+    color: #0f172a !important;
+    border-color: #e2e8f0 !important;
+}
+.control-rail [data-testid] *,
+.control-rail .file-preview *,
+.control-rail .file-name *,
+.control-rail .upload-container *,
+.control-rail .file *,
+.control-rail .radio *,
+.control-rail [role="radiogroup"] *,
+.control-rail .wrap label *,
+.control-rail .label-wrap *,
+.control-rail .info *,
+.control-rail .secondary-wrap * {
+    color: #0f172a !important;
+    opacity: 1 !important;
+    text-shadow: none !important;
 }
 .control-rail [aria-disabled="true"],
 .control-rail [aria-disabled="true"] *,
 .control-rail [disabled],
 .control-rail [disabled] *,
-.control-rail fieldset[disabled],
-.control-rail fieldset[disabled] *,
 .control-rail .disabled,
 .control-rail .disabled * {
-    color: #334155 !important;
+    color: #475569 !important;
     opacity: 1 !important;
-    -webkit-text-fill-color: #334155 !important;
+    -webkit-text-fill-color: #475569 !important;
 }
-.control-rail svg,
-.control-rail svg * {
-    color: #2563eb !important;
-    stroke: currentColor !important;
-}
+.control-rail svg { color: #3b82f6 !important; stroke: currentColor !important; }
+
+/* ── Upload & dataset source widgets ───────────────────── */
 .sidebar-upload,
 .sidebar-dataset-source {
-    background:
-        radial-gradient(circle at 0% 0%, rgba(59,130,246,.10), transparent 34%),
-        linear-gradient(180deg, #ffffff, #f8fbff) !important;
-    border: 1px solid rgba(148,163,184,.24) !important;
-    border-radius: 18px !important;
-    box-shadow: 0 12px 28px rgba(15,23,42,.06) !important;
+    background: #f8fafc !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 12px !important;
+    box-shadow: none !important;
     opacity: 1 !important;
 }
-.sidebar-upload *,
-.sidebar-dataset-source * {
+.sidebar-upload *, .sidebar-dataset-source * {
     color: #0f172a !important;
     opacity: 1 !important;
     text-shadow: none !important;
     -webkit-text-fill-color: #0f172a !important;
 }
-.sidebar-upload label,
-.sidebar-upload .label-wrap,
-.sidebar-upload .block-label,
-.sidebar-dataset-source label,
-.sidebar-dataset-source .label-wrap,
-.sidebar-dataset-source .block-label {
+.sidebar-upload label, .sidebar-upload .label-wrap, .sidebar-upload .block-label,
+.sidebar-dataset-source label, .sidebar-dataset-source .label-wrap, .sidebar-dataset-source .block-label {
     color: #0f172a !important;
-    background: #dbeafe !important;
-    border-radius: 9px !important;
-    padding: 4px 8px !important;
-    width: fit-content !important;
-    font-weight: 900 !important;
+    background: transparent !important;
+    font-weight: 600 !important;
+    font-size: 13px !important;
+    padding: 0 !important;
+    border: none !important;
 }
 .sidebar-upload [class*="drop"],
 .sidebar-upload [class*="upload"],
@@ -10221,240 +10315,43 @@ LAUNCH_CSS = """
 .sidebar-dataset-source [data-testid] {
     background: #ffffff !important;
     color: #0f172a !important;
-    border-color: rgba(148,163,184,.24) !important;
+    border-color: #e2e8f0 !important;
     opacity: 1 !important;
     -webkit-text-fill-color: #0f172a !important;
 }
 .sidebar-dataset-source .info,
 .sidebar-dataset-source .block-info,
 .sidebar-dataset-source small {
-    color: #475569 !important;
-    -webkit-text-fill-color: #475569 !important;
+    color: #64748b !important;
+    -webkit-text-fill-color: #64748b !important;
 }
-.sidebar-upload button,
-.sidebar-dataset-source button {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-}
-.sidebar-upload button.primary,
-.sidebar-dataset-source button.primary,
-.sidebar-upload .selected,
-.sidebar-dataset-source .selected {
-    color: #ffffff !important;
-    -webkit-text-fill-color: #ffffff !important;
-}
-.content-rail {
-    width: 100% !important;
-    padding: 8px 0 0 !important;
-}
-.summary-cards-wrap {
-    padding: 16px !important;
-    border: 1px solid rgba(96,165,250,.18) !important;
-    border-radius: 28px !important;
-    background:
-        radial-gradient(circle at 10% 0%, rgba(59,130,246,.12), transparent 34%),
-        radial-gradient(circle at 92% 18%, rgba(20,184,166,.10), transparent 32%),
-        linear-gradient(135deg, rgba(255,255,255,.94), rgba(239,246,255,.76)) !important;
-    box-shadow: 0 22px 54px rgba(15,23,42,.10) !important;
-}
-.metric-strip {
-    display: grid !important;
-    grid-template-columns: repeat(3, minmax(220px, 1fr)) !important;
-    gap: 16px !important;
-    width: 100% !important;
-    align-items: stretch !important;
-}
-.metric-card {
-    position: relative !important;
-    isolation: isolate !important;
-    min-height: 128px !important;
-    border-radius: 20px !important;
-    background:
-        linear-gradient(145deg, rgba(255,255,255,.99), rgba(239,246,255,.92)) !important;
-    border: 1px solid rgba(96,165,250,.24) !important;
-    box-shadow: 0 18px 42px rgba(30,64,175,.10) !important;
-    transition: transform .18s ease, box-shadow .18s ease !important;
-}
-.metric-card::before {
-    content: "";
-    position: absolute;
-    inset: 0 auto 0 0;
-    width: 5px;
-    background: linear-gradient(180deg, #2563eb, #38bdf8);
-    z-index: 0;
-}
-.metric-card::after {
-    content: "";
-    position: absolute;
-    right: -44px;
-    top: -52px;
-    width: 150px;
-    height: 150px;
-    border-radius: 999px;
-    background: radial-gradient(circle, rgba(59,130,246,.14), transparent 68%);
-    z-index: 0;
-}
-.metric-card-label,
-.metric-card-value,
-.metric-card > div {
-    position: relative !important;
-    z-index: 1 !important;
-}
-.metric-card-label {
-    color: #2563eb !important;
-    font-weight: 900 !important;
-}
-.metric-card-value {
-    color: #0f172a !important;
-    font-size: 30px !important;
-    font-weight: 900 !important;
-}
-.metric-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 22px 52px rgba(30,64,175,.14) !important;
-}
-.sidebar-notes {
-    margin-top: 14px !important;
-    padding: 16px 18px !important;
-    border: 1px solid rgba(148,163,184,.22) !important;
-    border-radius: 18px !important;
-    background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.94)) !important;
-    box-shadow: 0 12px 28px rgba(15,23,42,.06) !important;
-}
-.sidebar-notes, .sidebar-notes * {
-    color: #0f172a !important;
-    opacity: 1 !important;
-}
-.sidebar-notes strong {
-    color: #111827 !important;
-    font-weight: 850 !important;
-}
-.sidebar-notes li {
-    color: #334155 !important;
-    margin: 5px 0 !important;
-}
-.sidebar-notes code {
-    color: #0f172a !important;
-    background: #f1f5f9 !important;
-    border: 1px solid rgba(148,163,184,.32) !important;
-    border-radius: 6px !important;
-    padding: 1px 6px !important;
-}
-.sidebar-notes .advice-warning,
-.sidebar-notes .advice-warning * {
-    color: #991b1b !important;
-}
-.side-section-nav {
-    margin-top: 16px !important;
-    padding: 16px !important;
-    border-radius: 20px !important;
-    background:
-        radial-gradient(circle at 0% 0%, rgba(59,130,246,.12), transparent 34%),
-        linear-gradient(180deg, rgba(255,255,255,.99), rgba(248,250,252,.96)) !important;
-    border: 1px solid rgba(148,163,184,.26) !important;
-    box-shadow: 0 18px 42px rgba(15,23,42,.08) !important;
-}
-.side-section-nav, .side-section-nav * {
-    color: #0f172a !important;
-    opacity: 1 !important;
-}
-.side-section-nav .block,
-.side-section-nav .wrap,
-.side-section-nav .form,
-.side-section-nav .gr-form,
-.side-section-nav .gr-box {
-    background: transparent !important;
-    border-color: transparent !important;
-    box-shadow: none !important;
-}
-.side-section-nav strong {
-    display: block !important;
-    color: #2563eb !important;
-    font-size: 12px !important;
-    letter-spacing: .11em !important;
-    text-transform: uppercase !important;
-    font-weight: 900 !important;
-    margin-bottom: 10px !important;
-}
-.side-section-nav button {
-    display: flex !important;
-    width: 100% !important;
-    justify-content: flex-start !important;
-    align-items: center !important;
-    text-align: left !important;
-    margin: 6px 0 !important;
-    border-radius: 14px !important;
-    padding: 11px 14px 11px 18px !important;
-    background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96)) !important;
-    color: #334155 !important;
-    border: 1px solid rgba(148,163,184,.24) !important;
-    font-weight: 750 !important;
-    box-shadow: 0 8px 18px rgba(15,23,42,.04) !important;
-    position: relative !important;
-    overflow: hidden !important;
-}
-.side-section-nav button::before {
-    content: "";
-    position: absolute;
-    inset: 9px auto 9px 0;
-    width: 4px;
-    border-radius: 999px;
-    background: linear-gradient(180deg, #3b82f6, #60a5fa);
-}
-.side-section-nav button:hover {
-    background: linear-gradient(180deg, rgba(219,234,254,.98), rgba(239,246,255,.94)) !important;
-    color: #1d4ed8 !important;
-    border-color: rgba(37,99,235,.30) !important;
-}
-.gradio-container button.primary,
-.gradio-container .gr-button-primary {
-    background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
-    color: #ffffff !important;
-    border-color: rgba(29,78,216,.34) !important;
-}
-.gradio-container button.secondary,
-.gradio-container .gr-button-secondary {
+.control-rail .sidebar-upload, .control-rail .sidebar-dataset-source {
     background: #f8fafc !important;
-    color: #334155 !important;
-    border-color: rgba(148,163,184,.34) !important;
-}
-/* Final sidebar input rescue: Gradio's native file/radio widgets can inherit
-   washed-out disabled styles during processing, so make them explicitly dark
-   and high-contrast. */
-.control-rail .sidebar-upload,
-.control-rail .sidebar-dataset-source {
-    background:
-        radial-gradient(circle at 12% 0%, rgba(96,165,250,.28), transparent 34%),
-        linear-gradient(145deg, #0f172a 0%, #1e293b 100%) !important;
-    border: 1px solid rgba(96,165,250,.42) !important;
-    border-radius: 18px !important;
-    box-shadow: 0 16px 38px rgba(15,23,42,.20) !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 12px !important;
+    box-shadow: none !important;
     opacity: 1 !important;
     filter: none !important;
 }
-.control-rail .sidebar-upload,
-.control-rail .sidebar-upload *,
-.control-rail .sidebar-dataset-source,
-.control-rail .sidebar-dataset-source * {
-    color: #f8fafc !important;
-    -webkit-text-fill-color: #f8fafc !important;
+.control-rail .sidebar-upload, .control-rail .sidebar-upload *,
+.control-rail .sidebar-dataset-source, .control-rail .sidebar-dataset-source * {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
     opacity: 1 !important;
     filter: none !important;
     text-shadow: none !important;
 }
-.control-rail .sidebar-upload label,
-.control-rail .sidebar-upload .block-label,
+.control-rail .sidebar-upload label, .control-rail .sidebar-upload .block-label,
 .control-rail .sidebar-upload .label-wrap,
-.control-rail .sidebar-dataset-source label,
-.control-rail .sidebar-dataset-source .block-label,
+.control-rail .sidebar-dataset-source label, .control-rail .sidebar-dataset-source .block-label,
 .control-rail .sidebar-dataset-source .label-wrap {
-    color: #f8fafc !important;
-    -webkit-text-fill-color: #f8fafc !important;
-    background: rgba(37,99,235,.55) !important;
-    border: 1px solid rgba(147,197,253,.38) !important;
-    border-radius: 10px !important;
-    padding: 5px 9px !important;
-    font-weight: 900 !important;
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    font-weight: 600 !important;
+    font-size: 13px !important;
 }
 .control-rail .sidebar-upload [data-testid],
 .control-rail .sidebar-upload [class*="drop"],
@@ -10463,49 +10360,224 @@ LAUNCH_CSS = """
 .control-rail .sidebar-dataset-source [data-testid],
 .control-rail .sidebar-dataset-source [role="radiogroup"],
 .control-rail .sidebar-dataset-source .wrap {
-    background: rgba(15,23,42,.62) !important;
-    border-color: rgba(147,197,253,.30) !important;
-    color: #f8fafc !important;
-    -webkit-text-fill-color: #f8fafc !important;
+    background: #ffffff !important;
+    border-color: #e2e8f0 !important;
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
     opacity: 1 !important;
     filter: none !important;
 }
 .control-rail .sidebar-dataset-source .info,
 .control-rail .sidebar-dataset-source .block-info,
 .control-rail .sidebar-dataset-source small {
-    color: #cbd5e1 !important;
-    -webkit-text-fill-color: #cbd5e1 !important;
+    color: #64748b !important;
+    -webkit-text-fill-color: #64748b !important;
 }
 .control-rail .sidebar-upload button,
 .control-rail .sidebar-dataset-source button {
-    color: #f8fafc !important;
-    -webkit-text-fill-color: #f8fafc !important;
-    background: rgba(30,41,59,.90) !important;
-    border-color: rgba(147,197,253,.32) !important;
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    background: #ffffff !important;
+    border-color: #e2e8f0 !important;
 }
 .control-rail .sidebar-upload button.primary,
 .control-rail .sidebar-dataset-source button.primary,
 .control-rail .sidebar-upload .selected,
 .control-rail .sidebar-dataset-source .selected {
-    background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
+    background: #2563eb !important;
     color: #ffffff !important;
     -webkit-text-fill-color: #ffffff !important;
 }
 .control-rail .sidebar-upload svg,
 .control-rail .sidebar-dataset-source svg {
-    color: #93c5fd !important;
+    color: #3b82f6 !important;
     stroke: currentColor !important;
     opacity: 1 !important;
 }
-.backtest-controls {
-    padding: 12px !important;
-    border: 1px solid rgba(148,163,184,.18) !important;
-    border-radius: 18px !important;
-    background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.95)) !important;
-    box-shadow: 0 12px 28px rgba(15,23,42,.05) !important;
+
+/* ── Buttons (global) ───────────────────────────────────── */
+.gradio-container button.primary,
+.gradio-container .gr-button-primary {
+    background: #2563eb !important;
+    color: #ffffff !important;
+    border-color: #2563eb !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    box-shadow: 0 1px 3px rgba(37,99,235,.25) !important;
 }
-.backtest-controls,
-.backtest-controls * {
+.gradio-container button.primary:hover,
+.gradio-container .gr-button-primary:hover {
+    background: #1d4ed8 !important;
+}
+.gradio-container button.secondary,
+.gradio-container .gr-button-secondary {
+    background: #ffffff !important;
+    color: #334155 !important;
+    border-color: #e2e8f0 !important;
+    border-radius: 8px !important;
+    font-weight: 500 !important;
+}
+.gradio-container button.secondary:hover,
+.gradio-container .gr-button-secondary:hover {
+    background: #f8fafc !important;
+    border-color: #cbd5e1 !important;
+}
+
+/* ── Sidebar notes block ────────────────────────────────── */
+.sidebar-notes {
+    margin-top: 12px !important;
+    padding: 14px 16px !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 12px !important;
+    background: #f8fafc !important;
+    box-shadow: none !important;
+}
+.sidebar-notes, .sidebar-notes * { color: #334155 !important; opacity: 1 !important; }
+.sidebar-notes strong { color: #0f172a !important; font-weight: 600 !important; }
+.sidebar-notes li { color: #475569 !important; margin: 4px 0 !important; font-size: 13px !important; }
+.sidebar-notes code {
+    color: #0f172a !important;
+    background: #f1f5f9 !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 4px !important;
+    padding: 1px 5px !important;
+    font-size: 12px !important;
+}
+.sidebar-notes .advice-warning,
+.sidebar-notes .advice-warning * { color: #991b1b !important; }
+
+/* ── Section navigation ─────────────────────────────────── */
+.side-section-nav {
+    margin-top: 12px !important;
+    padding: 14px !important;
+    border-radius: 12px !important;
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: none !important;
+}
+.side-section-nav, .side-section-nav * { color: #0f172a !important; opacity: 1 !important; }
+.side-section-nav .block, .side-section-nav .wrap,
+.side-section-nav .form, .side-section-nav .gr-form, .side-section-nav .gr-box {
+    background: transparent !important;
+    border-color: transparent !important;
+    box-shadow: none !important;
+}
+.side-section-nav strong {
+    display: block !important;
+    color: #64748b !important;
+    font-size: 11px !important;
+    letter-spacing: .08em !important;
+    text-transform: uppercase !important;
+    font-weight: 700 !important;
+    margin-bottom: 8px !important;
+}
+.side-section-nav button {
+    display: flex !important;
+    width: 100% !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+    text-align: left !important;
+    margin: 3px 0 !important;
+    border-radius: 8px !important;
+    padding: 9px 12px !important;
+    background: transparent !important;
+    color: #475569 !important;
+    border: 1px solid transparent !important;
+    font-weight: 500 !important;
+    font-size: 13px !important;
+    box-shadow: none !important;
+    position: relative !important;
+    overflow: hidden !important;
+    transition: background .12s, color .12s !important;
+}
+.side-section-nav button::before {
+    content: "";
+    position: absolute;
+    inset: 6px auto 6px 0;
+    width: 3px;
+    border-radius: 999px;
+    background: #3b82f6;
+    opacity: 0;
+    transition: opacity .12s;
+}
+.side-section-nav button:hover {
+    background: #eff6ff !important;
+    color: #1d4ed8 !important;
+    border-color: transparent !important;
+}
+.side-section-nav button:hover::before { opacity: 1 !important; }
+
+/* ── Content rail ───────────────────────────────────────── */
+.content-rail {
+    width: 100% !important;
+    padding: 0 !important;
+}
+
+/* ── Overview metric strip ──────────────────────────────── */
+.summary-cards-wrap {
+    padding: 16px !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 16px !important;
+    background: #ffffff !important;
+    box-shadow: 0 1px 4px rgba(15,23,42,.06) !important;
+}
+.metric-strip {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(200px, 1fr)) !important;
+    gap: 12px !important;
+    width: 100% !important;
+    align-items: stretch !important;
+}
+.metric-card {
+    position: relative !important;
+    isolation: isolate !important;
+    min-height: 110px !important;
+    border-radius: 12px !important;
+    background: #f8fafc !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: none !important;
+    transition: box-shadow .15s ease, border-color .15s ease !important;
+    overflow: hidden !important;
+}
+.metric-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 4px;
+    background: #3b82f6;
+}
+.metric-card::after { display: none !important; }
+.metric-card-label, .metric-card-value, .metric-card > div {
+    position: relative !important;
+    z-index: 1 !important;
+}
+.metric-card-label {
+    color: #2563eb !important;
+    font-weight: 600 !important;
+    font-size: 12px !important;
+    text-transform: uppercase !important;
+    letter-spacing: .04em !important;
+}
+.metric-card-value {
+    color: #0f172a !important;
+    font-size: 26px !important;
+    font-weight: 700 !important;
+    letter-spacing: -.02em !important;
+}
+.metric-card:hover {
+    box-shadow: 0 4px 12px rgba(37,99,235,.10) !important;
+    border-color: #bfdbfe !important;
+}
+
+/* ── Backtest controls ──────────────────────────────────── */
+.backtest-controls {
+    padding: 14px !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 12px !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+}
+.backtest-controls, .backtest-controls * {
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
     opacity: 1 !important;
@@ -10519,9 +10591,9 @@ LAUNCH_CSS = """
     -webkit-text-fill-color: #64748b !important;
 }
 .backtest-controls .wrap {
-    background: #ffffff !important;
-    border: 1.5px solid rgba(148,163,184,.45) !important;
-    border-radius: 10px !important;
+    background: #f8fafc !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px !important;
     padding: 2px !important;
 }
 .backtest-controls input,
@@ -10532,149 +10604,100 @@ LAUNCH_CSS = """
     -webkit-text-fill-color: #0f172a !important;
     border-color: transparent !important;
 }
-.backtest-date-box,
-.backtest-date-dropdown {
-    margin-top: 6px !important;
-    margin-bottom: 12px !important;
+.backtest-date-box, .backtest-date-dropdown {
+    margin-top: 4px !important;
+    margin-bottom: 10px !important;
 }
-.backtest-date-box input,
-.backtest-date-box textarea,
-.backtest-date-dropdown input,
-.backtest-date-dropdown select,
+.backtest-date-box input, .backtest-date-box textarea,
+.backtest-date-dropdown input, .backtest-date-dropdown select,
 .backtest-date-dropdown button {
     background: #ffffff !important;
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
-    border: 2px solid rgba(37,99,235,.28) !important;
-    border-radius: 14px !important;
-    box-shadow: 0 8px 20px rgba(37,99,235,.08) !important;
-    font-size: 16px !important;
-    font-weight: 700 !important;
-    padding: 12px 14px !important;
+    border: 1.5px solid #cbd5e1 !important;
+    border-radius: 8px !important;
+    box-shadow: none !important;
+    font-size: 14px !important;
+    font-weight: 500 !important;
+    padding: 10px 12px !important;
 }
 .backtest-date-box input::placeholder,
-.backtest-date-box textarea::placeholder,
 .backtest-date-dropdown input::placeholder {
     color: #94a3b8 !important;
     -webkit-text-fill-color: #94a3b8 !important;
     opacity: 1 !important;
 }
-.backtest-date-box label,
-.backtest-date-box .block-label,
-.backtest-date-box .label-wrap,
-.backtest-date-dropdown label,
-.backtest-date-dropdown .block-label,
-.backtest-date-dropdown .label-wrap {
+.backtest-date-box label, .backtest-date-box .block-label, .backtest-date-box .label-wrap,
+.backtest-date-dropdown label, .backtest-date-dropdown .block-label, .backtest-date-dropdown .label-wrap {
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
-    font-weight: 850 !important;
-}
-.backtest-field-copy {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    opacity: 1 !important;
-    margin-top: 8px !important;
-}
-.backtest-field-title {
-    font-size: 16px !important;
-    font-weight: 800 !important;
-    line-height: 1.35 !important;
-    color: #0f172a !important;
-}
-.backtest-field-sub {
-    margin-top: 4px !important;
-    font-size: 13px !important;
-    line-height: 1.45 !important;
-    color: #64748b !important;
-    margin-bottom: 8px !important;
-}
-.backtest-toggle-select {
-    margin: 0 0 8px 0 !important;
-}
-.backtest-toggle-select input,
-.backtest-toggle-select select,
-.backtest-toggle-select button,
-.backtest-toggle-select .wrap {
-    background: #ffffff !important;
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    border: 2px solid rgba(148,163,184,.35) !important;
-    border-radius: 10px !important;
-    font-size: 15px !important;
     font-weight: 600 !important;
+    font-size: 13px !important;
 }
-.backtest-toggle-select label,
-.backtest-toggle-select .block-label,
-.backtest-toggle-select .label-wrap {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    font-weight: 750 !important;
-}
-.backtest-toggle-select,
-.backtest-toggle-select * {
+.backtest-field-copy { color: #0f172a !important; opacity: 1 !important; margin-top: 6px !important; }
+.backtest-field-title { font-size: 15px !important; font-weight: 700 !important; color: #0f172a !important; }
+.backtest-field-sub { margin-top: 3px !important; font-size: 13px !important; color: #64748b !important; margin-bottom: 6px !important; }
+.backtest-toggle-select { margin: 0 0 6px 0 !important; }
+.backtest-toggle-select, .backtest-toggle-select * {
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
     opacity: 1 !important;
 }
-.backtest-toggle-select .wrap,
-.backtest-toggle-select [data-testid],
-.backtest-toggle-select select,
-.backtest-toggle-select input,
-.backtest-toggle-select button {
+.backtest-toggle-select input, .backtest-toggle-select select,
+.backtest-toggle-select button, .backtest-toggle-select .wrap,
+.backtest-toggle-select [data-testid] {
     background: #ffffff !important;
-    border: 1px solid rgba(148,163,184,.22) !important;
-    border-radius: 14px !important;
-    box-shadow: 0 8px 18px rgba(15,23,42,.05) !important;
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+    font-size: 14px !important;
+    font-weight: 500 !important;
+    box-shadow: none !important;
     padding: 8px 10px !important;
 }
-.backtest-toggle-select label,
-.backtest-toggle-select .wrap label {
-    font-weight: 700 !important;
+.backtest-toggle-select label, .backtest-toggle-select .block-label,
+.backtest-toggle-select .label-wrap, .backtest-toggle-select .wrap label {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    font-weight: 600 !important;
+    font-size: 13px !important;
 }
-/* High-specificity rules for the three backtest dropdowns via elem_id.
-   These override Gradio Soft theme's Svelte-scoped styles reliably. */
-#bt-cutoff-date .wrap,
-#bt-cash-toggle .wrap,
-#bt-soft-signals .wrap {
-    border: 1.5px solid #cbd5e1 !important;
+/* ID-based overrides for bt dropdowns */
+#bt-cutoff-date .wrap, #bt-cash-toggle .wrap, #bt-soft-signals .wrap {
+    border: 1px solid #e2e8f0 !important;
     border-radius: 8px !important;
     background: #f8fafc !important;
     padding: 2px 4px !important;
-    min-height: 38px !important;
+    min-height: 36px !important;
 }
-#bt-cutoff-date input,
-#bt-cutoff-date select,
-#bt-cash-toggle input,
-#bt-cash-toggle select,
-#bt-soft-signals input,
-#bt-soft-signals select {
+#bt-cutoff-date input, #bt-cutoff-date select,
+#bt-cash-toggle input, #bt-cash-toggle select,
+#bt-soft-signals input, #bt-soft-signals select {
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
     background: transparent !important;
-    font-size: 14px !important;
-}
-#bt-cutoff-date .block-label,
-#bt-cash-toggle .block-label,
-#bt-soft-signals .block-label {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-    font-weight: 700 !important;
     font-size: 13px !important;
 }
+#bt-cutoff-date .block-label, #bt-cash-toggle .block-label, #bt-soft-signals .block-label {
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    font-weight: 600 !important;
+    font-size: 13px !important;
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
 @media (max-width: 1200px) {
-    .metric-strip {
-        grid-template-columns: repeat(2, minmax(220px, 1fr)) !important;
-    }
+    .metric-strip { grid-template-columns: repeat(2, minmax(200px, 1fr)) !important; }
 }
 @media (max-width: 820px) {
-    .metric-strip {
-        grid-template-columns: 1fr !important;
-    }
+    .metric-strip { grid-template-columns: 1fr !important; }
 }
 """
 
 
 def launch_app() -> None:
+    init_db(TRACKER_DB_PATH)
     app = build_app()
     app.queue(status_update_rate=0.5)
     # Default to local launch so the dashboard reliably binds to the configured port without
