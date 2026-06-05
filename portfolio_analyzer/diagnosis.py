@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -1345,9 +1345,12 @@ def _build_macro_context(bundle: dict[str, Any]) -> Optional[MacroRegimeSnapshot
     if len(cpi) >= 13:
         latest = cpi.iloc[-1]
         prior = cpi[cpi["date"] <= latest["date"] - pd.DateOffset(years=1)]
-        if not prior.empty and prior.iloc[-1]["value"] not in (0, None):
-            inflation_yoy = (_safe_float(latest["value"]) / _safe_float(prior.iloc[-1]["value"])) - 1
-            cpi_date = latest["date"]
+        if not prior.empty:
+            prior_val = _safe_float(prior.iloc[-1]["value"])
+            latest_val = _safe_float(latest["value"])
+            if prior_val is not None and prior_val != 0 and latest_val is not None:
+                inflation_yoy = (latest_val / prior_val) - 1
+                cpi_date = latest["date"]
 
     yield_curve_spread = None
     if ten_year_yield is not None and two_year_yield is not None:

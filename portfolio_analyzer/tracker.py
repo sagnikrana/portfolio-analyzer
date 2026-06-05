@@ -221,8 +221,7 @@ def run_attribution(db_path: Path, username: str) -> None:
             if not (snap["snapshot_date"] <= tx_date <= snap["expiry_date"]):
                 continue
 
-            # Check if any recommendation in this snapshot matches
-            expected_action = "buy" if tx_action == _TRANS_BUY else None  # sell or trim both map to Sell in CSV
+            # Check if any recommendation in this snapshot matches this trade
             if tx_action == _TRANS_SELL:
                 recs = con.execute(
                     "SELECT 1 FROM recommendations WHERE snapshot_id=? AND ticker=? AND action IN ('sell','trim')",

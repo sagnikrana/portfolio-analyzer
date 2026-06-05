@@ -9650,7 +9650,6 @@ def build_app() -> gr.Blocks:
                 upload = gr.File(
                     label="Robinhood CSV",
                     file_types=[".csv"],
-                    type="filepath",
                     elem_id="csv-upload-input",
                 )
                 dataset_source = gr.Dropdown(
