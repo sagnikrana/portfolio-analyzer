@@ -9654,8 +9654,8 @@ def run_analysis(
         prefer_low_expense_for_dividend_etfs,
         include_existing_holdings,
         gr.update(
-            choices=BUY_IDEA_LIMIT_CHOICES,
-            value=min(BUY_IDEA_LIMIT_CHOICES, key=lambda choice: abs(choice - buy_idea_limit)),
+            choices=[str(c) for c in BUY_IDEA_LIMIT_CHOICES],
+            value=str(min(BUY_IDEA_LIMIT_CHOICES, key=lambda choice: abs(choice - buy_idea_limit))),
         ),
         build_lightweight_table_html(diagnosis_supporting_metrics_df, "Supporting Evidence"),
         build_lightweight_table_html(diagnosis_holding_fundamentals_df, "Holding Fundamentals"),
@@ -10070,8 +10070,8 @@ def build_app() -> gr.Blocks:
                                 )
                                 buy_idea_limit = gr.Dropdown(
                                     label="How many buy ideas should we show?",
-                                    choices=BUY_IDEA_LIMIT_CHOICES,
-                                    value=10,
+                                    choices=[str(c) for c in BUY_IDEA_LIMIT_CHOICES],
+                                    value="10",
                                     info="Controls how many ranked buy ideas are generated and shown as detailed cards/charts (up to 30). Higher values render more charts and can load slower.",
                                 )
                                 apply_buy_preferences_btn = gr.Button("Apply Buy Preferences", variant="primary")
