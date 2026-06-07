@@ -121,9 +121,9 @@ RISK_CHART_START_DATE = "2024-01-01"
 WEEKLY_FLOW_DOMINANCE_LIMIT = 0.25
 MAX_STABLE_WEEKLY_RETURN = 0.75
 # Rendering many Plotly charts in one Gradio update can lock the browser tab.
-# Keep the detailed card/chart view demo-safe; the full ranked table still
-# carries the broader candidate list.
-MAX_FEATURED_BUY_IDEA_COUNT = 5
+# Detailed buy-idea cards/charts can be shown up to this many; the full ranked
+# table carries the broader candidate list.
+MAX_FEATURED_BUY_IDEA_COUNT = 30
 BACKTEST_BUY_IDEA_COUNT = 15
 MAX_FEATURED_RISK_ACTION_COUNT = 5
 
@@ -9929,9 +9929,9 @@ def build_app() -> gr.Blocks:
                                 )
                                 buy_idea_limit = gr.Dropdown(
                                     label="How many buy ideas should we show?",
-                                    choices=[5],
-                                    value=5,
-                                    info="For demo stability, detailed cards and charts are capped at 5. The full ranked table still shows the broader list.",
+                                    choices=[5, 10, 15, 20, 25, 30],
+                                    value=10,
+                                    info="Controls how many ranked buy ideas are generated and shown as detailed cards/charts (up to 30). Higher values render more charts and can load slower.",
                                 )
                                 apply_buy_preferences_btn = gr.Button("Apply Buy Preferences", variant="primary")
                             with gr.Column(scale=2, min_width=360):
