@@ -30,6 +30,7 @@ RAW_DIR = REPO_ROOT / "data" / "raw"
 STRUCTURED_DIR = REPO_ROOT / "data" / "processed" / "structured"
 BUY_CANDIDATE_UNIVERSE_PATH = RAW_DIR / "buy_candidate_universe.csv"
 BUY_CANDIDATE_UNIVERSE_ENRICHED_PATH = STRUCTURED_DIR / "buy_candidate_universe_enriched.csv"
+COMPANY_FACTS_PATH = STRUCTURED_DIR / "company_facts.csv"
 
 
 class RiskMetricObservation(BaseModel):
@@ -151,9 +152,17 @@ class CompanyFundamentalSnapshot(BaseModel):
     beta: Optional[float] = None
     revenue: Optional[float] = None
     net_income: Optional[float] = None
+    operating_income: Optional[float] = None
+    depreciation_amortization: Optional[float] = None
+    ebitda: Optional[float] = None
+    prior_ebitda: Optional[float] = None
+    ebitda_trend_pct: Optional[float] = None
+    ebitda_margin: Optional[float] = None
     cash_and_equivalents: Optional[float] = None
     total_assets: Optional[float] = None
     total_liabilities: Optional[float] = None
+    debt_related: Optional[float] = None
+    debt_to_ebitda: Optional[float] = None
     stockholders_equity: Optional[float] = None
     operating_cash_flow: Optional[float] = None
     latest_filed_date: Optional[str] = None
@@ -611,6 +620,9 @@ class ReplacementCandidate(BaseModel):
     expense_ratio: Optional[float] = None
     dividend_yield: Optional[float] = None
     trailing_pe: Optional[float] = None
+    enterprise_to_ebitda: Optional[float] = None
+    ebitda_margin: Optional[float] = None
+    ebitda_trend_pct: Optional[float] = None
     is_existing_holding: bool = False
     external_signal_summary: list[str] = Field(default_factory=list)
 
@@ -817,7 +829,9 @@ def load_diagnosis_bundle(base_dir: Path) -> dict[str, Any]:
         "sector_allocation": _load_csv(base_dir / "sector_allocation.csv"),
         "performance_attribution": _load_csv(base_dir / "performance_attribution.csv"),
         "volatility_drivers": _load_csv(base_dir / "top_volatility_drivers_2025.csv"),
-        "company_facts": _load_csv(processed_dir / "structured" / "company_facts.csv"),
+        # Reuse the cached loader instead of a second uncached read — this file is
+        # now 450MB+, so re-reading it per analysis added ~1.7s and double memory.
+        "company_facts": _load_company_facts_frame(),
         "company_profiles": _load_csv(processed_dir / "structured" / "company_profiles.csv"),
         "macro_series": _load_csv(processed_dir / "structured" / "macro_series.csv"),
         "news_metadata": _load_csv(processed_dir / "structured" / "news_metadata.csv"),
@@ -963,6 +977,54 @@ def _build_holding_reason_codes(
                     evidence=["Latest net income was below zero"],
                 )
             )
+        if "estimated EBITDA negative" in fundamentals.signals:
+            reason_codes.append(
+                ReasonCode(
+                    code="negative_ebitda",
+                    label="Negative EBITDA",
+                    category="fundamentals",
+                    severity_score=66.0,
+                    summary=f"{ticker}'s estimated EBITDA is currently below zero, which points to weaker underlying operating strength.",
+                    evidence=[
+                        (
+                            f"Estimated EBITDA: ${fundamentals.ebitda:,.0f}"
+                            if fundamentals.ebitda is not None else "Estimated EBITDA is below zero"
+                        )
+                    ],
+                )
+            )
+        if "estimated EBITDA deteriorated versus prior filing" in fundamentals.signals:
+            reason_codes.append(
+                ReasonCode(
+                    code="deteriorating_ebitda",
+                    label="Deteriorating EBITDA",
+                    category="fundamentals",
+                    severity_score=54.0,
+                    summary=f"{ticker}'s estimated EBITDA has deteriorated versus the prior filing, which weakens the quality of the current trend.",
+                    evidence=[
+                        (
+                            f"Estimated EBITDA trend: {fundamentals.ebitda_trend_pct:.1%}"
+                            if fundamentals.ebitda_trend_pct is not None else "Estimated EBITDA trend deteriorated"
+                        )
+                    ],
+                )
+            )
+        if "estimated EBITDA margin is weak" in fundamentals.signals:
+            reason_codes.append(
+                ReasonCode(
+                    code="weak_ebitda_margin",
+                    label="Weak EBITDA margin",
+                    category="fundamentals",
+                    severity_score=48.0,
+                    summary=f"{ticker}'s estimated EBITDA margin is thin, so less of each revenue dollar is flowing through as operating cash earnings.",
+                    evidence=[
+                        (
+                            f"Estimated EBITDA margin: {fundamentals.ebitda_margin:.1%}"
+                            if fundamentals.ebitda_margin is not None else "Estimated EBITDA margin is weak"
+                        )
+                    ],
+                )
+            )
         if "liabilities are a large share of assets" in fundamentals.signals:
             reason_codes.append(
                 ReasonCode(
@@ -972,6 +1034,22 @@ def _build_holding_reason_codes(
                     severity_score=58.0,
                     summary=f"{ticker}'s balance sheet looks more stretched than steadier holdings in the portfolio.",
                     evidence=["Liabilities are a large share of assets"],
+                )
+            )
+        if "debt burden is high relative to EBITDA" in fundamentals.signals:
+            reason_codes.append(
+                ReasonCode(
+                    code="debt_to_ebitda_stretch",
+                    label="Debt burden vs EBITDA",
+                    category="fundamentals",
+                    severity_score=60.0,
+                    summary=f"{ticker} carries a heavier debt load relative to EBITDA than steadier balance-sheet names.",
+                    evidence=[
+                        (
+                            f"Debt / EBITDA: {fundamentals.debt_to_ebitda:.1f}x"
+                            if fundamentals.debt_to_ebitda is not None else "Debt burden is high relative to EBITDA"
+                        )
+                    ],
                 )
             )
 
@@ -1068,7 +1146,11 @@ def _reason_code_concern_weights(reason_code: ReasonCode) -> list[tuple[str, flo
         "benchmark_lag": [("company_specific", 0.7), ("market", 0.3)],
         "high_beta": [("market", 0.8), ("macro", 0.2)],
         "negative_earnings": [("company_specific", 1.0)],
+        "negative_ebitda": [("company_specific", 1.0)],
+        "deteriorating_ebitda": [("company_specific", 1.0)],
+        "weak_ebitda_margin": [("company_specific", 0.85), ("market", 0.15)],
         "balance_sheet_stretch": [("company_specific", 1.0)],
+        "debt_to_ebitda_stretch": [("company_specific", 0.85), ("macro", 0.15)],
         "narrative_risk": [("company_specific", 0.75), ("market", 0.25)],
         "restrictive_rates_sensitivity": [("macro", 1.0)],
     }
@@ -1302,6 +1384,225 @@ def _latest_metric_value(
     return _safe_float(row.get("value")), str(row.get("filed_date").date())
 
 
+@lru_cache(maxsize=1)
+def _company_facts_by_ticker() -> dict[str, pd.DataFrame]:
+    """Pre-group the global company-facts frame by ticker, once.
+
+    The facts file grew from ~9 to 500+ tickers (millions of rows). Filtering the
+    whole frame by ticker on every metric lookup made analysis pay hundreds of
+    full-frame scans (tens of seconds). Grouping once and serving per-ticker
+    subframes keeps each lookup on a few-thousand-row slice instead.
+    """
+    frame = _load_company_facts_frame()
+    if frame.empty or "ticker" not in frame.columns:
+        return {}
+    return {str(ticker): group for ticker, group in frame.groupby("ticker")}
+
+
+def _facts_by_ticker_map(company_facts: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Group an arbitrary facts frame by ticker for fast per-ticker reuse."""
+    if company_facts.empty or "ticker" not in company_facts.columns:
+        return {}
+    return {str(ticker): group for ticker, group in company_facts.groupby("ticker")}
+
+
+# Explicit XBRL fact tags for EBITDA inputs. The processed `canonical_metric`
+# buckets are too coarse — they collapse many unrelated line items (e.g. a tiny
+# comprehensive-income adjustment lands in the same `revenue_related` bucket as
+# real revenue), so selecting by bucket produces garbage. Selecting by the exact
+# US-GAAP tag, in priority order, is the only reliable path.
+_REVENUE_TAGS = (
+    "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
+    "Revenues",
+    "SalesRevenueNet",
+)
+_OPERATING_INCOME_TAGS = ("OperatingIncomeLoss",)
+_DEPRECIATION_TAGS = (
+    "DepreciationDepletionAndAmortization",
+    "DepreciationAmortizationAndAccretionNet",
+    "DepreciationAndAmortization",
+)
+_LONG_TERM_DEBT_TAGS = (
+    "LongTermDebtNoncurrent",
+    "LongTermDebt",
+    "LongTermDebtAndCapitalLeaseObligations",
+)
+_CURRENT_DEBT_TAGS = ("LongTermDebtCurrent", "DebtCurrent")
+
+# An annual income-statement span is ~365 days. This window keeps full-year
+# figures and rejects quarterly (~90d) and 9-month (~270d) spans.
+_ANNUAL_SPAN_MIN_DAYS = 330
+_ANNUAL_SPAN_MAX_DAYS = 400
+
+
+def _annual_flow_by_tags(
+    company_facts: pd.DataFrame,
+    ticker: str,
+    fact_tags: tuple[str, ...],
+    limit: int = 3,
+) -> list[tuple[float, str]]:
+    """Return recent full-year values for an income-statement flow metric.
+
+    Selection is by explicit fact tag and restricted to annual reporting spans
+    so periods line up across metrics. When several candidate tags report in the
+    same period, the largest-magnitude value is taken as the primary line.
+    Returns ``(value, period_end_iso)`` pairs sorted oldest-to-newest.
+    """
+    if company_facts.empty or not {"ticker", "fact_tag", "value", "fact_end"}.issubset(company_facts.columns):
+        return []
+    subset = company_facts[
+        (company_facts["ticker"] == ticker)
+        & (company_facts["fact_tag"].isin(fact_tags))
+    ].copy()
+    if subset.empty:
+        return []
+    subset["fact_end"] = pd.to_datetime(subset["fact_end"], errors="coerce")
+    subset["fact_start"] = pd.to_datetime(subset.get("fact_start"), errors="coerce")
+    subset["value"] = pd.to_numeric(subset["value"], errors="coerce")
+    subset = subset.dropna(subset=["fact_end", "fact_start", "value"])
+    if subset.empty:
+        return []
+    span_days = (subset["fact_end"] - subset["fact_start"]).dt.days
+    subset = subset[(span_days >= _ANNUAL_SPAN_MIN_DAYS) & (span_days <= _ANNUAL_SPAN_MAX_DAYS)]
+    if subset.empty:
+        return []
+    grouped = subset.groupby("fact_end", as_index=False)["value"].max().sort_values("fact_end")
+    rows = grouped.tail(max(1, int(limit)))
+    return [
+        (float(value), str(pd.Timestamp(period_end).date()))
+        for period_end, value in zip(rows["fact_end"], rows["value"])
+    ]
+
+
+def _latest_balance_by_tags(
+    company_facts: pd.DataFrame,
+    ticker: str,
+    fact_tags: tuple[str, ...],
+) -> Optional[float]:
+    """Return the most recent balance-sheet value across the given fact tags.
+
+    Balance-sheet items are point-in-time (no annual span), so this takes the
+    largest value reported at the latest period end.
+    """
+    if company_facts.empty or not {"ticker", "fact_tag", "value", "fact_end"}.issubset(company_facts.columns):
+        return None
+    subset = company_facts[
+        (company_facts["ticker"] == ticker)
+        & (company_facts["fact_tag"].isin(fact_tags))
+    ].copy()
+    if subset.empty:
+        return None
+    subset["fact_end"] = pd.to_datetime(subset["fact_end"], errors="coerce")
+    subset["value"] = pd.to_numeric(subset["value"], errors="coerce")
+    subset = subset.dropna(subset=["fact_end", "value"])
+    if subset.empty:
+        return None
+    latest_period = subset["fact_end"].max()
+    return float(subset[subset["fact_end"] == latest_period]["value"].max())
+
+
+@lru_cache(maxsize=1)
+def _load_company_facts_frame() -> pd.DataFrame:
+    """Load processed company facts once for reusable candidate-side lookups."""
+    if not COMPANY_FACTS_PATH.exists():
+        return pd.DataFrame()
+    try:
+        frame = pd.read_csv(COMPANY_FACTS_PATH)
+    except Exception:
+        return pd.DataFrame()
+    required = {"ticker", "canonical_metric", "value", "filed_date"}
+    if not required.issubset(frame.columns):
+        return pd.DataFrame()
+    return frame
+
+
+def _estimate_ebitda_snapshot(
+    company_facts: pd.DataFrame,
+    ticker: str,
+) -> dict[str, Any]:
+    """Estimate current and prior EBITDA-style metrics from processed facts.
+
+    EBITDA is approximated as operating income + depreciation & amortization,
+    using full-year figures aligned on the same fiscal period end. Where the
+    consolidated D&A line is unavailable for a company, the estimate falls back
+    to operating income (i.e. EBIT) rather than fabricating a number, and the
+    ``da_included`` flag records which happened. Any metric that cannot be lined
+    up to the operating-income period is returned as ``None`` so downstream
+    signals never mix mismatched periods (the bug that produced 140%+ margins).
+    """
+    operating_income_series = _annual_flow_by_tags(company_facts, ticker, _OPERATING_INCOME_TAGS)
+    revenue_series = _annual_flow_by_tags(company_facts, ticker, _REVENUE_TAGS)
+    depreciation_series = _annual_flow_by_tags(company_facts, ticker, _DEPRECIATION_TAGS)
+
+    revenue_by_period = {period: value for value, period in revenue_series}
+    da_by_period = {period: value for value, period in depreciation_series}
+
+    def ebitda_for(entry: Optional[tuple[float, str]]) -> tuple[Optional[float], Optional[str], bool]:
+        if entry is None:
+            return None, None, False
+        op_income, period = entry
+        da_value = da_by_period.get(period)
+        ebitda_value = op_income + (da_value or 0.0)
+        return ebitda_value, period, da_value is not None
+
+    latest_entry = operating_income_series[-1] if operating_income_series else None
+    prior_entry = operating_income_series[-2] if len(operating_income_series) >= 2 else None
+
+    ebitda, period_end, da_included = ebitda_for(latest_entry)
+    prior_ebitda, _, _ = ebitda_for(prior_entry)
+
+    operating_income = latest_entry[0] if latest_entry else None
+    depreciation = da_by_period.get(period_end) if period_end else None
+    # Revenue only counts when it lines up with the EBITDA period, otherwise the
+    # margin is meaningless.
+    revenue = revenue_by_period.get(period_end) if period_end else None
+
+    ebitda_trend_pct = None
+    if ebitda is not None and prior_ebitda is not None and abs(prior_ebitda) > 1e-9:
+        ebitda_trend_pct = (ebitda - prior_ebitda) / abs(prior_ebitda)
+
+    ebitda_margin = None
+    if ebitda is not None and revenue not in (None, 0):
+        ebitda_margin = ebitda / float(revenue)
+
+    long_term_debt = _latest_balance_by_tags(company_facts, ticker, _LONG_TERM_DEBT_TAGS)
+    current_debt = _latest_balance_by_tags(company_facts, ticker, _CURRENT_DEBT_TAGS)
+    debt_related = None
+    if long_term_debt is not None or current_debt is not None:
+        debt_related = (long_term_debt or 0.0) + (current_debt or 0.0)
+
+    debt_to_ebitda = None
+    if debt_related is not None and ebitda is not None and ebitda > 0:
+        debt_to_ebitda = debt_related / ebitda
+
+    return {
+        "operating_income": operating_income,
+        "depreciation_amortization": depreciation,
+        "ebitda": ebitda,
+        "prior_ebitda": prior_ebitda,
+        "ebitda_trend_pct": ebitda_trend_pct,
+        "ebitda_margin": ebitda_margin,
+        "da_included": da_included,
+        "revenue": revenue,
+        "debt_related": debt_related,
+        "debt_to_ebitda": debt_to_ebitda,
+        "latest_filed_date": period_end,
+    }
+
+
+def _sector_ev_to_ebitda_band(sector: str) -> tuple[float, float]:
+    """Return sector-aware healthy/stretched EV/EBITDA cutoffs."""
+    sector_key = str(sector or "").strip()
+    if sector_key in {"Technology", "Communication Services"}:
+        return 18.0, 28.0
+    if sector_key in {"Health Care", "Industrials", "Consumer Cyclical"}:
+        return 14.0, 22.0
+    if sector_key in {"Consumer Defensive", "Utilities", "Financial Services", "Energy"}:
+        return 10.0, 16.0
+    return 12.0, 20.0
+
+
 def _build_macro_context(bundle: dict[str, Any]) -> Optional[MacroRegimeSnapshot]:
     """Summarize the macro environment into a typed regime snapshot.
 
@@ -1413,22 +1714,42 @@ def _build_holding_fundamentals(
     if company_facts.empty and profiles.empty:
         return []
 
+    # Group the facts frame by ticker once; per-lookup full-frame scans were the
+    # dominant cost once the universe grew to 500+ tickers / millions of rows.
+    facts_by_ticker = _facts_by_ticker_map(company_facts)
+    empty_facts = company_facts.iloc[0:0]
+
     snapshots: list[CompanyFundamentalSnapshot] = []
     for ticker in tickers:
         profile_row = profiles[profiles["symbol"] == ticker].head(1)
         profile = profile_row.iloc[0].to_dict() if not profile_row.empty else {}
 
-        revenue, revenue_date = _latest_metric_value(company_facts, ticker, "revenue")
-        net_income, net_income_date = _latest_metric_value(company_facts, ticker, "net_income")
-        cash, cash_date = _latest_metric_value(company_facts, ticker, "cash_and_equivalents")
-        assets, assets_date = _latest_metric_value(company_facts, ticker, "total_assets")
-        liabilities, liabilities_date = _latest_metric_value(company_facts, ticker, "liability_related")
-        equity, equity_date = _latest_metric_value(company_facts, ticker, "stockholders_equity")
+        ticker_facts = facts_by_ticker.get(ticker, empty_facts)
+        revenue, revenue_date = _latest_metric_value(ticker_facts, ticker, "revenue")
+        net_income, net_income_date = _latest_metric_value(ticker_facts, ticker, "net_income")
+        ebitda_snapshot = _estimate_ebitda_snapshot(ticker_facts, ticker)
+        cash, cash_date = _latest_metric_value(ticker_facts, ticker, "cash_and_equivalents")
+        assets, assets_date = _latest_metric_value(ticker_facts, ticker, "total_assets")
+        liabilities, liabilities_date = _latest_metric_value(ticker_facts, ticker, "liability_related")
+        debt_related, debt_related_date = _latest_metric_value(ticker_facts, ticker, "debt_related")
+        equity, equity_date = _latest_metric_value(ticker_facts, ticker, "stockholders_equity")
         operating_cash_flow, operating_cash_flow_date = _latest_metric_value(
-            company_facts, ticker, "operating_cash_flow"
+            ticker_facts, ticker, "operating_cash_flow"
         )
 
-        dates = [d for d in [revenue_date, net_income_date, cash_date, assets_date, liabilities_date, equity_date, operating_cash_flow_date] if d]
+        dates = [
+            d for d in [
+                revenue_date,
+                net_income_date,
+                cash_date,
+                assets_date,
+                liabilities_date,
+                debt_related_date,
+                equity_date,
+                operating_cash_flow_date,
+                ebitda_snapshot.get("latest_filed_date"),
+            ] if d
+        ]
         latest_filed_date = max(dates) if dates else None
 
         signals: list[str] = []
@@ -1446,6 +1767,24 @@ def _build_holding_fundamentals(
                 signals.append("liabilities are a large share of assets")
             else:
                 signals.append("balance sheet coverage looks reasonable")
+        ebitda = _safe_float(ebitda_snapshot.get("ebitda"))
+        prior_ebitda = _safe_float(ebitda_snapshot.get("prior_ebitda"))
+        ebitda_trend_pct = _safe_float(ebitda_snapshot.get("ebitda_trend_pct"))
+        ebitda_margin = _safe_float(ebitda_snapshot.get("ebitda_margin"))
+        debt_to_ebitda = _safe_float(ebitda_snapshot.get("debt_to_ebitda"))
+        if ebitda is not None and ebitda > 0:
+            signals.append("estimated EBITDA positive")
+        elif ebitda is not None:
+            signals.append("estimated EBITDA negative")
+        if ebitda_trend_pct is not None and ebitda_trend_pct <= -0.15:
+            signals.append("estimated EBITDA deteriorated versus prior filing")
+        if ebitda_margin is not None:
+            if ebitda_margin < 0.10:
+                signals.append("estimated EBITDA margin is weak")
+            elif ebitda_margin >= 0.20:
+                signals.append("estimated EBITDA margin is healthy")
+        if debt_to_ebitda is not None and debt_to_ebitda > 4.0:
+            signals.append("debt burden is high relative to EBITDA")
 
         snapshots.append(
             CompanyFundamentalSnapshot(
@@ -1457,9 +1796,17 @@ def _build_holding_fundamentals(
                 beta=beta,
                 revenue=revenue,
                 net_income=net_income,
+                operating_income=_safe_float(ebitda_snapshot.get("operating_income")),
+                depreciation_amortization=_safe_float(ebitda_snapshot.get("depreciation_amortization")),
+                ebitda=ebitda,
+                prior_ebitda=prior_ebitda,
+                ebitda_trend_pct=ebitda_trend_pct,
+                ebitda_margin=ebitda_margin,
                 cash_and_equivalents=cash,
                 total_assets=assets,
                 total_liabilities=liabilities,
+                debt_related=debt_related,
+                debt_to_ebitda=debt_to_ebitda,
                 stockholders_equity=equity,
                 operating_cash_flow=operating_cash_flow,
                 latest_filed_date=latest_filed_date,
@@ -2309,9 +2656,21 @@ def _build_explicit_sell_modifiers(
     if "negative_earnings" in codes:
         modifiers.append("**Profits are under pressure** in the latest company filing, which makes weak market performance more concerning.")
         score += 0.10
+    if "negative_ebitda" in codes:
+        modifiers.append("**Estimated EBITDA is below zero**, which suggests the core operating engine is not carrying its weight right now.")
+        score += 0.12
+    if "deteriorating_ebitda" in codes:
+        modifiers.append("**Estimated EBITDA has deteriorated versus the prior filing**, so the operating trend is moving the wrong way.")
+        score += 0.07
+    if "weak_ebitda_margin" in codes:
+        modifiers.append("**EBITDA margins look thin**, which leaves less operating cushion if the business stumbles.")
+        score += 0.05
     if "balance_sheet_stretch" in codes:
         modifiers.append("**The balance sheet looks more stretched** than steadier holdings, so the downside can be harder to absorb.")
         score += 0.06
+    if "debt_to_ebitda_stretch" in codes:
+        modifiers.append("**Debt is high relative to EBITDA**, which can make a weak operating trend more expensive to carry.")
+        score += 0.08
     if "narrative_risk" in codes:
         headline = next((item for item in evidence if item and "Macro flag:" not in str(item) and "Beta:" not in str(item) and "Current weight:" not in str(item) and "Excess return vs benchmark:" not in str(item)), None)
         if headline:
@@ -3656,6 +4015,16 @@ def _candidate_diversity_signature(candidate: BuyCandidateUniverseEntry) -> tupl
     )
 
 
+@lru_cache(maxsize=2048)
+def _candidate_ebitda_context(ticker: str) -> dict[str, Any]:
+    """Load reusable EBITDA context for buy-side candidates from company facts."""
+    ticker_facts = _company_facts_by_ticker().get(ticker)
+    if ticker_facts is None or ticker_facts.empty:
+        return {}
+    snapshot = _estimate_ebitda_snapshot(ticker_facts, ticker)
+    return snapshot if any(snapshot.values()) else {}
+
+
 def _candidate_passes_buy_filters(
     candidate: BuyCandidateUniverseEntry,
     candidate_row: dict[str, Any],
@@ -3680,6 +4049,9 @@ def _candidate_passes_buy_filters(
     source_count = int(_safe_float(candidate_row.get("source_count")) or candidate.source_count or 0)
     trailing_pe = _safe_float(candidate_row.get("trailing_pe"))
     metadata: Optional[dict[str, Any]] = None
+    ebitda_context = _candidate_ebitda_context(candidate.ticker)
+    ebitda_trend_pct = _safe_float(ebitda_context.get("ebitda_trend_pct"))
+    fallback_ebitda_margin = _safe_float(ebitda_context.get("ebitda_margin"))
 
     def get_metadata() -> dict[str, Any]:
         nonlocal metadata
@@ -3713,6 +4085,15 @@ def _candidate_passes_buy_filters(
         )
 
     if candidate.asset_type == "Stock":
+        enterprise_to_ebitda = _safe_float(candidate_row.get("enterprise_to_ebitda"))
+        if enterprise_to_ebitda is None:
+            enterprise_to_ebitda = _safe_float(get_metadata().get("enterprise_to_ebitda"))
+        ebitda_margin = _safe_float(candidate_row.get("ebitda_margin"))
+        if ebitda_margin is None:
+            ebitda_margin = _safe_float(get_metadata().get("ebitda_margin")) or fallback_ebitda_margin
+        metadata_ebitda = _safe_float(get_metadata().get("ebitda")) if (
+            enterprise_to_ebitda is None or ebitda_margin is None or ebitda_trend_pct is None
+        ) else None
         if trailing_pe is None and (
             (rel_1y is not None and rel_1y < 0.05)
             or (rel_3y is not None and rel_3y < 0.05)
@@ -3738,6 +4119,24 @@ def _candidate_passes_buy_filters(
             and rel_5y is not None and rel_5y < -0.08
         ):
             return False, ["It has lagged the S&P 500 across multiple windows, so it is not a strong first-pass add."]
+        if metadata_ebitda is not None and metadata_ebitda <= 0 and (
+            (rel_1y is not None and rel_1y < 0.05)
+            or (rel_3y is not None and rel_3y < 0.05)
+        ):
+            return False, ["Estimated EBITDA is still negative, so the operating base is not strong enough for a fresh add."]
+        if ebitda_trend_pct is not None and ebitda_trend_pct <= -0.20 and (
+            rel_1y is None or rel_1y < 0.08
+        ):
+            return False, ["EBITDA is deteriorating too quickly for this to be a clean first-pass add."]
+        if ebitda_margin is not None and ebitda_margin < 0.08 and preferences.stated_risk_score <= 65:
+            return False, ["Its EBITDA margin is still too thin for the current buy profile."]
+        if enterprise_to_ebitda is not None:
+            healthy_band, stretched_band = _sector_ev_to_ebitda_band(candidate.sector)
+            if enterprise_to_ebitda >= stretched_band and (
+                (rel_1y is not None and rel_1y < 0.05)
+                or (rel_3y is not None and rel_3y < 0.05)
+            ):
+                return False, ["Its EV/EBITDA still looks stretched for the sector while medium-term relative performance is not strong enough."]
         negative_signal_count = (
             count_negative_signals()
             if ((rel_1y is not None and rel_1y < 0) or (rel_3y is not None and rel_3y < 0))
@@ -3747,6 +4146,16 @@ def _candidate_passes_buy_filters(
             return False, ["Recent external signals are still cautious, so it is not a clean add right now."]
         if trailing_pe is not None and trailing_pe >= 28:
             notes.append("its valuation is on the richer side, so it needs stronger execution to justify the add")
+        if enterprise_to_ebitda is not None:
+            healthy_band, stretched_band = _sector_ev_to_ebitda_band(candidate.sector)
+            if enterprise_to_ebitda <= healthy_band:
+                notes.append("its EV/EBITDA looks healthy relative to the sector")
+            elif enterprise_to_ebitda >= stretched_band:
+                notes.append("its EV/EBITDA is elevated, so it needs stronger execution to justify the add")
+        if ebitda_margin is not None and ebitda_margin >= 0.18:
+            notes.append("its EBITDA margin gives it a stronger operating cushion")
+        if ebitda_trend_pct is not None and ebitda_trend_pct >= 0.08:
+            notes.append("estimated EBITDA has been improving versus the prior filing")
         if source_count >= 3:
             notes.append("it also shows up across several trusted source universes")
     else:

@@ -9647,18 +9647,27 @@ def build_app() -> gr.Blocks:
         with gr.Row(elem_classes=["app-shell"]):
             section_nav_buttons: list[tuple[str, gr.Button]] = []
             with gr.Column(scale=1, min_width=280, elem_classes=["control-rail"]):
-                upload = gr.File(
-                    label="Robinhood CSV",
+                upload = gr.UploadButton(
+                    "Choose Robinhood CSV",
                     file_types=[".csv"],
-                    elem_id="csv-upload-input",
+                    elem_id="csv-upload-btn",
+                    variant="secondary",
                 )
-                dataset_source = gr.Dropdown(
+                upload_display = gr.Textbox(
+                    label="Selected file",
+                    value="No CSV selected yet",
+                    interactive=False,
+                    elem_id="csv-upload-display",
+                )
+                gr.HTML(
+                    "<div class='simple-field-label'>Dataset Source</div>"
+                    "<div class='simple-field-help'>Use the fake dataset if you want to explore the dashboard without a Robinhood export.</div>"
+                )
+                dataset_source = gr.Radio(
                     choices=["Upload my CSV", "Use bundled fake dataset"],
                     value="Upload my CSV",
-                    label="Dataset Source",
-                    info="Use the fake dataset if you want to explore the dashboard without a Robinhood export.",
-                    interactive=True,
-                    elem_id="dataset-source-select",
+                    show_label=False,
+                    elem_id="dataset-source-radio",
                 )
                 risk_profile = gr.Slider(
                     minimum=0,
@@ -10044,10 +10053,10 @@ def build_app() -> gr.Blocks:
                         holdings_df = gr.HTML(value=build_lightweight_table_html(None, "Open Holdings"))
                         attribution_df = gr.HTML(value=build_lightweight_table_html(None, "Performance Attribution"))
 
-        upload.change(
-            fn=capture_uploaded_csv_path,
+        upload.upload(
+            fn=capture_uploaded_csv_details,
             inputs=[upload],
-            outputs=[upload_path_state],
+            outputs=[upload_path_state, upload_display],
         )
 
         analyze_btn.click(
@@ -10299,8 +10308,9 @@ LAUNCH_CSS = """
     color: #64748b !important;
     -webkit-text-fill-color: #64748b !important;
 }
-#csv-upload-input,
-#dataset-source-select,
+#csv-upload-btn,
+#csv-upload-display,
+#dataset-source-radio,
 .backtest-controls {
     background: #ffffff !important;
     border: 1px solid #dbe4f0 !important;
@@ -10308,37 +10318,44 @@ LAUNCH_CSS = """
     box-shadow: none !important;
     padding: 12px !important;
 }
-#csv-upload-input,
-#dataset-source-select,
-#csv-upload-input *,
-#dataset-source-select * {
-    color: #0f172a !important;
-    -webkit-text-fill-color: #0f172a !important;
-}
-#csv-upload-input svg,
-#dataset-source-select svg {
-    color: #475569 !important;
-    stroke: currentColor !important;
-}
-#csv-upload-input input,
-#csv-upload-input textarea,
-#csv-upload-input button,
-#dataset-source-select input,
-#dataset-source-select textarea,
-#dataset-source-select button {
+#csv-upload-btn button,
+#csv-upload-display input,
+#dataset-source-radio,
+#dataset-source-radio label,
+#dataset-source-radio span {
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
     background: #ffffff !important;
+}
+#csv-upload-btn button {
+    width: 100% !important;
+    border: 1px solid #dbe4f0 !important;
+    border-radius: 12px !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+    font-weight: 700 !important;
+    padding: 10px 12px !important;
+}
+#csv-upload-display input {
+    border: 0 !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+}
+#dataset-source-radio {
+    padding: 8px 4px 2px !important;
+}
+#dataset-source-radio label {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    padding: 6px 0 !important;
+}
+#dataset-source-radio input[type="radio"] {
+    accent-color: #2563eb !important;
 }
 #bt-cash-toggle input[type="radio"],
 #bt-soft-signals input[type="radio"] {
     accent-color: #2563eb !important;
-}
-#csv-upload-input .wrap,
-#dataset-source-select .wrap {
-    background: #ffffff !important;
-    border: 0 !important;
-    box-shadow: none !important;
 }
 #bt-cutoff-date textarea,
 #bt-cutoff-date input {
