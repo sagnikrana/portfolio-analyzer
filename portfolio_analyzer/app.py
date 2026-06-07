@@ -6821,8 +6821,19 @@ def build_buy_ideas_html(
             ),
         ]
     )
+    requested_limit = int(preferences.buy_idea_limit or MAX_FEATURED_BUY_IDEA_COUNT)
+    shortfall_note = ""
+    if len(ordered_candidates) < requested_limit:
+        shortfall_note = (
+            f" You asked for {requested_limit}, but only {len(ordered_candidates)} candidates "
+            "cleared this portfolio's gap, quality, and diversity filters (e.g. valuation, "
+            "EBITDA trend, sector crowding, and avoiding near-duplicate ETFs)."
+        )
     detail_note = (
-        f"<div style='font-size:12px;color:#cbd5e1;margin-top:12px'>Showing full detail for the top {len(featured_candidates)} selected ideas. The ranked table below still includes the broader list for quick scanning.</div>"
+        "<div style='font-size:12px;color:#cbd5e1;margin-top:12px'>"
+        f"Showing full detail for the top {len(featured_candidates)} ideas. "
+        "The ranked table below includes the broader list for quick scanning."
+        f"{shortfall_note}</div>"
         if featured_candidates
         else ""
     )
@@ -7469,7 +7480,12 @@ def build_buy_idea_feature_slots(
     limit: int = MAX_FEATURED_BUY_IDEA_COUNT,
     view_mode: str = "Quick Read",
 ) -> list[Any]:
-    """Build fixed featured buy-idea rows in Gradio output order."""
+    """Build fixed featured buy-idea rows in Gradio output order.
+
+    Only as many slots as there are real candidates are shown; the remaining
+    fixed slots are hidden (visible=False) so users don't see blank "No featured
+    buy idea for this slot" charts when fewer ideas exist than the cap.
+    """
     ordered = sorted(candidates, key=lambda item: (-item.fit_score, item.ticker))
     selected_limit = max(0, min(int(limit), MAX_FEATURED_BUY_IDEA_COUNT))
     featured = ordered[:selected_limit]
@@ -7477,12 +7493,14 @@ def build_buy_idea_feature_slots(
     plot_outputs: list[Any] = []
     for idx in range(MAX_FEATURED_BUY_IDEA_COUNT):
         candidate = featured[idx] if idx < len(featured) else None
-        card_outputs.append(
-            build_buy_idea_card_html(diagnosis, candidate, idx + 1, view_mode=view_mode)
-            if candidate is not None
-            else ""
-        )
-        plot_outputs.append(plot_buy_idea_chart(candidate) if candidate is not None else plot_buy_idea_chart(None))
+        if candidate is not None:
+            card_outputs.append(
+                gr.update(value=build_buy_idea_card_html(diagnosis, candidate, idx + 1, view_mode=view_mode), visible=True)
+            )
+            plot_outputs.append(gr.update(value=plot_buy_idea_chart(candidate), visible=True))
+        else:
+            card_outputs.append(gr.update(value="", visible=False))
+            plot_outputs.append(gr.update(visible=False))
     return [*card_outputs, *plot_outputs]
 
 
@@ -7494,8 +7512,8 @@ def update_buy_ideas_view(
 ) -> list[Any]:
     """Re-render featured Buy Ideas when the user switches the explanation depth."""
     if not diagnosis_payload:
-        empty_cards = ["" for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
-        empty_plots = [plot_buy_idea_chart(None) for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
+        empty_cards = [gr.update(value="", visible=False) for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
+        empty_plots = [gr.update(visible=False) for _ in range(MAX_FEATURED_BUY_IDEA_COUNT)]
         return [*empty_cards, *empty_plots]
     diagnosis = PortfolioRiskDiagnosis.model_validate(diagnosis_payload)
     candidates = [
@@ -10129,10 +10147,11 @@ def build_app() -> gr.Blocks:
                         for idx in range(MAX_FEATURED_BUY_IDEA_COUNT):
                             with gr.Row(equal_height=False):
                                 with gr.Column(scale=6, min_width=320):
-                                    featured_buy_idea_cards.append(gr.HTML())
+                                    # Hidden until populated, so empty slots don't show blank charts.
+                                    featured_buy_idea_cards.append(gr.HTML(visible=False))
                                 with gr.Column(scale=5, min_width=320):
                                     featured_buy_idea_plots.append(
-                                        gr.Plot(value=plot_buy_idea_chart(None), label=f"Featured Buy Idea Chart {idx + 1}")
+                                        gr.Plot(label=f"Featured Buy Idea Chart {idx + 1}", visible=False)
                                     )
                         buy_ideas_df = gr.HTML(
                             value=build_buy_ideas_table_html([]),
