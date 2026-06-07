@@ -218,3 +218,6 @@ data/interim/diagnosis_runs/
 data/processed/unstructured/
 data/vector/
 .gradio/
+
+# Local backup files (never commit)
+*.bak
