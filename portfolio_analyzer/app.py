@@ -142,6 +142,19 @@ def empty_dashboard_plot(message: str = "Run analysis to populate this chart") -
     """
     wrapped_message = "<br>".join(textwrap.wrap(message, width=34)) or message
     fig = go.Figure()
+    # Gradio 3.x renders a Plotly figure with an empty `data` array as a red
+    # "Error" badge (annotations alone do not populate `data`). Add a single
+    # invisible point so the figure always has at least one trace.
+    fig.add_trace(
+        go.Scatter(
+            x=[0.5],
+            y=[0.5],
+            mode="markers",
+            marker={"opacity": 0},
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
     fig.add_annotation(
         text=wrapped_message,
         x=0.5,
@@ -5385,6 +5398,13 @@ def plot_risk_action_candidate_chart(item: Any | None, market_data: dict[str, An
         horizontal_spacing=0.08,
     )
     if item is None or not market_data:
+        # Empty `data` makes Gradio 3.x show a red "Error" badge; add an invisible
+        # point so the placeholder renders as a calm empty chart instead.
+        fig.add_trace(
+            go.Scatter(x=[0.5], y=[0.5], mode="markers", marker={"opacity": 0},
+                       hoverinfo="skip", showlegend=False),
+            row=1, col=1,
+        )
         fig.add_annotation(
             text="Run analysis to see each risk-action candidate versus the S&P 500.",
             x=0.5,
@@ -7279,6 +7299,12 @@ def plot_buy_idea_chart(candidate: ReplacementCandidate | None) -> go.Figure:
         horizontal_spacing=0.08,
     )
     if candidate is None:
+        # Empty `data` triggers Gradio 3.x's "Error" badge; add an invisible point.
+        fig.add_trace(
+            go.Scatter(x=[0.5], y=[0.5], mode="markers", marker={"opacity": 0},
+                       hoverinfo="skip", showlegend=False),
+            row=1, col=1,
+        )
         fig.add_annotation(
             text="No featured buy idea for this slot.",
             x=0.5,
