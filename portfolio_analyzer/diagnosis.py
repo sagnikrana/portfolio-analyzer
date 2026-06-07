@@ -3381,7 +3381,7 @@ def _build_portfolio_next_steps(
         )
         step_number += 1
 
-    for candidate in funded_buys[: min(5, len(funded_buys))]:
+    for candidate in funded_buys:
         actions.append(
             NextStepAction(
                 step_number=step_number,
@@ -3441,7 +3441,7 @@ def _build_portfolio_next_steps(
         )
     )
     summary = (
-        f"The current plan has {len(actionable)} sell or trim action(s) and {min(5, len(funded_buys))} funded buy idea(s). "
+        f"The current plan has {len(actionable)} sell or trim action(s) and {len(funded_buys)} funded buy idea(s). "
         f"That means moving about ${total_value_to_sell:,.2f} out of weaker holdings and about ${total_value_to_buy:,.2f} into better-fit adds, "
         f"with about ${projected_cash:,.2f} left as cash."
     )
@@ -3653,7 +3653,7 @@ def portfolio_preferences_from_user_inputs(
         else float(base_preferences.suggested_max_new_position_pct or _suggested_max_new_position_pct(resolved_risk_score))
     )
     resolved_buy_idea_limit = int(buy_idea_limit or base_preferences.buy_idea_limit or 10)
-    resolved_buy_idea_limit = max(5, min(20, resolved_buy_idea_limit))
+    resolved_buy_idea_limit = max(5, min(30, resolved_buy_idea_limit))
 
     cleaned_sector_preferences = [item for item in (sector_preferences or []) if str(item).strip()]
 

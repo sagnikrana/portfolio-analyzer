@@ -124,6 +124,8 @@ MAX_STABLE_WEEKLY_RETURN = 0.75
 # Detailed buy-idea cards/charts can be shown up to this many; the full ranked
 # table carries the broader candidate list.
 MAX_FEATURED_BUY_IDEA_COUNT = 30
+# Selectable counts for the "How many buy ideas should we show?" control.
+BUY_IDEA_LIMIT_CHOICES = [5, 10, 15, 20, 25, 30]
 BACKTEST_BUY_IDEA_COUNT = 15
 MAX_FEATURED_RISK_ACTION_COUNT = 5
 
@@ -4249,7 +4251,7 @@ def build_next_steps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     ) or "<li>No special watchouts were attached.</li>"
 
     action_cards = ""
-    for item in next_steps.actions[:8]:
+    for item in next_steps.actions:
         ticker_label = f"{item.ticker} " if item.ticker else ""
         security_tail = f"{item.security_name}" if item.security_name and item.security_name != item.ticker else ""
         action_cards += (
@@ -9651,7 +9653,10 @@ def run_analysis(
         prefer_high_dividend_etfs,
         prefer_low_expense_for_dividend_etfs,
         include_existing_holdings,
-        gr.update(choices=[5], value=5),
+        gr.update(
+            choices=BUY_IDEA_LIMIT_CHOICES,
+            value=min(BUY_IDEA_LIMIT_CHOICES, key=lambda choice: abs(choice - buy_idea_limit)),
+        ),
         build_lightweight_table_html(diagnosis_supporting_metrics_df, "Supporting Evidence"),
         build_lightweight_table_html(diagnosis_holding_fundamentals_df, "Holding Fundamentals"),
         build_lightweight_table_html(diagnosis_narrative_evidence_df, "Filing and News Evidence"),
@@ -10065,7 +10070,7 @@ def build_app() -> gr.Blocks:
                                 )
                                 buy_idea_limit = gr.Dropdown(
                                     label="How many buy ideas should we show?",
-                                    choices=[5, 10, 15, 20, 25, 30],
+                                    choices=BUY_IDEA_LIMIT_CHOICES,
                                     value=10,
                                     info="Controls how many ranked buy ideas are generated and shown as detailed cards/charts (up to 30). Higher values render more charts and can load slower.",
                                 )
