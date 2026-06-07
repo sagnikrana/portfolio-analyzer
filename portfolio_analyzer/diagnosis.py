@@ -4674,7 +4674,12 @@ def _build_replacement_candidates(
         if best_gap is None:
             continue
 
-        reason_parts = best_gap_reasons[:2] + preference_notes[:1]
+        # Always surface an EBITDA-based reason when one exists, instead of letting
+        # the top-2 gap reasons truncate it out of the displayed rationale.
+        ebitda_reasons = [reason for reason in best_gap_reasons if "EBITDA" in reason]
+        reason_parts = _unique_nonempty(
+            best_gap_reasons[:2] + ebitda_reasons[:1] + preference_notes[:1]
+        )
         why_it_fits = (
             f"{entry.ticker} stands out because "
             + "; ".join(reason_parts)
@@ -4684,6 +4689,7 @@ def _build_replacement_candidates(
         )
         evidence_summary = _unique_nonempty(
             best_gap_evidence
+            + ebitda_reasons
             + [
                 (
                     f"Known-universe support: appears in {entry.source_count} source list(s)"
@@ -5429,7 +5435,18 @@ def portfolio_risk_diagnosis_from_saved_artifacts(base_dir: Path) -> PortfolioRi
     macro_context = _build_macro_context(bundle)
     candidate_rows = _candidate_driver_rows(bundle, limit=10)
     candidate_tickers = [str(row.get("ticker")) for row in candidate_rows if row.get("ticker")]
-    holding_fundamentals = _build_holding_fundamentals(bundle, candidate_tickers)
+    # Build fundamentals (incl. EBITDA signals) for ALL current holdings, not just
+    # the top ~10 drivers, so weak names (negative/deteriorating EBITDA, thin
+    # margins, high debt) are actually analyzed. Cheap now that company facts are
+    # grouped by ticker. Narrative/news stays scoped to the top drivers (network).
+    open_positions = bundle.get("open_positions")
+    all_holding_tickers: list[str] = []
+    if open_positions is not None and not open_positions.empty and "ticker" in open_positions.columns:
+        all_holding_tickers = [
+            str(t) for t in open_positions["ticker"].dropna().tolist() if str(t).strip()
+        ]
+    fundamentals_tickers = list(dict.fromkeys(candidate_tickers + all_holding_tickers))
+    holding_fundamentals = _build_holding_fundamentals(bundle, fundamentals_tickers)
     narrative_evidence = _build_narrative_evidence(bundle, candidate_tickers)
     top_holding_drivers = _build_holding_drivers(
         bundle,

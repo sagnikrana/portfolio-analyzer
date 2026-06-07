@@ -5130,6 +5130,10 @@ def build_holding_fundamentals_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.Da
             "Market cap": money_text(item.market_cap),
             "Revenue": money_text(item.revenue),
             "Net income": money_text(item.net_income),
+            "Est. EBITDA": money_text(item.ebitda),
+            "EBITDA margin": pct_text(item.ebitda_margin),
+            "EBITDA trend": pct_text(item.ebitda_trend_pct),
+            "Debt / EBITDA": (f"{item.debt_to_ebitda:.1f}x" if item.debt_to_ebitda is not None else "N/A"),
             "Cash": money_text(item.cash_and_equivalents),
             "Operating cash flow": money_text(item.operating_cash_flow),
             "Signals": "; ".join(item.signals),
@@ -5137,23 +5141,75 @@ def build_holding_fundamentals_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.Da
         }
         for item in diagnosis.holding_fundamentals
     ]
+    columns = [
+        "Ticker", "Company", "Sector", "Beta", "Market cap", "Revenue", "Net income",
+        "Est. EBITDA", "EBITDA margin", "EBITDA trend", "Debt / EBITDA",
+        "Cash", "Operating cash flow", "Signals", "Latest filed date",
+    ]
     if not rows:
-        return pd.DataFrame(
-            columns=[
-                "Ticker",
-                "Company",
-                "Sector",
-                "Beta",
-                "Market cap",
-                "Revenue",
-                "Net income",
-                "Cash",
-                "Operating cash flow",
-                "Signals",
-                "Latest filed date",
-            ]
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows)[columns]
+
+
+def build_ebitda_watch_html(diagnosis: PortfolioRiskDiagnosis) -> str:
+    """Surface EBITDA-based operating-quality flags for held names directly.
+
+    This is standalone risk evidence: it flags holdings with weak EBITDA health
+    (negative, deteriorating, thin margin, or high leverage) even when the name
+    is not being trimmed, so the user sees the operating-quality concern itself.
+    """
+    flagged: list[str] = []
+    healthy = 0
+    no_data = 0
+    for f in diagnosis.holding_fundamentals:
+        issues: list[str] = []
+        if f.ebitda is None:
+            no_data += 1
+            continue
+        if f.ebitda < 0:
+            issues.append("EBITDA is negative")
+        if f.ebitda_trend_pct is not None and f.ebitda_trend_pct <= -0.15:
+            issues.append(f"EBITDA down {f.ebitda_trend_pct:.0%} vs prior year")
+        if f.ebitda_margin is not None and f.ebitda_margin < 0.10:
+            issues.append(f"thin EBITDA margin ({f.ebitda_margin:.1%})")
+        if f.debt_to_ebitda is not None and f.debt_to_ebitda > 4.0:
+            issues.append(f"high debt/EBITDA ({f.debt_to_ebitda:.1f}x)")
+        if issues:
+            flagged.append(
+                f"<li style='margin-bottom:6px'><strong>{f.ticker}</strong>: "
+                + ", ".join(issues) + "</li>"
+            )
+        else:
+            healthy += 1
+
+    header = (
+        "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;margin-top:14px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:16px;font-weight:800;color:#f8fafc'>Operating quality (EBITDA) watch</div>"
+        f"{section_provenance_note('Rule-based', 'estimated from SEC company facts', 'rule')}"
+    )
+    if not flagged:
+        coverage = healthy + no_data
+        body = (
+            "<div style='font-size:14px;color:#cbd5e1;margin-top:10px'>"
+            f"No EBITDA red flags among the {healthy} held names with available SEC data"
+            + (f" ({no_data} holdings had no EBITDA data)." if no_data else ".")
+            + "</div>"
         )
-    return pd.DataFrame(rows)
+        return header + body + "</div>"
+    body = (
+        "<div style='font-size:13px;color:#cbd5e1;margin-top:8px'>"
+        "These holdings show weaker operating quality on an estimated-EBITDA basis "
+        "(shown regardless of whether they are being trimmed):</div>"
+        f"<ul style='margin:10px 0 0 18px;color:#f1f5f9 !important;line-height:1.55'>{''.join(flagged)}</ul>"
+    )
+    if no_data:
+        body += (
+            f"<div style='font-size:12px;color:#94a3b8;margin-top:8px'>"
+            f"{no_data} other holdings had no EBITDA data (ETFs, foreign filers, or names "
+            "not in the SEC facts set).</div>"
+        )
+    return header + body + "</div>"
 
 
 def build_narrative_evidence_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
@@ -9466,7 +9522,7 @@ def _no_file_selected_outputs() -> tuple[Any, ...]:
         "Or switch <em>Dataset Source</em> to the bundled fake dataset to explore the demo."
         "</div>"
     )
-    outputs: list[Any] = [gr.update()] * 139
+    outputs: list[Any] = [gr.update()] * 140
     outputs[0] = message
     outputs[5] = {}   # risk_state
     outputs[6] = {}   # diagnosis_state
@@ -9554,6 +9610,7 @@ def run_analysis(
     diagnosis_holding_fundamentals_df = build_holding_fundamentals_frame(diagnosis)
     diagnosis_narrative_evidence_df = build_narrative_evidence_frame(diagnosis)
     diagnosis_macro_html = build_macro_context_html(diagnosis)
+    ebitda_watch_html = build_ebitda_watch_html(diagnosis)
     diagnosis_coverage_df = build_data_coverage_frame(diagnosis)
     diagnosis_confidence_html = build_confidence_completeness_html(diagnosis)
     diagnosis_chart_payload, diagnosis_stock_choices = build_diagnosis_risk_chart_payload(
@@ -9709,6 +9766,7 @@ def run_analysis(
         build_lightweight_table_html(diagnosis_narrative_evidence_df, "Filing and News Evidence"),
         recent_volatility_fig,
         diagnosis_macro_html,
+        ebitda_watch_html,
         build_lightweight_table_html(diagnosis_coverage_df, "Source Coverage"),
         diagnosis_confidence_html,
         sector_fig,
@@ -10003,6 +10061,7 @@ def build_app() -> gr.Blocks:
                                 label="Downside Depth vs S&P 500",
                             )
                         diagnosis_macro_md = gr.HTML()
+                        diagnosis_ebitda_md = gr.HTML()
                         with gr.Accordion("Detailed Evidence", open=False):
                             diagnosis_risk_evidence_plot = gr.Plot(
                                 value=empty_dashboard_plot("Run analysis to see detailed risk evidence"),
@@ -10335,6 +10394,7 @@ def build_app() -> gr.Blocks:
                 diagnosis_narrative_evidence_df,
                 diagnosis_recent_volatility_plot,
                 diagnosis_macro_md,
+                diagnosis_ebitda_md,
                 diagnosis_coverage_df,
                 diagnosis_confidence_md,
                 diagnosis_sector_plot,
