@@ -9432,6 +9432,32 @@ def resolve_ollama_analysis(
         )
 
 
+def _no_file_selected_outputs() -> tuple[Any, ...]:
+    """Return a clean 'no file selected' state for the analyze outputs.
+
+    Index 0 is the summary-cards HTML (we put the message there); positions
+    5,6,7,8,20 are gr.State outputs (reset to empty); everything else is
+    gr.update() so no component shows a red 'Error' badge.
+    """
+    message = (
+        "<div style='padding:22px;border:1px solid #bfdbfe;border-radius:14px;"
+        "background:#eff6ff;color:#1e3a8a;font-size:15px;line-height:1.5'>"
+        "<strong>No CSV selected yet.</strong> Click the highlighted "
+        "<em>Choose Robinhood CSV</em> button on the left to upload your export, "
+        "then press <strong>Run Analysis</strong>. "
+        "Or switch <em>Dataset Source</em> to the bundled fake dataset to explore the demo."
+        "</div>"
+    )
+    outputs: list[Any] = [gr.update()] * 139
+    outputs[0] = message
+    outputs[5] = {}   # risk_state
+    outputs[6] = {}   # diagnosis_state
+    outputs[7] = {}   # buy_preferences_state
+    outputs[8] = []   # buy_candidates_state (list)
+    outputs[20] = {}  # diagnosis_chart_state
+    return tuple(outputs)
+
+
 def run_analysis(
     file_obj: Any,
     risk_profile: int,
@@ -9445,7 +9471,10 @@ def run_analysis(
         csv_path = REPO_ROOT / "data" / "raw" / "fake_mantis_invest.csv"
     else:
         if file_obj is None:
-            raise gr.Error("Upload a Robinhood CSV export first or switch to the bundled fake dataset.")
+            # No file selected. Raising gr.Error here paints a red "Error" badge on
+            # every one of the ~139 outputs, which looks alarming. Instead show one
+            # clean message in the summary area and leave everything else untouched.
+            return _no_file_selected_outputs()
         if hasattr(file_obj, "name"):
             csv_path = Path(file_obj.name)
         else:
@@ -10579,6 +10608,20 @@ LAUNCH_CSS = """
 .gradio-container .gr-button-secondary:hover {
     background: #f8fafc !important;
     border-color: #cbd5e1 !important;
+}
+
+/* ── Highlight the "Choose Robinhood CSV" upload as the first action ── */
+#csv-upload-btn {
+    background: #eff6ff !important;
+    border: 2px dashed #2563eb !important;
+    color: #1d4ed8 !important;
+    font-weight: 700 !important;
+    border-radius: 10px !important;
+    box-shadow: 0 0 0 3px rgba(37,99,235,.10) !important;
+}
+#csv-upload-btn:hover {
+    background: #dbeafe !important;
+    border-color: #1d4ed8 !important;
 }
 
 /* ── Sidebar notes block ────────────────────────────────── */
