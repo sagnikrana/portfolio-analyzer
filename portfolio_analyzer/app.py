@@ -7695,6 +7695,137 @@ def build_portfolio_gaps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     )
 
 
+def build_monthly_performance_frame(
+    transactions: pd.DataFrame,
+    timeseries_records: list[dict[str, Any]],
+    max_months: int = 36,
+) -> pd.DataFrame:
+    """Reconstruct a whole-portfolio monthly performance history.
+
+    Columns mirror a brokerage monthly statement:
+      Month, Beginning Balance, Deposits/Withdrawals, Market Gain/Loss,
+      Income Returns, Personal Investment Returns, Cumulative Returns,
+      Ending Balance.
+
+    Ending balance comes from the daily total account-value series (invested
+    holdings + cash). Deposits/withdrawals (ACH) and income (dividends +
+    interest) come from the transaction ledger. Market gain/loss is the residual
+    so that, by construction:
+        Ending = Beginning + Deposits + Market Gain/Loss + Income
+    """
+    if not timeseries_records:
+        return pd.DataFrame()
+    ts = pd.DataFrame(timeseries_records)
+    if "date" not in ts.columns or "account_value" not in ts.columns:
+        return pd.DataFrame()
+    ts["date"] = pd.to_datetime(ts["date"], errors="coerce")
+    ts["account_value"] = pd.to_numeric(ts["account_value"], errors="coerce")
+    ts = ts.dropna(subset=["date", "account_value"]).sort_values("date")
+    if ts.empty:
+        return pd.DataFrame()
+
+    account = ts.set_index("date")["account_value"]
+    month_end = account.resample("ME").last().dropna()
+    if month_end.empty:
+        return pd.DataFrame()
+
+    # Per-month flows from the transaction ledger.
+    tx = transactions.copy()
+    tx["Activity Date"] = pd.to_datetime(tx["Activity Date"], errors="coerce")
+    tx = tx.dropna(subset=["Activity Date"])
+    tx["period"] = tx["Activity Date"].dt.to_period("M")
+    amount = pd.to_numeric(tx.get("Amount_num", 0), errors="coerce").fillna(0.0)
+    tx = tx.assign(amount=amount)
+    ach_by_month = tx[tx["Trans Code"] == "ACH"].groupby("period")["amount"].sum()
+    income_by_month = tx[tx["Trans Code"].isin(["CDIV", "INT"])].groupby("period")["amount"].sum()
+
+    rows: list[dict[str, Any]] = []
+    prior_ending: float | None = None
+    cumulative = 0.0
+    first_value = float(account.iloc[0])
+    for period_end, ending in month_end.items():
+        ending = float(ending)
+        period = pd.Period(period_end, freq="M")
+        deposits = float(ach_by_month.get(period, 0.0))
+        income = float(income_by_month.get(period, 0.0))
+        beginning = prior_ending if prior_ending is not None else first_value
+        market_gain = ending - beginning - deposits - income
+        personal_returns = market_gain + income
+        cumulative += personal_returns
+        rows.append(
+            {
+                "Month": period.strftime("%m/%Y"),
+                "Beginning Balance": round(beginning, 2),
+                "Deposits / Withdrawals": round(deposits, 2),
+                "Market Gain / Loss": round(market_gain, 2),
+                "Income Returns": round(income, 2),
+                "Personal Investment Returns": round(personal_returns, 2),
+                "Cumulative Returns": round(cumulative, 2),
+                "Ending Balance": round(ending, 2),
+            }
+        )
+        prior_ending = ending
+
+    frame = pd.DataFrame(rows)
+    # Most recent month first, like a brokerage statement.
+    frame = frame.iloc[::-1].reset_index(drop=True)
+    if max_months and len(frame) > max_months:
+        frame = frame.head(max_months)
+    return frame
+
+
+def build_monthly_performance_html(frame: pd.DataFrame) -> str:
+    """Render the monthly performance frame as a styled table on a dark panel."""
+    panel_open = (
+        "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;margin-top:18px;"
+        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "<div style='font-size:18px;font-weight:800;color:#f8fafc'>Monthly Performance (whole portfolio)</div>"
+        "<div style='font-size:13px;color:#94a3b8;margin-top:6px'>"
+        "Beginning balance, contributions, market gain/loss, income, and ending account value for each month.</div>"
+    )
+    if frame is None or frame.empty:
+        return (
+            panel_open
+            + "<div style='font-size:14px;color:#cbd5e1;margin-top:12px'>"
+            "Run analysis to build the monthly history.</div></div>"
+        )
+
+    money_cols = [c for c in frame.columns if c != "Month"]
+
+    def cell(col: str, value: Any) -> str:
+        text = money_text(value)
+        color = "#e2e8f0"
+        # Color signed return columns red/green.
+        if col in ("Market Gain / Loss", "Personal Investment Returns", "Cumulative Returns"):
+            try:
+                num = float(value)
+                color = "#4ade80" if num > 0 else "#f87171" if num < 0 else "#cbd5e1"
+            except (TypeError, ValueError):
+                color = "#cbd5e1"
+        return f"<td style='padding:8px 12px;text-align:right;color:{color};white-space:nowrap'>{text}</td>"
+
+    header_cells = "".join(
+        f"<th style='padding:9px 12px;text-align:{'left' if c == 'Month' else 'right'};"
+        "font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;"
+        f"font-weight:700;white-space:nowrap'>{c}</th>"
+        for c in frame.columns
+    )
+    body_rows = ""
+    for _, row in frame.iterrows():
+        cells = f"<td style='padding:8px 12px;text-align:left;color:#f8fafc;font-weight:600;white-space:nowrap'>{row['Month']}</td>"
+        cells += "".join(cell(col, row[col]) for col in money_cols)
+        body_rows += f"<tr style='border-top:1px solid rgba(148,163,184,.12)'>{cells}</tr>"
+
+    table = (
+        "<div style='overflow-x:auto;margin-top:14px'>"
+        "<table style='width:100%;border-collapse:collapse;font-size:13px'>"
+        f"<thead><tr>{header_cells}</tr></thead>"
+        f"<tbody>{body_rows}</tbody>"
+        "</table></div>"
+    )
+    return panel_open + table + "</div>"
+
+
 def build_single_ticker_timeseries_records(
     ticker: str,
     ticker_close: pd.DataFrame,
@@ -9389,6 +9520,9 @@ def run_analysis(
 
     progress(0.75, desc="Finding portfolio gaps and generating buy ideas...")
     portfolio_gaps_html = build_portfolio_gaps_html(diagnosis)
+    monthly_performance_html = build_monthly_performance_html(
+        build_monthly_performance_frame(transactions, market_metrics.get("timeseries", []))
+    )
     portfolio_gap_fig = plot_portfolio_gaps(diagnosis)
     portfolio_gaps_df = build_portfolio_gap_frame(diagnosis)
     portfolio_preferences_df = build_portfolio_preferences_frame(diagnosis.portfolio_preferences)
@@ -9494,6 +9628,7 @@ def run_analysis(
         build_lightweight_table_html(risk_actions_df, "Recommendation Detail"),
         *featured_risk_action_outputs,
         portfolio_gaps_html,
+        monthly_performance_html,
         portfolio_gap_fig,
         build_lightweight_table_html(portfolio_gaps_df, "Gap Quick Read"),
         build_lightweight_table_html(portfolio_preferences_df, "Preferences and Constraints"),
@@ -9862,6 +9997,7 @@ def build_app() -> gr.Blocks:
                         risk_actions_df = gr.HTML(visible=False)
                     with gr.Tab("Portfolio Gaps", id="portfolio-gaps"):
                         portfolio_gaps_md = gr.HTML()
+                        portfolio_monthly_md = gr.HTML()
                         portfolio_gap_plot = gr.Plot(
                             value=empty_dashboard_plot("Run analysis to see what the portfolio still needs most"),
                             label="What The Portfolio Still Needs Most",
@@ -10116,6 +10252,7 @@ def build_app() -> gr.Blocks:
                 *featured_risk_action_cards,
                 *featured_risk_action_plots,
                 portfolio_gaps_md,
+                portfolio_monthly_md,
                 portfolio_gap_plot,
                 portfolio_gaps_df,
                 portfolio_preferences_df,
