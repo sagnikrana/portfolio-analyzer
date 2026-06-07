@@ -10256,6 +10256,15 @@ LAUNCH_CSS = """
     padding: 0 20px 20px !important;
     font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif !important;
 }
+/* Bold and list text inside the content HTML panels must follow their parent's
+   color. Several panels render light text on dark cards; without this, <strong>
+   and <li> fall back to the dark base text color and become invisible. */
+.gradio-container strong,
+.gradio-container b,
+.gradio-container li {
+    color: inherit !important;
+    -webkit-text-fill-color: inherit !important;
+}
 .gradio-container [role="tablist"] {
     display: none !important;
 }
