@@ -2264,20 +2264,26 @@ def _plot_backtest_counterfactual(
     ignored_index = (ignored.to_numpy() / norm_base) * 100.0
     followed_index = (followed.to_numpy() / norm_base) * 100.0
 
-    fig = make_subplots(
-        rows=1,
-        cols=2,
-        column_widths=[0.7, 0.3],
-        horizontal_spacing=0.14,
-        specs=[[{"type": "xy"}, {"type": "bar"}]],
-        subplot_titles=(
-            "Growth of the moved sleeve since the backtest date",
-            "Ending sleeve value today",
-        ),
-    )
+    # Single-subplot line chart. We deliberately avoid make_subplots here: Gradio
+    # renders plots with Plotly.react, which cannot cleanly transition from the
+    # single-subplot placeholder to a 2-subplot figure (the date axis ends up
+    # mis-scaled — line looks near-vertical, traces drop). The ending-value bar
+    # this replaced is redundant with the metric cards and the summary text.
+    # Use clean YYYY-MM-DD date strings for x. Passing a raw pandas DatetimeIndex
+    # serializes to nanosecond-precision ISO strings (…T00:00:00.000000000) that
+    # Gradio's bundled (older) Plotly misparses, compressing the line and dropping
+    # traces. Plain date strings parse correctly.
+    x_dates = [pd.Timestamp(d).strftime("%Y-%m-%d") for d in timeline.index]
+    final_date = x_dates[-1]
+    final_app = float(followed.iloc[-1])
+    final_ignored = float(ignored.iloc[-1])
+    final_app_index = float(followed_index[-1])
+    final_ignored_index = float(ignored_index[-1])
+
+    fig = go.Figure()
     fig.add_trace(
         go.Scatter(
-            x=timeline.index,
+            x=x_dates,
             y=ignored_index,
             mode="lines",
             name="Ignored recommendations",
@@ -2288,13 +2294,11 @@ def _plot_backtest_counterfactual(
                 "Ignored path: %{y:.1f} index<br>"
                 "Actual sleeve value: $%{customdata[0]:,.2f}<extra></extra>"
             ),
-        ),
-        row=1,
-        col=1,
+        )
     )
     fig.add_trace(
         go.Scatter(
-            x=timeline.index,
+            x=x_dates,
             y=followed_index,
             mode="lines",
             name="Followed app recommendation",
@@ -2305,9 +2309,7 @@ def _plot_backtest_counterfactual(
                 "App path: %{y:.1f} index<br>"
                 "Actual sleeve value: $%{customdata[0]:,.2f}<extra></extra>"
             ),
-        ),
-        row=1,
-        col=1,
+        )
     )
     cutoff_x = pd.Timestamp(cutoff_date).strftime("%Y-%m-%d")
     fig.add_shape(
@@ -2330,26 +2332,18 @@ def _plot_backtest_counterfactual(
         font={"color": "#475569", "size": 12},
         bgcolor="rgba(255,255,255,0.88)",
     )
-    final_date = timeline.index[-1]
-    final_app = float(followed.iloc[-1])
-    final_ignored = float(ignored.iloc[-1])
-    final_app_index = float(followed_index[-1])
-    final_ignored_index = float(ignored_index[-1])
-    app_is_higher = final_app_index >= final_ignored_index
     fig.add_trace(
         go.Scatter(
             x=[final_date],
             y=[final_ignored_index],
             mode="markers+text",
             marker={"color": "#ef4444", "size": 10, "symbol": "circle"},
-            text=[f"  Ignored {final_ignored_index:.1f}"],
-            textposition="middle right",
+            text=[f"Ignored {final_ignored_index:.1f} (${final_ignored:,.0f})  "],
+            textposition="middle left",
             textfont={"color": "#b91c1c", "size": 11},
             hoverinfo="skip",
             showlegend=False,
-        ),
-        row=1,
-        col=1,
+        )
     )
     fig.add_trace(
         go.Scatter(
@@ -2357,66 +2351,60 @@ def _plot_backtest_counterfactual(
             y=[final_app_index],
             mode="markers+text",
             marker={"color": "#2563eb", "size": 10, "symbol": "circle"},
-            text=[f"  App {final_app_index:.1f}"],
-            textposition="middle right",
+            text=[f"App {final_app_index:.1f} (${final_app:,.0f})  "],
+            textposition="middle left",
             textfont={"color": "#1d4ed8", "size": 11},
             hoverinfo="skip",
             showlegend=False,
-        ),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Bar(
-            x=["Ignored", "Followed app"],
-            y=[final_ignored, final_app],
-            marker={"color": ["#ef4444", "#2563eb"]},
-            text=[money_text(final_ignored), money_text(final_app)],
-            textposition="outside",
-            hovertemplate="%{x}<br>Ending sleeve value: $%{y:,.2f}<extra></extra>",
-            showlegend=False,
-        ),
-        row=1,
-        col=2,
-    )
-    fig.update_layout(
-        height=480,
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(248,250,252,0.94)",
-        hovermode="x unified",
-        legend={"orientation": "h", "x": 0.02, "xanchor": "left", "y": 1.06, "yanchor": "bottom"},
-        margin={"l": 64, "r": 110, "t": 60, "b": 42},
-        font={"color": "#0f172a"},
+        )
     )
     all_index_vals = list(ignored_index) + list(followed_index)
     y_min = max(0.0, float(min(all_index_vals)) * 0.94)
     y_max = float(max(all_index_vals)) * 1.06
-    # Extend x-axis slightly beyond the last data point so endpoint labels don't clip.
-    x_end = (pd.Timestamp(final_date) + pd.Timedelta(days=30)).strftime("%Y-%m-%d")
-    fig.update_yaxes(
-        title_text="Index (100 = sleeve value at cutoff)",
-        range=[y_min, y_max],
-        gridcolor="rgba(148,163,184,0.24)",
-        row=1,
-        col=1,
+    fig.update_layout(
+        autosize=True,
+        height=460,
+        title={"text": "Growth of the moved sleeve since the backtest date", "x": 0.5, "xanchor": "center"},
+        template="plotly_white",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(248,250,252,0.94)",
+        hovermode="x unified",
+        legend={"orientation": "h", "x": 0.02, "xanchor": "left", "y": 1.04, "yanchor": "bottom"},
+        margin={"l": 64, "r": 40, "t": 70, "b": 46},
+        font={"color": "#0f172a"},
+        xaxis={"title_text": "Date", "gridcolor": "rgba(148,163,184,0.20)"},
+        yaxis={
+            "title_text": "Index (100 = sleeve value at cutoff)",
+            "range": [y_min, y_max],
+            "gridcolor": "rgba(148,163,184,0.24)",
+        },
     )
-    fig.update_xaxes(
-        title_text="Date",
-        range=[cutoff_x, x_end],
-        gridcolor="rgba(148,163,184,0.20)",
-        row=1,
-        col=1,
-    )
-    fig.update_yaxes(
-        title_text="Ending sleeve value",
-        tickprefix="$",
-        gridcolor="rgba(148,163,184,0.24)",
-        row=1,
-        col=2,
-    )
-    fig.update_xaxes(title_text="", tickangle=20, row=1, col=2)
     return fig
+
+
+def _backtest_chart_html(fig: go.Figure, height: int = 500) -> str:
+    """Render a Plotly figure inside an isolated iframe.
+
+    Gradio's gr.Plot mis-paints this date-axis figure (the line compresses to a
+    near-vertical streak and a trace drops) even though the figure data is
+    correct — a quirk of Gradio's bundled Plotly + react path. Rendering the
+    figure's own standalone HTML inside an iframe (scripts in srcdoc DO execute,
+    unlike gr.HTML innerHTML) uses CDN Plotly and renders identically to a
+    standalone export, which is verified-correct.
+    """
+    doc = fig.to_html(include_plotlyjs="cdn", full_html=True, config={"displayModeBar": False})
+    escaped = html.escape(doc, quote=True)
+    return (
+        f'<iframe srcdoc="{escaped}" title="Backtest chart" loading="eager" '
+        f'scrolling="no" style="width:100%;height:{height}px;border:0;background:transparent"></iframe>'
+    )
+
+
+def _backtest_chart_placeholder(message: str) -> str:
+    return (
+        "<div style='padding:20px;border:1px dashed rgba(148,163,184,.4);border-radius:14px;"
+        f"background:#ffffff;color:#475569;font-size:14px'>{message}</div>"
+    )
 
 
 def run_backtest(
@@ -2555,7 +2543,7 @@ def run_backtest(
         )
         return (
             summary_html,
-            empty_dashboard_plot("No actionable backtest recommendations for this date"),
+            _backtest_chart_placeholder("No actionable backtest recommendations for this date."),
             build_lightweight_table_html(None, "Sell / Trim Actions As Of Cutoff"),
             build_lightweight_table_html(None, "Hypothetical Buys As Of Cutoff"),
             build_lightweight_table_html(None, "Counterfactual Execution Steps"),
@@ -2763,7 +2751,7 @@ def run_backtest(
 
     return (
         summary_html,
-        _plot_backtest_counterfactual(timeline, cutoff_date, benefit),
+        _backtest_chart_html(_plot_backtest_counterfactual(timeline, cutoff_date, benefit)),
         build_lightweight_table_html(pd.DataFrame(action_rows), "Sell / Trim Actions As Of Cutoff"),
         build_lightweight_table_html(pd.DataFrame(buy_rows), "Hypothetical Buys As Of Cutoff"),
         build_lightweight_table_html(pd.DataFrame(trades_rows), "Counterfactual Execution Steps"),
@@ -10282,8 +10270,10 @@ def build_app() -> gr.Blocks:
                                         "against the app's counterfactual recommendation path.</div>"
                                     )
                                 )
-                        backtest_plot = gr.Plot(
-                            value=empty_dashboard_plot("Run a backtest to compare ignored versus followed recommendations"),
+                        backtest_plot = gr.HTML(
+                            value=_backtest_chart_placeholder(
+                                "Run a backtest to compare ignored versus followed recommendations."
+                            ),
                             label="Ignored Recommendations vs App Counterfactual",
                         )
                         with gr.Row(equal_height=False):
@@ -10514,16 +10504,15 @@ def build_app() -> gr.Blocks:
             show_progress="hidden",
         )
 
-        # Plotly charts in Gradio can paint at a stale container width when their
-        # tab/section was not the visible view at render time (e.g. the Backtesting
-        # chart), compressing lines into a near-vertical streak. A periodic resize
-        # event makes Plotly recompute to its true width; it's a no-op when the
-        # width is unchanged. Runs in the browser via the load event's _js hook.
+        # Nudge Plotly to recompute to its true container width once shortly after
+        # load, then again after a moment, so charts created in not-yet-sized
+        # sections settle correctly. A few one-off dispatches (not a tight
+        # interval) avoid corrupting the redraw mid-paint.
         demo.load(
             None,
             None,
             None,
-            _js="() => { setInterval(() => window.dispatchEvent(new Event('resize')), 1500); }",
+            _js="() => { [400, 1200, 2500].forEach(t => setTimeout(() => window.dispatchEvent(new Event('resize')), t)); }",
         )
 
     return demo
