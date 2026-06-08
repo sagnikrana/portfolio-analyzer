@@ -10552,11 +10552,14 @@ def build_app() -> gr.Blocks:
                                     step=1,
                                     label="Buy-Side Risk Tolerance (0-100)",
                                 )
+                                # Vehicle mix (ETF vs single stock) is no longer a user toggle:
+                                # the validated buy engine decides the blend. Kept hidden and
+                                # locked to "Blend" so the engine considers both vehicle types.
                                 buy_vehicle_preference = gr.Radio(
                                     choices=["Blend", "Prefer ETFs", "Prefer single stocks", "ETFs only", "Single stocks only"],
                                     value="Blend",
                                     label="Preferred Vehicle Mix",
-                                    info="Use one control for the whole vehicle rule so the settings stay internally consistent.",
+                                    visible=False,
                                 )
                                 buy_prefer_high_dividend_etfs = gr.Checkbox(
                                     label="Prefer high-dividend ETFs when they still fit",
@@ -10592,6 +10595,21 @@ def build_app() -> gr.Blocks:
                             )
                         )
                     with gr.Tab("Buy Ideas", id="buy-ideas"):
+                        gr.HTML(
+                            "<div style='padding:16px 18px;border:1px solid #fcd34d;border-radius:14px;"
+                            "background:#fffbeb;color:#334155;line-height:1.55;font-size:13px'>"
+                            "<div style='font-weight:800;color:#92400e;font-size:14px;margin-bottom:6px'>"
+                            "Honest track record — read before acting</div>"
+                            "When these ideas are graded <b>fairly</b> (no future-peeking, after trading costs, "
+                            "vs the S&P 500) across 2022–2025, they were <b>roughly index-like overall</b> "
+                            "(about +2% average net edge, beating the index in ~57% of 12-month windows). "
+                            "The pattern is a <b>quality / defensive tilt</b>: it tends to <b>beat in down and "
+                            "recovery markets</b> and <b>lag in megacap-tech-led bull runs</b>. "
+                            "Treat these as <b>research ideas benchmarked against a low-cost index fund</b> — "
+                            "not guaranteed market-beaters. The honest scorecard is in "
+                            "<code>automation/validation.py</code>. Educational only; not investment advice."
+                            "</div>"
+                        )
                         buy_ideas_view = gr.Radio(
                             choices=["Quick Read", "Evidence Detail", "Full Detail"],
                             value="Quick Read",
