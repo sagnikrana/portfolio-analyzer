@@ -41,11 +41,11 @@ N_ETF = 3
 N_STOCK = 7
 CHART_LOOKBACK_YEARS = 3
 
-# Local Ollama agent — no API key, data never leaves the machine. Override the
-# model with OLLAMA_MODEL (e.g. "llama3.3:latest" for higher quality).
+# Local Ollama agent — no API key, data never leaves the machine. Default is a
+# strong mid-size model; set OLLAMA_MODEL=llama3.1:latest for faster, lighter runs.
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1:latest")
-OLLAMA_TIMEOUT_S = int(os.environ.get("OLLAMA_TIMEOUT_S", "300"))
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:32b")
+OLLAMA_TIMEOUT_S = int(os.environ.get("OLLAMA_TIMEOUT_S", "600"))
 
 
 # ── Data shapes ───────────────────────────────────────────────────────────────

@@ -1,13 +1,11 @@
 """Dashboard AI assistant — local Ollama, grounded in the latest analysis.
 
-Two features wired into the Gradio app:
+Wired into the Gradio app:
   - generate_plain_summary(): a plain-English, prioritized narrative of the
     current portfolio (button in the Next Steps tab).
-  - chat_about_portfolio(message, history): a conversational agent that answers
-    questions using the latest saved diagnosis as context ("Ask Your Portfolio").
 
-Both run entirely on the local Ollama model (no API key) and degrade gracefully
-if Ollama isn't running or no analysis has been run yet.
+Runs entirely on the local Ollama model (no API key) and degrades gracefully if
+Ollama isn't running or no analysis has been run yet.
 """
 
 from __future__ import annotations
@@ -112,43 +110,3 @@ def generate_plain_summary() -> str:
         "The local AI returned nothing this time — please try again. "
         "(Model: " + OLLAMA_MODEL + ")"
     )
-
-
-def chat_about_portfolio(message: str, history: list) -> tuple[str, list]:
-    """Conversational agent grounded in the latest analysis.
-
-    `history` is Gradio Chatbot format: a list of [user, assistant] pairs.
-    Returns ("", updated_history) so the input box clears.
-    """
-    message = (message or "").strip()
-    if not message:
-        return "", history
-    history = list(history or [])
-
-    diagnosis = _load_latest_diagnosis()
-    if diagnosis is None:
-        return "", history + [[message, NO_ANALYSIS_MSG]]
-    if not ollama_available():
-        return "", history + [[message, NO_OLLAMA_MSG]]
-
-    context = build_portfolio_context(diagnosis)
-    system = (
-        "You are a helpful assistant answering questions about THIS user's portfolio. "
-        "Use only the analysis context below; if something isn't in it, say you don't "
-        "have that data rather than guessing. Never invent numbers. Be concise and "
-        "concrete. This is educational portfolio review, not investment advice.\n\n"
-        "=== PORTFOLIO ANALYSIS CONTEXT ===\n" + context
-    )
-    oll_history: list[dict] = []
-    for turn in history:
-        if isinstance(turn, (list, tuple)) and len(turn) == 2:
-            u, b = turn
-            if u:
-                oll_history.append({"role": "user", "content": str(u)})
-            if b:
-                oll_history.append({"role": "assistant", "content": str(b)})
-
-    answer = ollama_chat(system, message, history=oll_history)
-    if not answer:
-        answer = "Sorry — the local AI didn't respond that time. Please try again."
-    return "", history + [[message, answer]]

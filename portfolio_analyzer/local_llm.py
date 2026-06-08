@@ -1,9 +1,10 @@
 """Shared local Ollama client (no API key, data stays on the machine).
 
-Used by both the dashboard assistant (plain-English summary + chat) and the
-weekly automation digest, so there's a single implementation of the local-LLM
-call. Configure with OLLAMA_MODEL (default llama3.1:latest; llama3.3:latest for
-higher quality) and OLLAMA_HOST.
+Used by the dashboard assistant (plain-English summary) and the weekly
+automation digest, so there's a single implementation of the local-LLM call.
+Configure with OLLAMA_MODEL (default qwen2.5:32b — a strong mid-size model that
+fits comfortably in memory; llama3.1:latest is a faster, lighter option) and
+OLLAMA_HOST.
 """
 
 from __future__ import annotations
@@ -14,8 +15,10 @@ import urllib.request
 from typing import Optional
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1:latest")
-OLLAMA_TIMEOUT_S = int(os.environ.get("OLLAMA_TIMEOUT_S", "300"))
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:32b")
+# Mid-size models are slower than 8B; give generous headroom (still under the
+# patched Gradio queue timeout of 600s used by the dashboard).
+OLLAMA_TIMEOUT_S = int(os.environ.get("OLLAMA_TIMEOUT_S", "600"))
 
 
 def ollama_available() -> bool:
