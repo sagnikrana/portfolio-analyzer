@@ -2448,6 +2448,32 @@ def _relative_window_readout(
     return underperform_count, outperform_count, evidence
 
 
+def _clip(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _interp(x: float, anchors: list[tuple[float, float]]) -> float:
+    """Piecewise-linear interpolation through (x, y) anchors (continuous, no cliffs)."""
+    if x <= anchors[0][0]:
+        return anchors[0][1]
+    if x >= anchors[-1][0]:
+        return anchors[-1][1]
+    for (x0, y0), (x1, y1) in zip(anchors, anchors[1:]):
+        if x0 <= x <= x1:
+            span = (x1 - x0) or 1.0
+            return y0 + (y1 - y0) * (x - x0) / span
+    return anchors[-1][1]
+
+
+# Smooth trim ramp (P3b): replaces the old step-band table so a hair of extra
+# underperformance can't jump the trim size a whole bucket. Anchors preserve the
+# prior aggressive magnitudes; risk pressure / variance nudge it up continuously.
+_TRIM_RAMP_ANCHORS = [
+    (0.08, 0.00), (0.12, 0.10), (0.20, 0.14), (0.30, 0.20),
+    (0.45, 0.25), (0.65, 0.34), (0.85, 0.46), (1.20, 0.62),
+]
+
+
 def _recommendation_reduction_from_underperformance(
     *,
     excess_return_vs_benchmark: float,
@@ -2455,42 +2481,28 @@ def _recommendation_reduction_from_underperformance(
     diagnosis_pressure_score: float,
     variance_contribution_pct: float,
 ) -> tuple[str, str, float]:
-    """Choose a trim/sell action from benchmark underperformance.
+    """Choose a trim/sell size from benchmark underperformance — smoothly.
 
-    This function intentionally requires underperformance versus the S&P 500.
-    Risk pressure can increase the trim size, but poor relative performance is
-    the gating signal that makes a sell-style recommendation appropriate.
+    Underperformance versus the S&P 500 is still the gate. The size now follows a
+    continuous ramp (no step buckets), with risk pressure and variance raising it
+    gradually rather than via hard thresholds.
     """
     underperformance = abs(excess_return_vs_benchmark)
+    if underperformance < 0.08:
+        return ("Hold for now", "hold_for_now", 0.0)
 
-    if underperformance >= 1.0 and current_weight <= 0.03:
-        return (
-            "Sell all shares",
-            "sell_all",
-            1.0,
-        )
-    if underperformance >= 0.85:
-        reduction = 0.5 if diagnosis_pressure_score >= 35 or variance_contribution_pct >= 0.01 else 0.35
-        return ("Reduce by 50%" if reduction == 0.5 else "Trim 35%", "deep_underperformance_trim", reduction)
-    if underperformance >= 0.65:
-        reduction = 0.35 if diagnosis_pressure_score >= 35 or variance_contribution_pct >= 0.01 else 0.25
-        return ("Trim 35%" if reduction == 0.35 else "Trim 25%", "heavy_underperformance_trim", reduction)
-    if underperformance >= 0.45:
-        reduction = 0.25 if diagnosis_pressure_score >= 30 or variance_contribution_pct >= 0.008 else 0.2 if diagnosis_pressure_score >= 20 or variance_contribution_pct >= 0.005 else 0.15
-        if reduction == 0.25:
-            return ("Trim 25%", "meaningful_underperformance_trim", reduction)
-        return ("Trim 20%" if reduction == 0.2 else "Trim 15%", "meaningful_underperformance_trim", reduction)
-    if underperformance >= 0.3:
-        reduction = 0.2 if diagnosis_pressure_score >= 25 or variance_contribution_pct >= 0.006 else 0.15
-        return ("Trim 20%" if reduction == 0.2 else "Trim 15%", "moderate_underperformance_trim", reduction)
-    if underperformance >= 0.2:
-        reduction = 0.15 if diagnosis_pressure_score >= 15 or variance_contribution_pct >= 0.004 else 0.10
-        return ("Trim 15%" if reduction == 0.15 else "Trim 10%", "watchlist_trim", reduction)
-    if underperformance >= 0.12:
-        return ("Trim 10%", "small_but_weak_trim", 0.10)
-    if underperformance >= 0.08 and (diagnosis_pressure_score >= 15 or variance_contribution_pct >= 0.004):
-        return ("Trim 10%", "early_weakness_trim", 0.10)
-    return ("Hold for now", "hold_for_now", 0.0)
+    base = _interp(underperformance, _TRIM_RAMP_ANCHORS)
+    pressure_factor = (
+        0.85
+        + 0.15 * _clip(diagnosis_pressure_score / 40.0, 0.0, 1.0)
+        + 0.10 * _clip(variance_contribution_pct / 0.02, 0.0, 1.0)
+    )
+    reduction = base * pressure_factor
+    # Tiny position with near-total lag eases toward a full exit (still smooth).
+    if current_weight <= 0.03 and underperformance >= 0.9:
+        reduction = max(reduction, _interp(underperformance, [(0.9, 0.55), (1.3, 1.0)]))
+    reduction = round(min(1.0, reduction), 4)
+    return (_recommendation_label_from_reduction(reduction), "underperformance_trim", reduction)
 
 
 def _recommendation_label_from_reduction(reduction_pct: float) -> str:
@@ -2550,38 +2562,34 @@ def _apply_quality_compounder_guardrail(
     before we cut large holdings that still have meaningful medium/long-term
     relative strength.
     """
-    is_large_compounder = current_weight >= 0.04 and (
-        (rel_3y is not None and rel_3y >= -0.15)
-        or (rel_5y is not None and rel_5y >= -0.10)
-        or outperform_windows >= 1
+    if reduction_pct <= 0 or current_weight < 0.04:
+        return reduction_pct, False
+
+    # Continuous "long-term strength" in [0,1] — how much medium/long-term
+    # relative support remains. Ramps instead of hard cliffs, so a name like MSFT
+    # at rel_5y = -10.5% gets nearly the same partial credit as one at -10.0%
+    # (the old cutoff denied it entirely and let the trim jump to 50%).
+    strength = 0.0
+    if rel_5y is not None:
+        strength = max(strength, _clip((rel_5y + 0.30) / 0.30, 0.0, 1.0))
+    if rel_3y is not None:
+        strength = max(strength, _clip((rel_3y + 0.30) / 0.30, 0.0, 1.0))
+    if outperform_windows >= 1:
+        strength = max(strength, _clip(0.5 + 0.25 * min(outperform_windows, 2), 0.0, 1.0))
+    if strength <= 0.0:
+        return reduction_pct, False
+
+    # Protection is dampened when pressure is high or it lagged every window.
+    dampener = _clip(
+        1.0 - diagnosis_pressure_score / 110.0 - 0.12 * max(0, underperform_windows - 1),
+        0.0,
+        1.0,
     )
-    if not is_large_compounder:
-        return reduction_pct, False
-
-    if diagnosis_pressure_score >= 55 or underperform_windows >= 3:
-        return reduction_pct, False
-
-    # If the evidence is only a modest since-buy lag on a large proven
-    # compounder, prefer monitoring over trimming. Backtests showed this was
-    # one of the main sources of false-positive sells.
-    if diagnosis_pressure_score < 40 and underperform_windows <= 1:
+    softening = 0.6 * strength * dampener  # cap protection at ~60% of the trim
+    softened = round(reduction_pct * (1.0 - softening), 4)
+    if softened < 0.05:
         softened = 0.0
-    elif (
-        excess_return_vs_benchmark is not None
-        and excess_return_vs_benchmark > -0.25
-        and diagnosis_pressure_score < 45
-        and underperform_windows <= 2
-        and (rel_3y is None or rel_3y > -0.15)
-    ):
-        if diagnosis_pressure_score < 35 and abs(excess_return_vs_benchmark) < 0.20:
-            softened = 0.0
-        else:
-            softened = min(reduction_pct, 0.10)
-    else:
-        softened = max(0.0, reduction_pct - 0.25)
-    if softened < 0.10:
-        softened = 0.0
-    return softened, softened != reduction_pct
+    return softened, abs(softened - reduction_pct) > 1e-6
 
 
 def _apply_non_core_laggard_escalation(
@@ -5121,6 +5129,7 @@ def _build_holding_action_recommendations(
                 diagnosis_pressure_score=diagnosis_pressure_score,
                 variance_contribution_pct=variance_contribution_pct,
             )
+            base_reduction_pct = reduction_pct  # for the escalation stacking cap (P3b)
             if reduction_pct == 0 and modifier_score >= 0.10 and (excess_return_vs_benchmark or 0.0) <= -0.12:
                 reduction_pct = 0.10 if modifier_score < 0.16 else 0.15
                 recommendation_code = "external_modifiers_trigger_trim"
@@ -5171,6 +5180,14 @@ def _build_holding_action_recommendations(
             )
             if escalated_non_core:
                 recommendation_code = "non_core_laggard_escalation"
+            # Stacking cap (P3b): unless a genuine full-exit fired, escalations may
+            # add at most ~28pp over the smooth base, so multiple rules reacting to
+            # the same underperformance can't compound into an outsized trim.
+            if reduction_pct < 0.999:
+                stacking_cap = min(1.0, base_reduction_pct + 0.28)
+                if reduction_pct > stacking_cap:
+                    reduction_pct = stacking_cap
+                    recommendation_code = "escalation_stacking_capped"
             reduction_pct, softened_quality = _apply_quality_compounder_guardrail(
                 reduction_pct=reduction_pct,
                 current_weight=current_weight,
