@@ -2287,6 +2287,66 @@ def _backtest_candidate_weights(
     return [(candidate, raw / total) for candidate, raw in zip(usable, raw_weights)]
 
 
+def _candidate_returns_as_of(
+    symbols_by_ticker: dict[str, str], as_of_date: pd.Timestamp
+) -> dict[str, dict[str, float]]:
+    """Trailing 1Y/3Y/5Y returns (vs S&P) for the buy universe AS OF a date.
+
+    Prevents look-ahead in the backtest: candidate scoring otherwise reads
+    present-day returns from a static enriched file, which leaks the future into
+    a past cutoff. We download closes capped at as_of and compute the same
+    trailing windows ending on/before the cutoff.
+    """
+    as_of = pd.Timestamp(as_of_date).normalize()
+    if not symbols_by_ticker:
+        return {}
+    yahoo_by_ticker = {t: normalize_ticker_for_yahoo(s) for t, s in symbols_by_ticker.items()}
+    yahoo_symbols = sorted(set(yahoo_by_ticker.values()) | {BENCHMARK_SYMBOL})
+    start = (as_of - pd.DateOffset(years=6) - pd.Timedelta(days=20)).strftime("%Y-%m-%d")
+    end = (as_of + pd.Timedelta(days=2)).strftime("%Y-%m-%d")  # capped at the cutoff
+    raw = _yf_download_retry(tickers=yahoo_symbols, start=start, end=end,
+                             auto_adjust=True, progress=False, threads=True)
+    if raw is None or getattr(raw, "empty", True):
+        return {}
+    close = raw["Close"] if "Close" in getattr(raw, "columns", []) else raw
+    if isinstance(close, pd.Series):
+        close = close.to_frame()
+    close.index = pd.to_datetime(close.index)
+    close = close.sort_index()
+
+    def _ret_ending(series: pd.Series, years: int) -> float | None:
+        s = pd.to_numeric(series, errors="coerce").dropna()
+        s = s[s.index <= as_of]  # belt-and-suspenders: never past the cutoff
+        if s.empty:
+            return None
+        cur = float(s.iloc[-1])
+        prior = s[s.index <= as_of - pd.DateOffset(years=years)]
+        if prior.empty or float(prior.iloc[-1]) <= 0:
+            return None
+        return cur / float(prior.iloc[-1]) - 1.0
+
+    bench = close[BENCHMARK_SYMBOL] if BENCHMARK_SYMBOL in close.columns else pd.Series(dtype=float)
+    bench_ret = {y: _ret_ending(bench, y) for y in (1, 3, 5)} if not bench.empty else {1: None, 3: None, 5: None}
+
+    out: dict[str, dict[str, float]] = {}
+    for ticker, ysym in yahoo_by_ticker.items():
+        if ysym not in close.columns:
+            continue
+        s = close[ysym]
+        rec: dict[str, float] = {}
+        ok = False
+        for y in (1, 3, 5):
+            sr = _ret_ending(s, y)
+            br = bench_ret.get(y)
+            rec[f"stock_{y}y_return_pct"] = sr
+            rec[f"benchmark_{y}y_return_pct"] = br
+            rec[f"relative_{y}y_return_pct"] = (sr - br) if (sr is not None and br is not None) else None
+            ok = ok or (rec[f"relative_{y}y_return_pct"] is not None)
+        if ok:
+            out[ticker] = rec
+    return out
+
+
 def _soft_backtest_action_candidates(
     recommendations: list[Any],
     *,
@@ -2665,9 +2725,27 @@ def _run_backtest_impl(
             )
         else:
             backtest_preferences = base_preferences.copy(update={"buy_idea_limit": BACKTEST_BUY_IDEA_COUNT})
+        # No look-ahead: recompute candidate trailing returns AS OF the cutoff so
+        # the buy-side scoring can't peek at post-cutoff performance.
+        try:
+            universe_entries = load_buy_candidate_universe(BUY_CANDIDATE_UNIVERSE_PATH)
+            symbols_by_ticker = {
+                e.ticker: (getattr(e, "market_data_symbol", None) or e.ticker)
+                for e in universe_entries
+                if getattr(e, "eligible_for_buy_engine", True)
+            }
+            as_of_returns = _candidate_returns_as_of(symbols_by_ticker, cutoff_date)
+        except Exception:
+            as_of_returns = {}
+        if not as_of_returns:
+            raise gr.Error(
+                "Could not compute as-of-cutoff candidate returns, so the backtest "
+                "was halted rather than risk look-ahead bias. Please try again."
+            )
         diagnosis.replacement_candidates = replacement_candidates_from_user_preferences(
             diagnosis=diagnosis,
             preferences=backtest_preferences,
+            as_of_returns=as_of_returns,
         )
         diagnosis.portfolio_preferences = backtest_preferences
 

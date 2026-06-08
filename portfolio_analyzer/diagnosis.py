@@ -4606,6 +4606,7 @@ def _build_replacement_candidates(
     portfolio_preferences: Optional[PortfolioPreferences],
     holding_action_recommendations: list[HoldingActionRecommendation],
     current_holdings: Optional[list[CurrentHoldingSnapshot]] = None,
+    as_of_returns: Optional[dict[str, dict[str, float]]] = None,
 ) -> list[ReplacementCandidate]:
     """Build the first explanation-first set of buy ideas.
 
@@ -4647,6 +4648,14 @@ def _build_replacement_candidates(
         if not portfolio_preferences.include_existing_holdings and entry.ticker in current_holding_map:
             continue
         row = enriched_records.get(entry.ticker, {})
+        if as_of_returns is not None:
+            # Backtest mode: replace the static (present-day) trailing returns with
+            # values computed as of the cutoff date so scoring can't peek at the
+            # future. Drop candidates with no usable history at the cutoff.
+            asof = as_of_returns.get(entry.ticker)
+            if not asof:
+                continue
+            row = {**row, **asof}
         preference_adjustment, preference_notes = _preference_penalty_or_bonus(
             entry,
             portfolio_preferences,
@@ -4822,6 +4831,7 @@ def replacement_candidates_from_user_preferences(
     *,
     diagnosis: PortfolioRiskDiagnosis,
     preferences: PortfolioPreferences,
+    as_of_returns: Optional[dict[str, dict[str, float]]] = None,
 ) -> list[ReplacementCandidate]:
     """Rebuild buy ideas after the user changes buy-side constraints.
 
@@ -4829,12 +4839,16 @@ def replacement_candidates_from_user_preferences(
     refresh buy ideas after a user changes the budget, vehicle mix, or sector
     preferences. This helper lets the app keep the diagnosis fixed while
     recomputing replacement candidates from the updated preferences object.
+
+    `as_of_returns` (backtest only) supplies trailing returns computed as of the
+    cutoff date, so candidate scoring never sees post-cutoff data.
     """
     return _build_replacement_candidates(
         portfolio_gaps=diagnosis.portfolio_gaps,
         portfolio_preferences=preferences,
         holding_action_recommendations=diagnosis.holding_action_recommendations,
         current_holdings=diagnosis.current_holdings,
+        as_of_returns=as_of_returns,
     )
 
 
