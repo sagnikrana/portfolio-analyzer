@@ -115,6 +115,11 @@ except ModuleNotFoundError:
         replacement_candidates_from_user_preferences,
     )
 
+try:
+    from portfolio_analyzer.assistant import chat_about_portfolio, generate_plain_summary
+except ModuleNotFoundError:
+    from assistant import chat_about_portfolio, generate_plain_summary
+
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
@@ -10521,6 +10526,20 @@ def build_app() -> gr.Blocks:
                         next_steps_md = gr.HTML()
                         next_steps_df = gr.HTML()
                         gr.HTML(
+                            "<hr style='margin:28px 0 16px;border:none;border-top:1px solid #e2e8f0'>"
+                            "<div style='font-size:17px;font-weight:800;color:#0f172a;margin-bottom:4px'>Plain-English Summary (local AI)</div>"
+                            "<div style='font-size:13px;color:#64748b;margin-bottom:12px'>"
+                            "A prioritized, plain-English read of your latest analysis — generated locally on your "
+                            "machine via Ollama. No data leaves your computer.</div>"
+                        )
+                        ai_summary_btn = gr.Button(
+                            "Explain my portfolio (local AI)", variant="secondary", elem_id="ai-summary-btn"
+                        )
+                        ai_summary_out = gr.Markdown(
+                            value="_Run an analysis, then click the button above for a plain-English summary._"
+                        )
+                        ai_summary_btn.click(fn=generate_plain_summary, inputs=None, outputs=ai_summary_out)
+                        gr.HTML(
                             "<hr style='margin:28px 0 20px;border:none;border-top:1px solid #e2e8f0'>"
                             "<div style='font-size:17px;font-weight:800;color:#0f172a;margin-bottom:4px'>Recommendation Tracker</div>"
                             "<div style='font-size:13px;color:#64748b;margin-bottom:14px'>"
@@ -10541,6 +10560,36 @@ def build_app() -> gr.Blocks:
                                 tracker_load_btn = gr.Button("Load My History", variant="secondary")
                         tracker_status_md = gr.HTML()
                         tracker_history_md = gr.HTML()
+                    with gr.Tab("Ask Your Portfolio", id="assistant"):
+                        gr.HTML(
+                            "<div style='font-size:20px;font-weight:900;color:#0f172a'>Ask Your Portfolio</div>"
+                            "<div style='font-size:13px;color:#64748b;margin:6px 0 14px'>"
+                            "Chat with a local AI about your latest analysis — holdings, risks, buy ideas. "
+                            "Runs entirely on your machine via Ollama; no data leaves your computer. "
+                            "Educational only, not investment advice.</div>"
+                        )
+                        assistant_chatbot = gr.Chatbot(
+                            label="Portfolio assistant", height=420, elem_id="assistant-chatbot"
+                        )
+                        with gr.Row():
+                            assistant_msg = gr.Textbox(
+                                show_label=False, container=False, scale=8, elem_id="assistant-input",
+                                placeholder="e.g. Which holding is my biggest risk? Why these buy ideas?",
+                            )
+                            assistant_send = gr.Button("Send", variant="primary", scale=1, min_width=90)
+                        assistant_clear = gr.Button("Clear chat", variant="secondary")
+                        assistant_send.click(
+                            fn=chat_about_portfolio,
+                            inputs=[assistant_msg, assistant_chatbot],
+                            outputs=[assistant_msg, assistant_chatbot],
+                        )
+                        assistant_msg.submit(
+                            fn=chat_about_portfolio,
+                            inputs=[assistant_msg, assistant_chatbot],
+                            outputs=[assistant_msg, assistant_chatbot],
+                        )
+                        assistant_clear.click(fn=lambda: ([], ""), inputs=None,
+                                              outputs=[assistant_chatbot, assistant_msg])
                     with gr.Group(visible=False):
                         risk_guide_md = gr.HTML()
                         holdings_df = gr.HTML(value=build_lightweight_table_html(None, "Open Holdings"))

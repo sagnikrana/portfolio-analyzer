@@ -224,26 +224,9 @@ def _save_state(as_of: date, risk_tickers: list[str], pick_tickers: list[str]) -
 
 # ── The local Ollama "explain & prioritize" agent ─────────────────────────────
 def _ollama_chat(system: str, user: str) -> str | None:
-    """Call the local Ollama chat API. Returns text, or None on any failure."""
-    body = json.dumps({
-        "model": OLLAMA_MODEL,
-        "stream": False,
-        "options": {"temperature": 0.3},
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        f"{OLLAMA_HOST}/api/chat", data=body,
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT_S) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return (data.get("message", {}).get("content") or "").strip() or None
-    except Exception:
-        return None
+    """Call the local Ollama chat API via the shared client (one implementation)."""
+    from portfolio_analyzer.local_llm import ollama_chat
+    return ollama_chat(system, user, model=OLLAMA_MODEL, timeout=OLLAMA_TIMEOUT_S)
 
 
 def risk_digest_agent(
