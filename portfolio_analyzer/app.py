@@ -10363,16 +10363,12 @@ def build_app() -> gr.Blocks:
                             "and measure the cost of ignoring those sell and buy actions through today."
                             "</div></div>"
                         )
-                        recent_backtest_dates = [
-                            (pd.Timestamp.today().normalize() - pd.DateOffset(months=offset)).strftime("%Y-%m-%d")
-                            for offset in range(1, 25)
-                        ]
                         with gr.Row(equal_height=False):
                             with gr.Column(scale=1, min_width=300):
                                 with gr.Group(elem_classes=["backtest-controls"]):
                                     gr.HTML(
                                         "<div class='simple-field-label'>Backtest cutoff date</div>"
-                                        "<div class='simple-field-help'>Type a YYYY-MM-DD date. The app rebuilds the portfolio exactly as it looked on that date.</div>"
+                                        "<div class='simple-field-help'>Pick a past date from the calendar. The app rebuilds the portfolio exactly as it looked on that date.</div>"
                                     )
                                     backtest_cutoff_date = gr.Textbox(
                                         show_label=False,
@@ -10648,7 +10644,41 @@ def build_app() -> gr.Blocks:
             None,
             None,
             None,
-            _js="() => { [400, 1200, 2500].forEach(t => setTimeout(() => window.dispatchEvent(new Event('resize')), t)); }",
+            _js="""
+            () => {
+              [400, 1200, 2500].forEach(t => setTimeout(() => window.dispatchEvent(new Event('resize')), t));
+              // Gradio 3.36.1 has no native date component, so upgrade the cutoff
+              // text field into an HTML5 date picker that writes back into the
+              // (now hidden) Gradio field, keeping all backtest wiring intact.
+              const setup = () => {
+                const wrap = document.querySelector('#bt-cutoff-date');
+                if (!wrap || wrap.dataset.dpReady) return true;
+                const field = wrap.querySelector('textarea, input');
+                if (!field) return false;
+                const picker = document.createElement('input');
+                picker.type = 'date';
+                picker.className = 'bt-datepicker';
+                const yesterday = new Date(Date.now() - 86400000);
+                picker.max = yesterday.toISOString().slice(0, 10);
+                const cur = (field.value || '').trim();
+                if (cur && cur.length === 10 && cur[4] === '-') picker.value = cur;
+                field.style.display = 'none';
+                field.parentNode.insertBefore(picker, field);
+                const sync = () => {
+                  field.value = picker.value;
+                  field.dispatchEvent(new Event('input', {bubbles: true}));
+                  field.dispatchEvent(new Event('change', {bubbles: true}));
+                };
+                picker.addEventListener('change', sync);
+                picker.addEventListener('input', sync);
+                if (picker.value) sync();
+                wrap.dataset.dpReady = '1';
+                return true;
+              };
+              let tries = 0;
+              const iv = setInterval(() => { if (setup() || ++tries > 60) clearInterval(iv); }, 250);
+            }
+            """,
         )
 
     return demo
@@ -10784,6 +10814,20 @@ LAUNCH_CSS = """
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
     background: #ffffff !important;
+}
+#bt-cutoff-date .bt-datepicker {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 9px 11px !important;
+    border: 1px solid #d1d5db !important;
+    border-radius: 8px !important;
+    font-size: 14px !important;
+    line-height: 1.4 !important;
+}
+#bt-cutoff-date .bt-datepicker::-webkit-calendar-picker-indicator {
+    opacity: 1;
+    cursor: pointer;
+    filter: invert(0.35);
 }
 .simple-field-label {
     color: #0f172a !important;
