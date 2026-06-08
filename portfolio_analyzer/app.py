@@ -2415,7 +2415,7 @@ def run_backtest(
     use_uninvested_cash: Any,
     include_soft_signals: Any,
     progress: gr.Progress = gr.Progress(track_tqdm=True),
-) -> tuple[str, go.Figure, str, str, str]:
+) -> tuple[str, str, str, str]:
     """Run a recommendation counterfactual from a historical cutoff date.
 
     The first version intentionally compares the *action sleeve* the app would
@@ -2544,7 +2544,6 @@ def run_backtest(
         return (
             summary_html,
             _backtest_chart_placeholder("No actionable backtest recommendations for this date."),
-            build_lightweight_table_html(None, "Sell / Trim Actions As Of Cutoff"),
             build_lightweight_table_html(None, "Hypothetical Buys As Of Cutoff"),
             build_lightweight_table_html(None, "Counterfactual Execution Steps"),
         )
@@ -2593,6 +2592,17 @@ def run_backtest(
         if shares <= 0:
             continue
         ignored_components[ticker] = ignored_components.get(ticker, 0.0) + shares
+        # Value today if the flagged shares had been kept (the "ignored" path).
+        _end_date_held, end_price_held = _price_at_or_before(
+            close[ticker], pd.Timestamp.today().normalize()
+        )
+        held_value_today = (
+            shares * float(end_price_held) if end_price_held and end_price_held > 0 else value_to_sell
+        )
+        held_return = (
+            (float(end_price_held) / start_price - 1.0)
+            if end_price_held and start_price else None
+        )
         action_rows.append(
             {
                 "Ticker": ticker,
@@ -2601,6 +2611,11 @@ def run_backtest(
                 "Shares": number_text(shares, 4),
                 "Same-window vs S&P 500": pct_text(item.relative_performance_vs_benchmark),
                 "Reason": item.recommendation_summary,
+                # Cutoff-date base uses the same market start price as Value Today so
+                # the $ gain, % gain, and the chart's ignored-path start all reconcile.
+                "_amount": shares * start_price,
+                "_value_today": held_value_today,
+                "_return": held_return,
             }
         )
 
@@ -2620,6 +2635,7 @@ def run_backtest(
             continue
         _end_date, end_price = _price_at_or_before(close[ticker], pd.Timestamp.today().normalize())
         forward_return = ((end_price / start_price) - 1.0) if end_price and start_price else None
+        buy_value_today = shares * float(end_price) if end_price and end_price > 0 else allocation
         buy_components[ticker] = buy_components.get(ticker, 0.0) + shares
         total_buy_allocated += allocation
         buy_rows.append(
@@ -2631,6 +2647,9 @@ def run_backtest(
                 "Shares Bought": number_text(shares, 4),
                 "Forward Return Since Cutoff": pct_text(forward_return),
                 "Why It Was Picked": candidate.why_it_fits,
+                "_amount": allocation,
+                "_value_today": buy_value_today,
+                "_return": forward_return,
             }
         )
     # Cash not deployed because some candidates lacked price data stays flat (as if held in cash).
@@ -2681,6 +2700,9 @@ def run_backtest(
     counterfactual_account_today = actual_account_today + benefit
     initial_ignored = float(timeline["Ignored recommendation path"].iloc[0])
     initial_app = float(timeline["Followed app path"].iloc[0])
+    app_return = (app_final / initial_app - 1.0) if initial_app > 0 else None
+    ignored_return = (ignored_final / initial_ignored - 1.0) if initial_ignored > 0 else None
+    sleeve_share = (deployable_cash / actual_account_today) if actual_account_today > 0 else None
     cash_policy = (
         f"Freed cash plus {money_text(idle_cash)} of idle cash was deployed."
         if use_uninvested_cash
@@ -2724,16 +2746,36 @@ def run_backtest(
         The app path starts around {money_text(initial_app)} and ended at {money_text(app_final)}.
         The actual account value still comes from your uploaded post-cutoff transaction path; the counterfactual estimate overlays the app's action-sleeve impact on top of it.
       </div>
+      <div style="padding:16px 18px;border:1px solid rgba(148,163,184,.20);border-radius:18px;background:#f8fafc;color:#334155;line-height:1.6">
+        <b>How {money_text(abs(benefit))} is calculated:</b>
+        <ul style="margin:8px 0 0 18px;padding:0">
+          <li><b>Follow the app</b> &mdash; the dollars moved into the buy ideas are worth <b>{money_text(app_final)}</b> today ({pct_text(app_return)} since cutoff).</li>
+          <li><b>Ignore the app</b> &mdash; the same dollars left in the flagged laggards are worth <b>{money_text(ignored_final)}</b> today ({pct_text(ignored_return)} since cutoff).</li>
+          <li><b>Difference</b> &mdash; {money_text(app_final)} &minus; {money_text(ignored_final)} = <b>{money_text(benefit)}</b>, the {outcome_word} from acting. Each row's contribution is in the <i>Value Today</i> and <i>Gain Since Cutoff</i> columns of the Counterfactual Execution Steps table below.</li>
+        </ul>
+        <div style="margin-top:10px">
+          <b>Why the dollar figure looks modest:</b> the app trims only a <i>fraction</i> of each flagged holding, so the moved sleeve here is just {money_text(deployable_cash)} &mdash; about {pct_text(sleeve_share)} of your {money_text(actual_account_today)} account. The percentage swing is the real signal: the app sleeve returned {pct_text(app_return)} versus {pct_text(ignored_return)} for the ignored laggards over the same window. Applied to a larger moved sleeve, the same gap scales the dollar impact up proportionally.
+        </div>
+      </div>
     </div>
     """
 
     trades_rows: list[dict[str, Any]] = []
+    def _gain_cell(amount: float, value_today: float, ret: float | None) -> str:
+        delta = float(value_today) - float(amount)
+        money = f"{'+' if delta >= 0 else '−'}${abs(delta):,.2f}"
+        if ret is not None and not pd.isna(ret):
+            money += f" ({'+' if ret >= 0 else '−'}{abs(float(ret)) * 100:.1f}%)"
+        return money
+
     for row in action_rows:
         trades_rows.append(
             {
                 "Step": "Sell / Trim",
                 "Ticker": row["Ticker"],
-                "Amount": row["Value The App Would Move"],
+                "Amount At Cutoff": money_text(row["_amount"]),
+                "Value Today": money_text(row["_value_today"]),
+                "Gain Since Cutoff": _gain_cell(row["_amount"], row["_value_today"], row["_return"]),
                 "Shares": row["Shares"],
                 "Rationale": row["Reason"],
             }
@@ -2743,17 +2785,26 @@ def run_backtest(
             {
                 "Step": "Buy",
                 "Ticker": row["Ticker"],
-                "Amount": row["Hypothetical Buy Amount"],
+                "Amount At Cutoff": money_text(row["_amount"]),
+                "Value Today": money_text(row["_value_today"]),
+                "Gain Since Cutoff": _gain_cell(row["_amount"], row["_value_today"], row["_return"]),
                 "Shares": row["Shares Bought"],
                 "Rationale": row["Why It Was Picked"],
             }
         )
 
+    # Public-facing tables should not carry the internal numeric helper columns.
+    public_action_rows = [
+        {k: v for k, v in row.items() if not k.startswith("_")} for row in action_rows
+    ]
+    public_buy_rows = [
+        {k: v for k, v in row.items() if not k.startswith("_")} for row in buy_rows
+    ]
+
     return (
         summary_html,
         _backtest_chart_html(_plot_backtest_counterfactual(timeline, cutoff_date, benefit)),
-        build_lightweight_table_html(pd.DataFrame(action_rows), "Sell / Trim Actions As Of Cutoff"),
-        build_lightweight_table_html(pd.DataFrame(buy_rows), "Hypothetical Buys As Of Cutoff"),
+        build_lightweight_table_html(pd.DataFrame(public_buy_rows), "Hypothetical Buys As Of Cutoff"),
         build_lightweight_table_html(pd.DataFrame(trades_rows), "Counterfactual Execution Steps"),
     )
 
@@ -10276,15 +10327,9 @@ def build_app() -> gr.Blocks:
                             ),
                             label="Ignored Recommendations vs App Counterfactual",
                         )
-                        with gr.Row(equal_height=False):
-                            with gr.Column(scale=1, min_width=280):
-                                backtest_actions_df = gr.HTML(
-                                    value=build_lightweight_table_html(None, "Sell / Trim Actions As Of Cutoff")
-                                )
-                            with gr.Column(scale=1, min_width=280):
-                                backtest_buys_df = gr.HTML(
-                                    value=build_lightweight_table_html(None, "Hypothetical Buys As Of Cutoff")
-                                )
+                        backtest_buys_df = gr.HTML(
+                            value=build_lightweight_table_html(None, "Hypothetical Buys As Of Cutoff")
+                        )
                         backtest_steps_df = gr.HTML(
                             value=build_lightweight_table_html(None, "Counterfactual Execution Steps")
                         )
@@ -10470,7 +10515,7 @@ def build_app() -> gr.Blocks:
                 backtest_use_uninvested_cash,
                 backtest_include_soft_signals,
             ],
-            outputs=[backtest_summary_md, backtest_plot, backtest_actions_df, backtest_buys_df, backtest_steps_df],
+            outputs=[backtest_summary_md, backtest_plot, backtest_buys_df, backtest_steps_df],
             scroll_to_output=True,
             show_progress="full",
         )
