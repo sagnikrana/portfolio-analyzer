@@ -138,6 +138,28 @@ LLM_EXPLANATION_CACHE_DIR = APP_CACHE_DIR / "llm_explanations"
 BUY_CANDIDATE_UNIVERSE_PATH = RAW_DIR / "buy_candidate_universe.csv"
 BUY_CANDIDATE_UNIVERSE_ENRICHED_PATH = STRUCTURED_DIR / "buy_candidate_universe_enriched.csv"
 TRACKER_DB_PATH = DATA_DIR / "user_data" / "tracker.db"
+
+# Demo datasets the user can pick instead of uploading their own CSV. Each label
+# maps to a bundled fake export with a distinct investor profile (all Aug 2020 ->
+# today). The legacy "Use bundled fake dataset" label still resolves so older
+# state/links keep working.
+FAKE_DATASET_FILES: dict = {
+    "Balanced blend (bundled)": "fake_mantis_invest.csv",
+    "Aggressive growth (tech-heavy)": "fake_aggressive_growth.csv",
+    "Dividend income": "fake_dividend_income.csv",
+    "Index buy-and-hold": "fake_index_buy_and_hold.csv",
+    "Active trader (high turnover)": "fake_active_trader.csv",
+}
+_LEGACY_FAKE_DATASET_LABEL = "Use bundled fake dataset"
+UPLOAD_DATASET_LABEL = "Upload my CSV"
+
+
+def resolve_dataset_csv(dataset_source: str) -> Path | None:
+    """Return the bundled CSV path for a demo-dataset label, or None for upload."""
+    if dataset_source == _LEGACY_FAKE_DATASET_LABEL:
+        return RAW_DIR / FAKE_DATASET_FILES["Balanced blend (bundled)"]
+    filename = FAKE_DATASET_FILES.get(dataset_source)
+    return (RAW_DIR / filename) if filename else None
 PRIMARY_LLM_MODEL = "llama3.3:latest"
 FALLBACK_LLM_MODEL = "llama3.1:latest"
 FAST_DEV_LLM_MODEL = "gemma:2b"
@@ -2692,8 +2714,9 @@ def _run_backtest_impl(
     include_soft_signals = _coerce_toggle(include_soft_signals)
 
     progress(0.03, desc="Preparing historical backtest inputs...")
-    if dataset_source == "Use bundled fake dataset":
-        csv_path = REPO_ROOT / "data" / "raw" / "fake_mantis_invest.csv"
+    bundled_csv = resolve_dataset_csv(dataset_source)
+    if bundled_csv is not None:
+        csv_path = bundled_csv
     else:
         if file_obj is None:
             raise gr.Error("Upload a Robinhood CSV export first or switch to the bundled fake dataset.")
@@ -8142,9 +8165,11 @@ def build_monthly_performance_frame(
     """Reconstruct a whole-portfolio monthly performance history.
 
     Columns mirror a brokerage monthly statement:
-      Month, Beginning Balance, Deposits/Withdrawals, Market Gain/Loss,
-      Income Returns, Personal Investment Returns, Cumulative Returns,
-      Ending Balance.
+      Month, Beginning Balance, Deposits/Withdrawals, Investment Amount,
+      Market Gain/Loss, Income Returns, Personal Investment Returns,
+      Cumulative Returns, Ending Balance.
+
+    Investment Amount is the dollar value of stocks purchased that month.
 
     Ending balance comes from the daily total account-value series (invested
     holdings + cash). Deposits/withdrawals (ACH) and income (dividends +
@@ -8177,6 +8202,9 @@ def build_monthly_performance_frame(
     tx = tx.assign(amount=amount)
     ach_by_month = tx[tx["Trans Code"] == "ACH"].groupby("period")["amount"].sum()
     income_by_month = tx[tx["Trans Code"].isin(["CDIV", "INT"])].groupby("period")["amount"].sum()
+    # Dollars deployed into stocks each month. Buy amounts are cash outflows
+    # (negative), so negate to show the positive value of stock purchased.
+    buy_by_month = tx[tx["Trans Code"] == "Buy"].groupby("period")["amount"].sum()
 
     rows: list[dict[str, Any]] = []
     prior_ending: float | None = None
@@ -8187,6 +8215,7 @@ def build_monthly_performance_frame(
         period = pd.Period(period_end, freq="M")
         deposits = float(ach_by_month.get(period, 0.0))
         income = float(income_by_month.get(period, 0.0))
+        investment_amount = -float(buy_by_month.get(period, 0.0))
         beginning = prior_ending if prior_ending is not None else first_value
         market_gain = ending - beginning - deposits - income
         personal_returns = market_gain + income
@@ -8196,6 +8225,7 @@ def build_monthly_performance_frame(
                 "Month": period.strftime("%m/%Y"),
                 "Beginning Balance": round(beginning, 2),
                 "Deposits / Withdrawals": round(deposits, 2),
+                "Investment Amount": round(investment_amount, 2),
                 "Market Gain / Loss": round(market_gain, 2),
                 "Income Returns": round(income, 2),
                 "Personal Investment Returns": round(personal_returns, 2),
@@ -9958,8 +9988,9 @@ def _run_analysis_impl(
 ) -> tuple[Any, ...]:
     started_at = time.perf_counter()
     progress(0.01, desc="Starting analysis and locating the portfolio file...")
-    if dataset_source == "Use bundled fake dataset":
-        csv_path = REPO_ROOT / "data" / "raw" / "fake_mantis_invest.csv"
+    bundled_csv = resolve_dataset_csv(dataset_source)
+    if bundled_csv is not None:
+        csv_path = bundled_csv
     else:
         if file_obj is None:
             # No file selected. Raising gr.Error here paints a red "Error" badge on
@@ -10349,11 +10380,13 @@ def build_app() -> gr.Blocks:
                 )
                 gr.HTML(
                     "<div class='simple-field-label'>Dataset Source</div>"
-                    "<div class='simple-field-help'>Use the fake dataset if you want to explore the dashboard without a Robinhood export.</div>"
+                    "<div class='simple-field-help'>Upload your own Robinhood export, or explore the dashboard "
+                    "with one of the sample portfolios below — each is a different investor profile "
+                    "(Aug 2020 to today).</div>"
                 )
                 dataset_source = gr.Radio(
-                    choices=["Upload my CSV", "Use bundled fake dataset"],
-                    value="Upload my CSV",
+                    choices=[UPLOAD_DATASET_LABEL, *FAKE_DATASET_FILES.keys()],
+                    value=UPLOAD_DATASET_LABEL,
                     show_label=False,
                     elem_id="dataset-source-radio",
                 )

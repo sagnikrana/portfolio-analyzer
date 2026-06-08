@@ -4,13 +4,15 @@ import argparse
 import csv
 import random
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 
 
 RAW_DIR = Path(__file__).resolve().parent / "data" / "raw"
 DEFAULT_OUTPUT = RAW_DIR / "fake_mantis_invest.csv"
+
+ANCHOR = date(2020, 8, 10)
 
 
 @dataclass(frozen=True)
@@ -37,13 +39,131 @@ SECURITIES: list[Security] = [
     Security("AVGO", "Broadcom", "11135F101", 480.0, dividend_yield=0.012),
     Security("QQQ", "Invesco QQQ Trust", "46090E103", 290.0),
     Security("VOO", "Vanguard S&P 500 ETF", "922908363", 330.0, dividend_yield=0.012),
+    # Income / defensive names used by the dividend profile.
+    Security("JNJ", "Johnson & Johnson", "478160104", 150.0, dividend_yield=0.026),
+    Security("KO", "Coca-Cola", "191216100", 48.0, dividend_yield=0.030),
+    Security("PG", "Procter & Gamble", "742718109", 138.0, dividend_yield=0.024),
+    Security("JPM", "JPMorgan Chase", "46625H100", 100.0, dividend_yield=0.030),
+    Security("SCHD", "Schwab US Dividend Equity ETF", "808524797", 56.0, dividend_yield=0.033),
+    Security("AMD", "Advanced Micro Devices", "007903107", 85.0),
 ]
+
+SECURITIES_BY_TICKER: dict[str, Security] = {sec.ticker: sec for sec in SECURITIES}
+
+
+@dataclass(frozen=True)
+class Profile:
+    """Knobs that shape one synthetic investor's transaction history."""
+
+    key: str
+    output: str  # filename under data/raw
+    description: str
+    tickers: tuple[str, ...]
+    seed: int
+    deposit_days: tuple[int, ...] = (1, 15)
+    deposit_range: tuple[int, int] = (350, 1200)
+    buy_weekdays: tuple[int, ...] = (1, 3)  # Tue / Thu
+    buy_budget_frac: tuple[float, float] = (0.08, 0.24)
+    buy_abs_range: tuple[float, float] = (80.0, 1600.0)
+    min_cash_to_buy: float = 150.0
+    sell_weekdays: tuple[int, ...] = (4,)  # Fri
+    sell_prob: float = 0.12
+    sell_frac: tuple[float, float] = (0.12, 0.45)
+    # Optional buy bias toward favored tickers (concentration).
+    weights: dict[str, float] = field(default_factory=dict)
+
+
+PROFILES: list[Profile] = [
+    Profile(
+        key="balanced",
+        output="fake_mantis_invest.csv",
+        description="Balanced blend across megacaps + ETFs, moderate trading.",
+        tickers=("AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "V", "BRK.B", "AVGO", "QQQ", "VOO"),
+        seed=42,
+    ),
+    Profile(
+        key="aggressive",
+        output="fake_aggressive_growth.csv",
+        description="Tech-heavy, concentrated, large deposits, rarely sells.",
+        tickers=("NVDA", "TSLA", "META", "AMZN", "AVGO", "AAPL", "GOOGL", "AMD"),
+        seed=101,
+        deposit_days=(1, 15),
+        deposit_range=(800, 2500),
+        buy_weekdays=(0, 2, 4),
+        buy_budget_frac=(0.18, 0.45),
+        buy_abs_range=(300.0, 3500.0),
+        sell_prob=0.04,
+        sell_frac=(0.08, 0.20),
+        weights={"NVDA": 3.0, "TSLA": 2.5, "META": 2.0, "AMD": 1.5},
+    ),
+    Profile(
+        key="dividend",
+        output="fake_dividend_income.csv",
+        description="Dividend / defensive names, steady contributions, low turnover.",
+        tickers=("JNJ", "KO", "PG", "JPM", "SCHD", "V", "MSFT", "BRK.B", "AVGO", "VOO"),
+        seed=202,
+        deposit_days=(1, 15),
+        deposit_range=(400, 900),
+        buy_weekdays=(1, 3),
+        buy_budget_frac=(0.10, 0.25),
+        buy_abs_range=(100.0, 1200.0),
+        sell_prob=0.03,
+        sell_frac=(0.08, 0.18),
+        weights={"SCHD": 2.0, "JNJ": 1.6, "KO": 1.4, "PG": 1.4, "VOO": 1.6},
+    ),
+    Profile(
+        key="index",
+        output="fake_index_buy_and_hold.csv",
+        description="Index ETFs only, dollar-cost averaging, essentially never sells.",
+        tickers=("VOO", "QQQ", "SCHD"),
+        seed=303,
+        deposit_days=(1, 15),
+        deposit_range=(500, 1500),
+        buy_weekdays=(0, 1, 2, 3, 4),  # buys whenever cash is available after a deposit
+        buy_budget_frac=(0.85, 1.0),   # deploy nearly all cash (DCA)
+        buy_abs_range=(100.0, 2000.0),
+        min_cash_to_buy=100.0,
+        sell_weekdays=(),
+        sell_prob=0.0,
+        weights={"VOO": 3.0, "QQQ": 1.5, "SCHD": 1.0},
+    ),
+    Profile(
+        key="active",
+        output="fake_active_trader.csv",
+        description="High-turnover trader: frequent small buys and sells, lots of churn.",
+        tickers=("TSLA", "NVDA", "META", "AMD", "AAPL", "AMZN", "QQQ"),
+        seed=404,
+        deposit_days=(1, 15),
+        deposit_range=(400, 1100),
+        buy_weekdays=(0, 1, 2, 3),
+        buy_budget_frac=(0.10, 0.30),
+        buy_abs_range=(60.0, 900.0),
+        min_cash_to_buy=80.0,
+        sell_weekdays=(0, 1, 2, 3, 4),
+        sell_prob=0.5,
+        sell_frac=(0.20, 0.75),
+        weights={"TSLA": 2.0, "NVDA": 2.0, "META": 1.5, "AMD": 1.5},
+    ),
+]
+
+PROFILES_BY_KEY: dict[str, Profile] = {p.key: p for p in PROFILES}
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate a fake Robinhood-style investment CSV.")
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Path to write the fake CSV")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for deterministic generation")
+    parser = argparse.ArgumentParser(description="Generate fake Robinhood-style investment CSV(s).")
+    parser.add_argument(
+        "--profile",
+        default="all",
+        choices=["all", *PROFILES_BY_KEY.keys()],
+        help="Which profile to generate (default: all).",
+    )
+    parser.add_argument("--output", type=Path, default=None, help="Override output path (single profile only).")
+    parser.add_argument(
+        "--end",
+        type=lambda s: date.fromisoformat(s),
+        default=date.today(),
+        help="End date (YYYY-MM-DD); defaults to today so data runs Aug 2020 -> now.",
+    )
     return parser.parse_args()
 
 
@@ -105,13 +225,20 @@ def make_row(
     }
 
 
-def generate_dataset(seed: int) -> list[dict[str, str]]:
-    rng = random.Random(seed)
+def _pick_ticker(rng: random.Random, profile: Profile) -> str:
+    if profile.weights:
+        weights = [profile.weights.get(t, 1.0) for t in profile.tickers]
+        return rng.choices(list(profile.tickers), weights=weights, k=1)[0]
+    return rng.choice(list(profile.tickers))
+
+
+def generate_dataset(profile: Profile, end_date: date) -> list[dict[str, str]]:
+    rng = random.Random(profile.seed)
     rows: list[dict[str, str]] = []
     holdings: defaultdict[str, float] = defaultdict(float)
     cash_balance = 0.0
-    anchor = date(2020, 8, 10)
-    end_date = date(2026, 3, 6)
+    anchor = ANCHOR
+    profile_securities = [SECURITIES_BY_TICKER[t] for t in profile.tickers]
 
     def add_cash_event(day: date, description: str, amount: float) -> None:
         nonlocal cash_balance
@@ -131,18 +258,21 @@ def generate_dataset(seed: int) -> list[dict[str, str]]:
 
     current_day = anchor
     while current_day <= end_date:
-        if current_day.day in {1, 15}:
-            deposit = rng.randint(350, 1200)
+        if current_day.day in profile.deposit_days:
+            deposit = rng.randint(*profile.deposit_range)
             add_cash_event(current_day, "ACH Deposit", float(deposit))
 
         if current_day.day == 28:
             interest = round(max(0.01, cash_balance * 0.00012), 2)
             add_cash_event(current_day, "Interest Payment", interest)
 
-        if current_day.weekday() in {1, 3} and cash_balance > 150:
-            security = rng.choice(SECURITIES)
+        if current_day.weekday() in profile.buy_weekdays and cash_balance > profile.min_cash_to_buy:
+            security = SECURITIES_BY_TICKER[_pick_ticker(rng, profile)]
             price = round(price_on_day(security, current_day, anchor), 2)
-            budget = min(cash_balance * rng.uniform(0.08, 0.24), rng.uniform(80, 1600))
+            budget = min(
+                cash_balance * rng.uniform(*profile.buy_budget_frac),
+                rng.uniform(*profile.buy_abs_range),
+            )
             quantity = round(max(0.02, budget / price), 6)
             cost = round(quantity * price, 2)
             if cost <= cash_balance:
@@ -162,14 +292,14 @@ def generate_dataset(seed: int) -> list[dict[str, str]]:
                     )
                 )
 
-        if current_day.weekday() == 4 and rng.random() < 0.12:
+        if current_day.weekday() in profile.sell_weekdays and rng.random() < profile.sell_prob:
             sellable = [ticker for ticker, qty in holdings.items() if qty > 0.05]
             if sellable:
                 ticker = rng.choice(sellable)
-                security = next(sec for sec in SECURITIES if sec.ticker == ticker)
+                security = SECURITIES_BY_TICKER[ticker]
                 price = round(price_on_day(security, current_day, anchor) * rng.uniform(0.96, 1.05), 2)
                 max_qty = holdings[ticker]
-                quantity = round(min(max_qty, max(0.02, max_qty * rng.uniform(0.12, 0.45))), 6)
+                quantity = round(min(max_qty, max(0.02, max_qty * rng.uniform(*profile.sell_frac))), 6)
                 proceeds = round(quantity * price, 2)
                 holdings[ticker] -= quantity
                 cash_balance += proceeds
@@ -188,7 +318,7 @@ def generate_dataset(seed: int) -> list[dict[str, str]]:
                 )
 
         if current_day.day in {12, 27}:
-            for security in SECURITIES:
+            for security in profile_securities:
                 if security.dividend_yield <= 0 or holdings[security.ticker] <= 0:
                     continue
                 if rng.random() < 0.18:
@@ -213,7 +343,7 @@ def generate_dataset(seed: int) -> list[dict[str, str]]:
                             )
                         )
 
-        for security in SECURITIES:
+        for security in profile_securities:
             if security.split_date == current_day and security.split_ratio and holdings[security.ticker] > 0:
                 add_qty = round(holdings[security.ticker] * (security.split_ratio - 1), 6)
                 holdings[security.ticker] += add_qty
@@ -233,7 +363,7 @@ def generate_dataset(seed: int) -> list[dict[str, str]]:
         current_day += timedelta(days=1)
 
     # Add a small gifted share credit so the analyzer sees one REC event like the real file.
-    gifted_security = SECURITIES[0]
+    gifted_security = profile_securities[0]
     holdings[gifted_security.ticker] += 1.0
     rows.append(
         make_row(
@@ -280,12 +410,23 @@ def row_sort_key(row: dict[str, str]) -> tuple[date, str, str]:
     return parsed, row["Trans Code"], row["Instrument"]
 
 
+def build_profile(profile: Profile, end_date: date, output: Path | None = None) -> Path:
+    rows = generate_dataset(profile, end_date)
+    rows.sort(key=row_sort_key)
+    out_path = output or (RAW_DIR / profile.output)
+    write_csv(rows, out_path)
+    print(f"[{profile.key}] wrote {len(rows)} rows to {out_path}  ({profile.description})")
+    return out_path
+
+
 def main() -> None:
     args = parse_args()
-    rows = generate_dataset(seed=args.seed)
-    rows.sort(key=row_sort_key)
-    write_csv(rows, args.output)
-    print(f"Wrote {len(rows)} rows to {args.output}")
+    if args.profile == "all":
+        for profile in PROFILES:
+            build_profile(profile, args.end)
+    else:
+        profile = PROFILES_BY_KEY[args.profile]
+        build_profile(profile, args.end, output=args.output)
 
 
 if __name__ == "__main__":

@@ -343,6 +343,15 @@ def _do_download(page: Page, row: Locator) -> Path | None:
         with page.expect_download(timeout=60000) as dl:
             dl_link.click()
         dl.value.save_as(str(out_path))
+        # Strip RH's non-tabular footer/disclaimer so downstream parsing is clean.
+        try:
+            from automation.ingest.clean_csv import clean_activity_csv
+
+            summary = clean_activity_csv(out_path)
+            if summary["removed"]:
+                log(f"Cleaned {summary['removed']} non-tabular line(s) from the export.")
+        except Exception as exc:  # never fail the download over cleanup
+            log(f"CSV cleanup skipped ({exc!r}).")
         log(f"Saved: {out_path}")
         return out_path
     except PWTimeoutError:
