@@ -67,7 +67,7 @@ BIIB,BIIB,Biogen,Health Care,Biotechnology,2003-11-13,S&P 500
 BLK,BLK,BlackRock,Financials,Asset Management & Custody Banks,2011-04-04,S&P 500
 BX,BX,Blackstone Inc.,Financials,Asset Management & Custody Banks,2023-09-18,S&P 500
 XYZ,XYZ,"Block, Inc.",Financials,Transaction & Payment Processing Services,2025-07-23,S&P 500
-BK,BK,BNY Mellon,Financials,Asset Management & Custody Banks,1995-03-31,S&P 500
+BNY,BNY,BNY Mellon,Financials,Asset Management & Custody Banks,1995-03-31,S&P 500
 BA,BA,Boeing,Industrials,Aerospace & Defense,1957-03-04,S&P 500
 BKNG,BKNG,Booking Holdings,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",2009-11-06,S&P 500
 BSX,BSX,Boston Scientific,Health Care,Health Care Equipment,1995-02-24,S&P 500
@@ -85,7 +85,7 @@ CPT,CPT,Camden Property Trust,Real Estate,Multi-Family Residential REITs,2022-04
 CPB,CPB,Campbell's Company (The),Consumer Staples,Packaged Foods & Meats,1957-03-04,S&P 500
 COF,COF,Capital One,Financials,Consumer Finance,1998-07-01,S&P 500
 CAH,CAH,Cardinal Health,Health Care,Health Care Distributors,1997-05-27,S&P 500
-CCL,CCL,Carnival,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",1998-12-22,S&P 500
+CCL,CCL,Carnival Corporation,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",1998-12-22,S&P 500
 CARR,CARR,Carrier Global,Industrials,Building Products,2020-04-03,S&P 500
 CVNA,CVNA,Carvana,Consumer Discretionary,Automotive Retail,2025-12-22,S&P 500
 CASY,CASY,Casey's,Consumer Staples,Food Retail,2026-04-09,S&P 500
@@ -133,7 +133,6 @@ CPAY,CPAY,Corpay,Financials,Transaction & Payment Processing Services,2018-06-20
 CTVA,CTVA,Corteva,Materials,Fertilizers & Agricultural Chemicals,2019-06-03,S&P 500
 CSGP,CSGP,CoStar Group,Real Estate,Real Estate Services,2022-09-19,S&P 500
 COST,COST,Costco,Consumer Staples,Consumer Staples Merchandise Retail,1993-10-01,S&P 500
-CTRA,CTRA,Coterra,Energy,Oil & Gas Exploration & Production,2008-06-23,S&P 500
 CRH,CRH,CRH plc,Materials,Construction Materials,2025-12-22,S&P 500
 CRWD,CRWD,CrowdStrike,Information Technology,Systems Software,2024-06-24,S&P 500
 CCI,CCI,Crown Castle,Real Estate,Telecom Tower REITs,2012-03-14,S&P 500
@@ -175,7 +174,6 @@ EME,EME,Emcor,Industrials,Construction & Engineering,2025-09-22,S&P 500
 EMR,EMR,Emerson Electric,Industrials,Electrical Components & Equipment,1965-03-31,S&P 500
 ETR,ETR,Entergy,Utilities,Electric Utilities,1957-03-04,S&P 500
 EOG,EOG,EOG Resources,Energy,Oil & Gas Exploration & Production,2000-11-02,S&P 500
-EPAM,EPAM,EPAM Systems,Information Technology,IT Consulting & Other Services,2021-12-14,S&P 500
 EQT,EQT,EQT Corporation,Energy,Oil & Gas Exploration & Production,2022-10-03,S&P 500
 EFX,EFX,Equifax,Industrials,Research & Consulting Services,1997-06-19,S&P 500
 EQIX,EQIX,Equinix,Real Estate,Data Center REITs,2015-03-20,S&P 500
@@ -198,6 +196,7 @@ FICO,FICO,Fair Isaac,Information Technology,Application Software,2023-03-20,S&P 
 FAST,FAST,Fastenal,Industrials,Trading Companies & Distributors,2008-09-15,S&P 500
 FRT,FRT,Federal Realty Investment Trust,Real Estate,Retail REITs,2016-02-01,S&P 500
 FDX,FDX,FedEx,Industrials,Air Freight & Logistics,1980-12-31,S&P 500
+FDXF,FDXF,FedEx Freight,Industrials,Cargo Ground Transportation,2026-06-01,S&P 500
 FIS,FIS,Fidelity National Information Services,Financials,Transaction & Payment Processing Services,2006-11-10,S&P 500
 FITB,FITB,Fifth Third Bancorp,Financials,Regional Banks,1996-03-29,S&P 500
 FSLR,FSLR,First Solar,Information Technology,Semiconductors,2022-12-19,S&P 500
@@ -465,6 +464,7 @@ URI,URI,United Rentals,Industrials,Trading Companies & Distributors,2014-09-20,S
 UNH,UNH,UnitedHealth Group,Health Care,Managed Health Care,1994-07-01,S&P 500
 UHS,UHS,Universal Health Services,Health Care,Health Care Facilities,2014-09-20,S&P 500
 VLO,VLO,Valero Energy,Energy,Oil & Gas Refining & Marketing,2002-12-20,S&P 500
+VEEV,VEEV,Veeva Systems,Health Care,Health Care Technology,2026-05-07,S&P 500
 VTR,VTR,Ventas,Real Estate,Health Care REITs,2009-03-04,S&P 500
 VLTO,VLTO,Veralto,Industrials,Environmental & Facilities Services,2023-10-02,S&P 500
 VRSN,VRSN,Verisign,Information Technology,Internet Services & Infrastructure,2006-02-01,S&P 500

@@ -12,7 +12,7 @@ XLP,XLP,Consumer Staples Select Sector SPDR Fund,ETF,Defensive diversifier,Consu
 XLU,XLU,Utilities Select Sector SPDR Fund,ETF,Defensive diversifier,Utilities,Defensive,US,False,True,True,False,True,Utilities ETF for lower-beta diversification,Curated ETF list,1
 XLV,XLV,Health Care Select Sector SPDR Fund,ETF,Defensive diversifier,Health Care,Defensive,US,False,True,False,False,True,Healthcare sector ETF for defensive diversification,Curated ETF list,1
 AAPL,AAPL,Apple Inc.,Stock,Blue-chip compounder,Information Technology,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, ETF holding: IVV, ETF holding: QUAL, ETF holding: VIG, ETF holding: VOO, ETF holding: VTI, Nasdaq-100, S&P 500",Dow 30; ETF holding: IVV; ETF holding: QUAL; ETF holding: VIG; ETF holding: VOO; ETF holding: VTI; Nasdaq-100; S&P 500,8
-NVDA,NVDA,Nvidia,Stock,Blue-chip compounder,Information Technology,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, ETF holding: IVV, ETF holding: QUAL, ETF holding: VOO, ETF holding: VTI, Nasdaq-100, S&P 500",Dow 30; ETF holding: IVV; ETF holding: QUAL; ETF holding: VOO; ETF holding: VTI; Nasdaq-100; S&P 500,7
+NVDA,NVDA,Nvidia,Stock,Blue-chip compounder,Information Technology,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, ETF holding: IVV, ETF holding: QUAL, ETF holding: USMV, ETF holding: VOO, ETF holding: VTI, Nasdaq-100, S&P 500",Dow 30; ETF holding: IVV; ETF holding: QUAL; ETF holding: USMV; ETF holding: VOO; ETF holding: VTI; Nasdaq-100; S&P 500,8
 AMZN,AMZN,Amazon,Stock,Blue-chip compounder,Consumer Discretionary,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, ETF holding: IVV, ETF holding: VOO, ETF holding: VTI, Nasdaq-100, S&P 500",Dow 30; ETF holding: IVV; ETF holding: VOO; ETF holding: VTI; Nasdaq-100; S&P 500,6
 AVGO,AVGO,Broadcom,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: IVV, ETF holding: VIG, ETF holding: VOO, ETF holding: VTI, Nasdaq-100, S&P 500",ETF holding: IVV; ETF holding: VIG; ETF holding: VOO; ETF holding: VTI; Nasdaq-100; S&P 500,6
 META,META,Meta Platforms,Stock,Quality growth,Communication Services,Growth,US,False,False,False,True,True,"Known-universe stock candidate added from ETF holding: IVV, ETF holding: QUAL, ETF holding: VOO, ETF holding: VTI, Nasdaq-100, S&P 500",ETF holding: IVV; ETF holding: QUAL; ETF holding: VOO; ETF holding: VTI; Nasdaq-100; S&P 500,6
@@ -24,33 +24,36 @@ CSCO,CSCO,Cisco,Stock,Blue-chip compounder,Information Technology,Quality,US,Fal
 KO,KO,Coca-Cola Company (The),Stock,Blue-chip compounder,Consumer Staples,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, ETF holding: SCHD, ETF holding: XLP, S&P 500",Dow 30; ETF holding: SCHD; ETF holding: XLP; S&P 500,4
 LLY,LLY,Lilly (Eli),Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from ETF holding: QUAL, ETF holding: VIG, ETF holding: XLV, S&P 500",ETF holding: QUAL; ETF holding: VIG; ETF holding: XLV; S&P 500,4
 MRK,MRK,Merck & Co.,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from Dow 30, ETF holding: SCHD, ETF holding: XLV, S&P 500",Dow 30; ETF holding: SCHD; ETF holding: XLV; S&P 500,4
-PEP,PEP,PepsiCo,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: SCHD, ETF holding: XLP, Nasdaq-100, S&P 500",ETF holding: SCHD; ETF holding: XLP; Nasdaq-100; S&P 500,4
+UNH,UNH,UnitedHealth Group,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from Dow 30, ETF holding: SCHD, ETF holding: XLV, S&P 500",Dow 30; ETF holding: SCHD; ETF holding: XLV; S&P 500,4
 V,V,Visa Inc.,Stock,Blue-chip compounder,Financials,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, ETF holding: QUAL, ETF holding: VIG, S&P 500",Dow 30; ETF holding: QUAL; ETF holding: VIG; S&P 500,4
 VZ,VZ,Verizon,Stock,Quality growth,Communication Services,Growth,US,False,False,False,True,True,"Known-universe stock candidate added from Dow 30, ETF holding: SCHD, ETF holding: USMV, S&P 500",Dow 30; ETF holding: SCHD; ETF holding: USMV; S&P 500,4
-ABT,ABT,Abbott Laboratories,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from ETF holding: SCHD, ETF holding: XLV, S&P 500",ETF holding: SCHD; ETF holding: XLV; S&P 500,3
 AEP,AEP,American Electric Power,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,"Known-universe stock candidate added from ETF holding: XLU, Nasdaq-100, S&P 500",ETF holding: XLU; Nasdaq-100; S&P 500,3
+AMAT,AMAT,Applied Materials,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: QUAL, Nasdaq-100, S&P 500",ETF holding: QUAL; Nasdaq-100; S&P 500,3
 CEG,CEG,Constellation Energy,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,"Known-universe stock candidate added from ETF holding: XLU, Nasdaq-100, S&P 500",ETF holding: XLU; Nasdaq-100; S&P 500,3
 CVX,CVX,Chevron Corporation,Stock,Blue-chip compounder,Energy,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, ETF holding: SCHD, S&P 500",Dow 30; ETF holding: SCHD; S&P 500,3
 DUK,DUK,Duke Energy,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,"Known-universe stock candidate added from ETF holding: USMV, ETF holding: XLU, S&P 500",ETF holding: USMV; ETF holding: XLU; S&P 500,3
-EXC,EXC,Exelon,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,"Known-universe stock candidate added from ETF holding: XLU, Nasdaq-100, S&P 500",ETF holding: XLU; Nasdaq-100; S&P 500,3
 GILD,GILD,Gilead Sciences,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from ETF holding: XLV, Nasdaq-100, S&P 500",ETF holding: XLV; Nasdaq-100; S&P 500,3
 HON,HON,Honeywell,Stock,Blue-chip compounder,Industrials,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, Nasdaq-100, S&P 500",Dow 30; Nasdaq-100; S&P 500,3
+IBM,IBM,IBM,Stock,Blue-chip compounder,Information Technology,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, ETF holding: USMV, S&P 500",Dow 30; ETF holding: USMV; S&P 500,3
 ISRG,ISRG,Intuitive Surgical,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from ETF holding: XLV, Nasdaq-100, S&P 500",ETF holding: XLV; Nasdaq-100; S&P 500,3
 KLAC,KLAC,KLA Corporation,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: QUAL, Nasdaq-100, S&P 500",ETF holding: QUAL; Nasdaq-100; S&P 500,3
 LRCX,LRCX,Lam Research,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: QUAL, Nasdaq-100, S&P 500",ETF holding: QUAL; Nasdaq-100; S&P 500,3
 MDLZ,MDLZ,Mondelez International,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: XLP, Nasdaq-100, S&P 500",ETF holding: XLP; Nasdaq-100; S&P 500,3
+MNST,MNST,Monster Beverage,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: XLP, Nasdaq-100, S&P 500",ETF holding: XLP; Nasdaq-100; S&P 500,3
+MU,MU,Micron Technology,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: IVV, Nasdaq-100, S&P 500",ETF holding: IVV; Nasdaq-100; S&P 500,3
+PEP,PEP,PepsiCo,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: XLP, Nasdaq-100, S&P 500",ETF holding: XLP; Nasdaq-100; S&P 500,3
+QCOM,QCOM,Qualcomm,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: SCHD, Nasdaq-100, S&P 500",ETF holding: SCHD; Nasdaq-100; S&P 500,3
 SO,SO,Southern Company,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,"Known-universe stock candidate added from ETF holding: USMV, ETF holding: XLU, S&P 500",ETF holding: USMV; ETF holding: XLU; S&P 500,3
 TXN,TXN,Texas Instruments,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: SCHD, Nasdaq-100, S&P 500",ETF holding: SCHD; Nasdaq-100; S&P 500,3
-UNH,UNH,UnitedHealth Group,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from Dow 30, ETF holding: XLV, S&P 500",Dow 30; ETF holding: XLV; S&P 500,3
-XOM,XOM,ExxonMobil,Stock,Large-cap diversifier,Energy,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: USMV, ETF holding: VIG, S&P 500",ETF holding: USMV; ETF holding: VIG; S&P 500,3
+XEL,XEL,Xcel Energy,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,"Known-universe stock candidate added from ETF holding: XLU, Nasdaq-100, S&P 500",ETF holding: XLU; Nasdaq-100; S&P 500,3
 ABBV,ABBV,AbbVie,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from ETF holding: XLV, S&P 500",ETF holding: XLV; S&P 500,2
 ABNB,ABNB,Airbnb,Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 ADBE,ADBE,Adobe Inc.,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 ADI,ADI,Analog Devices,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 ADP,ADP,Automatic Data Processing,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 ADSK,ADSK,Autodesk,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
-AMAT,AMAT,Applied Materials,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 AMD,AMD,Advanced Micro Devices,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
+APH,APH,Amphenol,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: USMV, S&P 500",ETF holding: USMV; S&P 500,2
 APP,APP,AppLovin,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 AXON,AXON,Axon Enterprise,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 AXP,AXP,American Express,Stock,Blue-chip compounder,Financials,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, S&P 500",Dow 30; S&P 500,2
@@ -67,7 +70,6 @@ COP,COP,ConocoPhillips,Stock,Large-cap diversifier,Energy,Blend,US,False,False,F
 CPRT,CPRT,Copart,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 CRM,CRM,Salesforce,Stock,Blue-chip compounder,Information Technology,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, S&P 500",Dow 30; S&P 500,2
 CRWD,CRWD,CrowdStrike,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
-CSGP,CSGP,CoStar Group,Stock,Large-cap diversifier,Real Estate,Blend,US,False,False,True,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 CSX,CSX,CSX Corporation,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 CTAS,CTAS,Cintas,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 CTSH,CTSH,Cognizant,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
@@ -78,30 +80,28 @@ DIS,DIS,Walt Disney Company (The),Stock,Quality growth,Communication Services,Gr
 DXCM,DXCM,Dexcom,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 EA,EA,Electronic Arts,Stock,Quality growth,Communication Services,Growth,US,False,False,False,True,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 ETR,ETR,Entergy,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,"Known-universe stock candidate added from ETF holding: XLU, S&P 500",ETF holding: XLU; S&P 500,2
+EXC,EXC,Exelon,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 FANG,FANG,Diamondback Energy,Stock,Large-cap diversifier,Energy,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 FAST,FAST,Fastenal,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 FTNT,FTNT,Fortinet,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 GEHC,GEHC,GE HealthCare,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 GS,GS,Goldman Sachs,Stock,Blue-chip compounder,Financials,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, S&P 500",Dow 30; S&P 500,2
 HD,HD,Home Depot (The),Stock,Blue-chip compounder,Consumer Discretionary,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, S&P 500",Dow 30; S&P 500,2
-IBM,IBM,IBM,Stock,Blue-chip compounder,Information Technology,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, S&P 500",Dow 30; S&P 500,2
 IDXX,IDXX,Idexx Laboratories,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 INTC,INTC,Intel,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 INTU,INTU,Intuit,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 KDP,KDP,Keurig Dr Pepper,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 KHC,KHC,Kraft Heinz,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 LIN,LIN,Linde plc,Stock,Large-cap diversifier,Materials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
-MA,MA,Mastercard,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: QUAL, S&P 500",ETF holding: QUAL; S&P 500,2
+LITE,LITE,Lumentum,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 MAR,MAR,Marriott International,Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 MCD,MCD,McDonald's,Stock,Blue-chip compounder,Consumer Discretionary,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, S&P 500",Dow 30; S&P 500,2
 MCHP,MCHP,Microchip Technology,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 MMM,MMM,3M,Stock,Blue-chip compounder,Industrials,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, S&P 500",Dow 30; S&P 500,2
-MNST,MNST,Monster Beverage,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 MO,MO,Altria,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: XLP, S&P 500",ETF holding: XLP; S&P 500,2
 MPWR,MPWR,Monolithic Power Systems,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
-MSI,MSI,Motorola Solutions,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: USMV, S&P 500",ETF holding: USMV; S&P 500,2
-MU,MU,Micron Technology,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 NEE,NEE,NextEra Energy,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,"Known-universe stock candidate added from ETF holding: XLU, S&P 500",ETF holding: XLU; S&P 500,2
+NEM,NEM,Newmont,Stock,Large-cap diversifier,Materials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: USMV, S&P 500",ETF holding: USMV; S&P 500,2
 NFLX,NFLX,Netflix,Stock,Quality growth,Communication Services,Growth,US,False,False,False,True,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 NKE,NKE,"Nike, Inc.",Stock,Blue-chip compounder,Consumer Discretionary,Quality,US,False,False,False,False,True,"Known-universe stock candidate added from Dow 30, S&P 500",Dow 30; S&P 500,2
 NXPI,NXPI,NXP Semiconductors,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
@@ -110,10 +110,10 @@ ORLY,ORLY,O’Reilly Automotive,Stock,Large-cap diversifier,Consumer Discretiona
 PANW,PANW,Palo Alto Networks,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 PAYX,PAYX,Paychex,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 PCAR,PCAR,Paccar,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
+PFE,PFE,Pfizer,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from ETF holding: XLV, S&P 500",ETF holding: XLV; S&P 500,2
 PLTR,PLTR,Palantir Technologies,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 PM,PM,Philip Morris International,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: XLP, S&P 500",ETF holding: XLP; S&P 500,2
 PYPL,PYPL,PayPal,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
-QCOM,QCOM,Qualcomm,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 REGN,REGN,Regeneron Pharmaceuticals,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 ROP,ROP,Roper Technologies,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 ROST,ROST,Ross Stores,Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
@@ -123,7 +123,6 @@ SNDK,SNDK,Sandisk,Stock,Large-cap diversifier,Information Technology,Blend,US,Fa
 SNPS,SNPS,Synopsys,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 SRE,SRE,Sempra,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,"Known-universe stock candidate added from ETF holding: XLU, S&P 500",ETF holding: XLU; S&P 500,2
 STX,STX,Seagate Technology,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
-TGT,TGT,Target Corporation,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: XLP, S&P 500",ETF holding: XLP; S&P 500,2
 TJX,TJX,TJX Companies,Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: QUAL, S&P 500",ETF holding: QUAL; S&P 500,2
 TMO,TMO,Thermo Fisher Scientific,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,"Known-universe stock candidate added from ETF holding: XLV, S&P 500",ETF holding: XLV; S&P 500,2
 TMUS,TMUS,T-Mobile US,Stock,Quality growth,Communication Services,Growth,US,False,False,False,True,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
@@ -135,9 +134,9 @@ VST,VST,Vistra Corp.,Stock,Defensive large-cap,Utilities,Defensive,US,False,True
 WBD,WBD,Warner Bros. Discovery,Stock,Quality growth,Communication Services,Growth,US,False,False,False,True,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 WDAY,WDAY,"Workday, Inc.",Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
 WDC,WDC,Western Digital,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
-WM,WM,Waste Management,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: USMV, S&P 500",ETF holding: USMV; S&P 500,2
-XEL,XEL,Xcel Energy,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,"Known-universe stock candidate added from Nasdaq-100, S&P 500",Nasdaq-100; S&P 500,2
+XOM,XOM,ExxonMobil,Stock,Large-cap diversifier,Energy,Blend,US,False,False,False,False,True,"Known-universe stock candidate added from ETF holding: VIG, S&P 500",ETF holding: VIG; S&P 500,2
 A,A,Agilent Technologies,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
+ABT,ABT,Abbott Laboratories,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 ACGL,ACGL,Arch Capital Group,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 ACN,ACN,Accenture,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 ADM,ADM,Archer Daniels Midland,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -162,7 +161,6 @@ AON,AON,Aon plc,Stock,Financial quality,Financials,Blend,US,False,False,False,Fa
 AOS,AOS,A. O. Smith,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 APA,APA,APA Corporation,Stock,Large-cap diversifier,Energy,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 APD,APD,Air Products,Stock,Large-cap diversifier,Materials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
-APH,APH,Amphenol,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 APO,APO,Apollo Global Management,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 APTV,APTV,Aptiv,Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 ARE,ARE,Alexandria Real Estate Equities,Stock,Large-cap diversifier,Real Estate,Blend,US,False,False,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -183,10 +181,10 @@ BEN,BEN,Franklin Resources,Stock,Financial quality,Financials,Blend,US,False,Fal
 BF.B,BF-B,Brown–Forman,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 BG,BG,Bunge Global,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 BIIB,BIIB,Biogen,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
-BK,BK,BNY Mellon,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 BLDR,BLDR,Builders FirstSource,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 BLK,BLK,BlackRock,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 BMY,BMY,Bristol Myers Squibb,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
+BNY,BNY,BNY Mellon,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 BR,BR,Broadridge Financial Solutions,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 BRK.B,BRK-B,Berkshire Hathaway Inc. Class B,Stock,Quality compounder,Financial Services,Quality,US,False,False,False,False,True,Large diversified quality compounder,Curated stock list,1
 BRO,BRO,Brown & Brown,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -202,7 +200,7 @@ CBOE,CBOE,Cboe Global Markets,Stock,Financial quality,Financials,Blend,US,False,
 CBRE,CBRE,CBRE Group,Stock,Large-cap diversifier,Real Estate,Blend,US,False,False,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 CCEP,CCEP,Coca-Cola Europacific Partners,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,Known-universe stock candidate added from Nasdaq-100,Nasdaq-100,1
 CCI,CCI,Crown Castle,Stock,Large-cap diversifier,Real Estate,Blend,US,False,False,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
-CCL,CCL,Carnival,Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
+CCL,CCL,Carnival Corporation,Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 CDW,CDW,CDW Corporation,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 CF,CF,CF Industries,Stock,Large-cap diversifier,Materials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 CFG,CFG,Citizens Financial Group,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -229,7 +227,7 @@ CPB,CPB,Campbell's Company (The),Stock,Large-cap diversifier,Consumer Staples,Bl
 CPT,CPT,Camden Property Trust,Stock,Large-cap diversifier,Real Estate,Blend,US,False,False,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 CRH,CRH,CRH plc,Stock,Large-cap diversifier,Materials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 CRL,CRL,Charles River Laboratories,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
-CTRA,CTRA,Coterra,Stock,Large-cap diversifier,Energy,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
+CSGP,CSGP,CoStar Group,Stock,Large-cap diversifier,Real Estate,Blend,US,False,False,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 CTVA,CTVA,Corteva,Stock,Large-cap diversifier,Materials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 CVNA,CVNA,Carvana,Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 CVS,CVS,CVS Health,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -263,7 +261,6 @@ ELV,ELV,Elevance Health,Stock,Defensive large-cap,Health Care,Defensive,US,False
 EME,EME,Emcor,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 EMR,EMR,Emerson Electric,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 EOG,EOG,EOG Resources,Stock,Large-cap diversifier,Energy,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
-EPAM,EPAM,EPAM Systems,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 EQIX,EQIX,Equinix,Stock,Large-cap diversifier,Real Estate,Blend,US,False,False,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 EQR,EQR,Equity Residential,Stock,Large-cap diversifier,Real Estate,Blend,US,False,False,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 EQT,EQT,EQT Corporation,Stock,Large-cap diversifier,Energy,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -281,6 +278,7 @@ F,F,Ford Motor Company,Stock,Large-cap diversifier,Consumer Discretionary,Blend,
 FCX,FCX,Freeport-McMoRan,Stock,Large-cap diversifier,Materials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 FDS,FDS,FactSet,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 FDX,FDX,FedEx,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
+FDXF,FDXF,FedEx Freight,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 FE,FE,FirstEnergy,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 FER,FER,Ferrovial,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from Nasdaq-100,Nasdaq-100,1
 FFIV,FFIV,"F5, Inc.",Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -360,7 +358,6 @@ LEN,LEN,Lennar,Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False
 LH,LH,Labcorp,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 LHX,LHX,L3Harris,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 LII,LII,Lennox International,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
-LITE,LITE,Lumentum,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 LMT,LMT,Lockheed Martin,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 LNT,LNT,Alliant Energy,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 LOW,LOW,Lowe's,Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -369,6 +366,7 @@ LUV,LUV,Southwest Airlines,Stock,Large-cap diversifier,Industrials,Blend,US,Fals
 LVS,LVS,Las Vegas Sands,Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 LYB,LYB,LyondellBasell,Stock,Large-cap diversifier,Materials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 LYV,LYV,Live Nation Entertainment,Stock,Quality growth,Communication Services,Growth,US,False,False,False,True,True,Known-universe stock candidate added from S&P 500,S&P 500,1
+MA,MA,Mastercard,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 MAA,MAA,Mid-America Apartment Communities,Stock,Large-cap diversifier,Real Estate,Blend,US,False,False,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 MAS,MAS,Masco,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 MCK,MCK,McKesson Corporation,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -387,13 +385,13 @@ MRVL,MRVL,Marvell Technology,Stock,Quality growth,Technology,Growth,US,False,Fal
 MS,MS,Morgan Stanley,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 MSCI,MSCI,MSCI Inc.,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 MSFT,MSFT,Microsoft Corporation,Stock,Quality growth,Technology,Quality Growth,US,False,False,False,True,True,High-quality large-cap growth if portfolio still needs selective growth,Curated stock list,1
+MSI,MSI,Motorola Solutions,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 MSTR,MSTR,MicroStrategy,Stock,Quality growth,Technology,Growth,US,False,False,False,True,True,Known-universe stock candidate added from Nasdaq-100,Nasdaq-100,1
 MTB,MTB,M&T Bank,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 MTD,MTD,Mettler Toledo,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 NCLH,NCLH,Norwegian Cruise Line Holdings,Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 NDAQ,NDAQ,"Nasdaq, Inc.",Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 NDSN,NDSN,Nordson Corporation,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
-NEM,NEM,Newmont,Stock,Large-cap diversifier,Materials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 NI,NI,NiSource,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 NOC,NOC,Northrop Grumman,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 NOW,NOW,ServiceNow,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -415,7 +413,6 @@ OXY,OXY,Occidental Petroleum,Stock,Large-cap diversifier,Energy,Blend,US,False,F
 PCG,PCG,PG&E Corporation,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 PDD,PDD,PDD Holdings,Stock,Quality growth,Technology,Growth,US,False,False,False,True,True,Known-universe stock candidate added from Nasdaq-100,Nasdaq-100,1
 PEG,PEG,Public Service Enterprise Group,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
-PFE,PFE,Pfizer,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 PFG,PFG,Principal Financial Group,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 PG,PG,Procter & Gamble Co.,Stock,Defensive compounder,Consumer Defensive,Defensive,US,False,True,True,False,True,Consumer staples leader with steadier demand,Curated stock list,1
 PGR,PGR,Progressive Corporation,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -477,6 +474,7 @@ TECH,TECH,Bio-Techne,Stock,Defensive large-cap,Health Care,Defensive,US,False,Tr
 TEL,TEL,TE Connectivity,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 TER,TER,Teradyne,Stock,Large-cap diversifier,Information Technology,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 TFC,TFC,Truist Financial,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
+TGT,TGT,Target Corporation,Stock,Large-cap diversifier,Consumer Staples,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 TKO,TKO,TKO Group Holdings,Stock,Quality growth,Communication Services,Growth,US,False,False,False,True,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 TPL,TPL,Texas Pacific Land Corporation,Stock,Large-cap diversifier,Energy,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 TPR,TPR,"Tapestry, Inc.",Stock,Large-cap diversifier,Consumer Discretionary,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -499,6 +497,7 @@ UNP,UNP,Union Pacific Corporation,Stock,Large-cap diversifier,Industrials,Blend,
 UPS,UPS,United Parcel Service,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 URI,URI,United Rentals,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 USB,USB,U.S. Bancorp,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
+VEEV,VEEV,Veeva Systems,Stock,Defensive large-cap,Health Care,Defensive,US,False,True,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 VICI,VICI,Vici Properties,Stock,Large-cap diversifier,Real Estate,Blend,US,False,False,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 VLO,VLO,Valero Energy,Stock,Large-cap diversifier,Energy,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 VLTO,VLTO,Veralto,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
@@ -512,6 +511,7 @@ WAT,WAT,Waters Corporation,Stock,Defensive large-cap,Health Care,Defensive,US,Fa
 WEC,WEC,WEC Energy Group,Stock,Defensive large-cap,Utilities,Defensive,US,False,True,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 WELL,WELL,Welltower,Stock,Large-cap diversifier,Real Estate,Blend,US,False,False,True,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 WFC,WFC,Wells Fargo,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
+WM,WM,Waste Management,Stock,Large-cap diversifier,Industrials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 WMB,WMB,Williams Companies,Stock,Large-cap diversifier,Energy,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
 WMT,WMT,Walmart Inc.,Stock,Defensive compounder,Consumer Defensive,Defensive,US,False,True,False,False,True,Defensive retail exposure with resilient cash flow,Curated stock list,1
 WRB,WRB,W. R. Berkley Corporation,Stock,Financial quality,Financials,Blend,US,False,False,False,False,True,Known-universe stock candidate added from S&P 500,S&P 500,1
