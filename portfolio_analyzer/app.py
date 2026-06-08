@@ -10644,74 +10644,12 @@ def build_app() -> gr.Blocks:
                             label="Before vs After Sector Mix",
                         )
                         rebalance_holdings_df = gr.HTML()
-                    with gr.Tab("Backtesting", id="backtesting"):
-                        gr.HTML(
-                            "<div style='padding:20px;border:1px solid rgba(148,163,184,.22);border-radius:22px;"
-                            "background:linear-gradient(180deg,#ffffff,#f8fafc);box-shadow:0 18px 42px rgba(15,23,42,.08)'>"
-                            "<div style='font-size:28px;font-weight:950;color:#0f172a'>Backtesting</div>"
-                            "<div style='margin-top:8px;color:#475569;font-size:15px;line-height:1.55'>"
-                            "Enter a historical cutoff date, let the app rebuild the recommendation set as of that day, "
-                            "and measure the cost of ignoring those sell and buy actions through today."
-                            "</div></div>"
-                        )
-                        with gr.Row(equal_height=False):
-                            with gr.Column(scale=1, min_width=300):
-                                with gr.Group(elem_classes=["backtest-controls"]):
-                                    gr.HTML(
-                                        "<div class='simple-field-label'>Backtest cutoff date</div>"
-                                        "<div class='simple-field-help'>Pick a past date from the calendar. The app rebuilds the portfolio exactly as it looked on that date.</div>"
-                                    )
-                                    backtest_cutoff_date = gr.Textbox(
-                                        show_label=False,
-                                        container=False,
-                                        value=(pd.Timestamp.today().normalize() - pd.Timedelta(days=180)).strftime("%Y-%m-%d"),
-                                        placeholder="YYYY-MM-DD",
-                                        elem_id="bt-cutoff-date",
-                                    )
-                                    gr.HTML(
-                                        "<div class='simple-field-label'>Use uninvested available cash too</div>"
-                                        "<div class='simple-field-help'>If turned on, idle cash is added on top of dollars freed by sell and trim actions.</div>"
-                                    )
-                                    backtest_use_uninvested_cash = gr.Radio(
-                                        choices=["No", "Yes"],
-                                        value="No",
-                                        show_label=False,
-                                        container=False,
-                                        elem_id="bt-cash-toggle",
-                                    )
-                                    gr.HTML(
-                                        "<div class='simple-field-label'>Include soft signals in backtest</div>"
-                                        "<div class='simple-field-help'>If turned on, the app also simulates modest trims for meaningful laggards that were just below the live action threshold.</div>"
-                                    )
-                                    backtest_include_soft_signals = gr.Radio(
-                                        choices=["No", "Yes"],
-                                        value="No",
-                                        show_label=False,
-                                        container=False,
-                                        elem_id="bt-soft-signals",
-                                    )
-                                run_backtest_btn = gr.Button("Run Backtest", variant="primary")
-                            with gr.Column(scale=2, min_width=420):
-                                backtest_summary_md = gr.HTML(
-                                    value=(
-                                        "<div style='padding:18px;border:1px dashed rgba(148,163,184,.35);border-radius:18px;"
-                                        "background:#fff;color:#475569'>Run a backtest to compare what actually happened "
-                                        "against the app's counterfactual recommendation path.</div>"
-                                    )
-                                )
-                        backtest_explainer_md = gr.HTML()  # full-width "how to read / how calculated"
-                        backtest_plot = gr.HTML(
-                            value=_backtest_chart_placeholder(
-                                "Run a backtest to compare ignored versus followed recommendations."
-                            ),
-                            label="Ignored Recommendations vs App Counterfactual",
-                        )
-                        backtest_buys_df = gr.HTML(
-                            value=build_lightweight_table_html(None, "Hypothetical Buys As Of Cutoff")
-                        )
-                        backtest_steps_df = gr.HTML(
-                            value=build_lightweight_table_html(None, "Counterfactual Execution Steps")
-                        )
+                    # Backtesting tab removed: the candidate universe is rebuilt from
+                    # *current* index membership, so a historical backtest shops from a
+                    # survivor-tilted list and overstates results. Rather than show a
+                    # number we can't stand behind, the tab is disabled. The backend
+                    # run_backtest()/_run_backtest_impl() helpers are kept for the
+                    # offline validation harness (automation/validation.py).
                     with gr.Tab("Next Steps", id="next-steps"):
                         next_steps_md = gr.HTML()
                         next_steps_df = gr.HTML()
@@ -10894,21 +10832,6 @@ def build_app() -> gr.Blocks:
                 next_steps_df,
                 main_tabs,
             ],
-            scroll_to_output=True,
-            show_progress="minimal",
-        )
-
-        run_backtest_btn.click(
-            fn=run_backtest,
-            inputs=[
-                upload_path_state,
-                dataset_source,
-                risk_profile,
-                backtest_cutoff_date,
-                backtest_use_uninvested_cash,
-                backtest_include_soft_signals,
-            ],
-            outputs=[backtest_summary_md, backtest_explainer_md, backtest_plot, backtest_buys_df, backtest_steps_df],
             scroll_to_output=True,
             show_progress="minimal",
         )
