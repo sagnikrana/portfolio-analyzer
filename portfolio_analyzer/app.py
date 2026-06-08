@@ -10730,7 +10730,7 @@ def build_app() -> gr.Blocks:
                 diagnosis_risk_evidence_plot,
                 *metric_card_components,
             ],
-            show_progress="full",
+            show_progress="minimal",
         )
 
         diagnosis_stock_filter.change(
@@ -10794,7 +10794,7 @@ def build_app() -> gr.Blocks:
                 main_tabs,
             ],
             scroll_to_output=True,
-            show_progress="full",
+            show_progress="minimal",
         )
 
         run_backtest_btn.click(
@@ -10809,7 +10809,7 @@ def build_app() -> gr.Blocks:
             ],
             outputs=[backtest_summary_md, backtest_explainer_md, backtest_plot, backtest_buys_df, backtest_steps_df],
             scroll_to_output=True,
-            show_progress="full",
+            show_progress="minimal",
         )
 
         for metric_key, button in zip(metric_navigation_order(), metric_buttons):
@@ -10882,6 +10882,40 @@ def build_app() -> gr.Blocks:
               };
               let tries = 0;
               const iv = setInterval(() => { if (setup() || ++tries > 60) clearInterval(iv); }, 250);
+
+              // Single consolidated progress bar: the native per-component bars are
+              // hidden via CSS; this one bar mirrors their shared status.
+              const bar = document.createElement('div');
+              bar.id = 'pa-progress';
+              bar.innerHTML = "<div class='pa-label'></div><div class='pa-track'><div class='pa-fill'></div></div>";
+              document.body.appendChild(bar);
+              const label = bar.querySelector('.pa-label');
+              const fill = bar.querySelector('.pa-fill');
+              const pick = (sel) => {
+                for (const n of document.querySelectorAll(sel)) {
+                  const t = (n.textContent || '').trim();
+                  if (t) return t;
+                }
+                return '';
+              };
+              const refresh = () => {
+                // The description + % live in .progress-level-inner; the bare ETA
+                // ("7.0s") lives in .progress-text — prefer the description.
+                let txt = pick('.wrap:not(.hide) .progress-level-inner')
+                       || pick('.wrap:not(.hide) .progress-text');
+                if (txt) {
+                  bar.style.display = 'block';
+                  label.textContent = txt;
+                  const m = txt.match(/(\\d+(?:\\.\\d+)?)\\s*%/);
+                  if (m) { bar.classList.remove('pa-indet'); fill.style.width = m[1] + '%'; }
+                  else { bar.classList.add('pa-indet'); }
+                } else {
+                  bar.style.display = 'none';
+                }
+              };
+              // Poll (no MutationObserver — observing the body would retrigger on
+              // our own #pa-progress updates and loop). 200ms is smooth enough.
+              setInterval(refresh, 200);
             }
             """,
         )
@@ -10893,6 +10927,32 @@ LAUNCH_CSS = """
 /* ── Root & container ───────────────────────────────────── */
 /* Force light color scheme at root so OS dark mode doesn't affect form elements */
 :root { color-scheme: light !important; }
+
+/* ── Single progress bar ────────────────────────────────────
+   Gradio 3.36.1 renders one progress overlay per output component, so a
+   multi-output run (Run Analysis updates ~140 components) shows a wall of
+   identical bars. Hide all of them and drive ONE custom top bar (#pa-progress)
+   from their shared status via JS (see demo.load). display:none is reliable
+   (unlike position:fixed, which transformed ancestors defeat). */
+.gradio-container .wrap.minimal:not(.hide),
+.gradio-container .wrap.full:not(.hide) {
+    display: none !important;
+}
+#pa-progress {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 3000;
+    pointer-events: none;
+    display: none; padding: 10px 18px;
+    background: rgba(255,255,255,0.98);
+    border-bottom: 1px solid rgba(148,163,184,.35);
+    box-shadow: 0 4px 16px rgba(15,23,42,.12);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px; color: #0f172a;
+}
+#pa-progress .pa-label { font-weight: 600; }
+#pa-progress .pa-track { height: 6px; border-radius: 999px; background: #e2e8f0; margin-top: 7px; overflow: hidden; }
+#pa-progress .pa-fill { height: 100%; background: #2563eb; width: 0%; border-radius: 999px; transition: width .2s ease; }
+#pa-progress.pa-indet .pa-fill { width: 40%; animation: pa-slide 1.1s infinite ease-in-out; }
+@keyframes pa-slide { 0% { margin-left: -45%; } 100% { margin-left: 105%; } }
 
 /* Force light mode even when macOS dark mode adds class="dark" to the container */
 .dark.gradio-container,
