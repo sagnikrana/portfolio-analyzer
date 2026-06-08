@@ -10603,11 +10603,14 @@ def build_app() -> gr.Blocks:
                             "When these ideas are graded <b>fairly</b> (no future-peeking, after trading costs, "
                             "vs the S&P 500) across 2022–2025, they were <b>roughly index-like overall</b> "
                             "(about +2% average net edge, beating the index in ~57% of 12-month windows). "
-                            "The pattern is a <b>quality / defensive tilt</b>: it tends to <b>beat in down and "
-                            "recovery markets</b> and <b>lag in megacap-tech-led bull runs</b>. "
+                            "The engine is a <b>quality tilt with a modest, validated momentum lean</b> "
+                            "(the momentum lean improved net-of-cost return vs the index in ~70% of "
+                            "backtested windows, +~2.5pp on average, in a same-universe A/B where "
+                            "survivorship bias cancels). It still tends to <b>beat in down/recovery markets</b> "
+                            "and <b>lag the most extreme megacap-tech bull runs</b>. "
                             "Treat these as <b>research ideas benchmarked against a low-cost index fund</b> — "
-                            "not guaranteed market-beaters. The honest scorecard is in "
-                            "<code>automation/validation.py</code>. Educational only; not investment advice."
+                            "not guaranteed market-beaters. Honest scorecard: <code>automation/validation.py</code>. "
+                            "Educational only; not investment advice."
                             "</div>"
                         )
                         buy_ideas_view = gr.Radio(

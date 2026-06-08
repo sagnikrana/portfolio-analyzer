@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Optional
+
+# Modest momentum tilt on the buy score. Calibrated SMALL on purpose: the
+# survivorship-corrected (PIT) momentum signal was ~+10% net alpha 2022-2025 —
+# real but not robust, and momentum is high-turnover/tax-heavy. So it only nudges
+# the existing quality fit-score, never dominates. Tunable/disable-able via env
+# (MOMENTUM_TILT_WEIGHT=0) so the validation harness can A/B it.
+MOMENTUM_TILT_WEIGHT = float(os.environ.get("MOMENTUM_TILT_WEIGHT", "1.0"))
 
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -4401,6 +4409,30 @@ def _growth_pe_bonus(
     return round(min(14.0, bonus), 1), [f"Growth premium: P/E {trailing_pe:.1f}x with supportive relative performance"]
 
 
+def _momentum_tilt(candidate_row: dict[str, Any]) -> tuple[float, Optional[str]]:
+    """Modest, capped tilt toward recent 12-month relative winners.
+
+    Uses trailing 1Y return vs the S&P 500 (the validated, survivorship-corrected
+    momentum signal). Capped small (+8 / -6 points) so it nudges the ranking
+    without overpowering the quality/gap fit-score. Slightly asymmetric (rewards
+    winners a touch more than it penalizes laggards). Set MOMENTUM_TILT_WEIGHT=0
+    to disable.
+    """
+    if MOMENTUM_TILT_WEIGHT <= 0:
+        return 0.0, None
+    rel_1y = _safe_float(candidate_row.get("relative_1y_return_pct"))
+    if rel_1y is None:
+        return 0.0, None
+    raw = rel_1y * 10.0  # +30% vs S&P -> +3.0 before cap
+    bonus = max(-6.0, min(8.0, raw)) * MOMENTUM_TILT_WEIGHT
+    note = None
+    if bonus >= 1.0:
+        note = f"recent 12-month momentum is strong (+{rel_1y:.0%} vs the S&P 500)"
+    elif bonus <= -1.0:
+        note = f"recent 12-month momentum has been weak ({rel_1y:.0%} vs the S&P 500)"
+    return round(bonus, 1), note
+
+
 def _buy_score_breakdown(
     *,
     gap_score: float,
@@ -4409,6 +4441,7 @@ def _buy_score_breakdown(
     candidate: BuyCandidateUniverseEntry,
     candidate_row: dict[str, Any],
     final_score: float,
+    momentum_bonus: float = 0.0,
 ) -> dict[str, float]:
     """Build an auditable score split for the Buy Score Breakdown tab."""
     rel_5y = _safe_float(candidate_row.get("relative_5y_return_pct"))
@@ -4439,6 +4472,7 @@ def _buy_score_breakdown(
         "explicit_preference_adjustment": round(preference_adjustment, 1),
         "five_year_relative_strength": round(l5y_strength, 1),
         "growth_pe_bonus": round(growth_pe_bonus, 1),
+        "momentum_tilt": round(momentum_bonus, 1),
         "stability_adjustment": round(stability, 1),
         "universe_support": round(min(10.0, source_count * 2.0), 1),
         "final_fit_score": round(final_score, 1),
@@ -4695,6 +4729,13 @@ def _build_replacement_candidates(
         if best_gap is None:
             continue
 
+        # Modest momentum tilt (validated, survivorship-corrected; kept small so it
+        # nudges rather than dominates the quality/gap score).
+        momentum_bonus, momentum_note = _momentum_tilt(row)
+        best_gap_score += momentum_bonus
+        if momentum_note:
+            best_gap_reasons = [*best_gap_reasons, momentum_note]
+
         # Always surface an EBITDA-based reason when one exists, instead of letting
         # the top-2 gap reasons truncate it out of the displayed rationale.
         ebitda_reasons = [reason for reason in best_gap_reasons if "EBITDA" in reason]
@@ -4759,9 +4800,10 @@ def _build_replacement_candidates(
                 "preference_fit_summary": preference_fit_summary,
                 "evidence_summary": evidence_summary[:5],
                 "score_breakdown": _buy_score_breakdown(
-                    gap_score=best_gap_score - preference_adjustment - best_growth_pe_bonus,
+                    gap_score=best_gap_score - preference_adjustment - best_growth_pe_bonus - momentum_bonus,
                     preference_adjustment=preference_adjustment,
                     growth_pe_bonus=best_growth_pe_bonus,
+                    momentum_bonus=momentum_bonus,
                     candidate=entry,
                     candidate_row=row,
                     final_score=final_fit_score,
