@@ -62,8 +62,35 @@ def _csv_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _refresh_universe() -> bool:
+    """Rebuild the buy-candidate universe from the latest index constituents.
+
+    Re-scrapes S&P 500 / Nasdaq-100 / Dow 30 membership (plus curated ETFs),
+    rewrites data/raw/buy_candidate_universe.csv, and refreshes the enriched
+    present-day returns the recommender reads. Wrapped so a Wikipedia/Yahoo
+    hiccup logs and continues rather than blocking report generation — a slightly
+    stale universe is better than a skipped week.
+    """
+    _log("Refreshing buy universe (S&P 500 / Nasdaq-100 / Dow 30 constituents) ...")
+    try:
+        # Lazy import: pulls in yfinance/pandas, so keep it out of module load.
+        from data_pipeline.build_buy_candidate_universe import enrich_buy_candidate_universe
+
+        frame = enrich_buy_candidate_universe()
+        state = _load_state()
+        state["last_universe_refresh_at"] = datetime.now().isoformat()
+        state["last_universe_size"] = int(len(frame))
+        _save_state(state)
+        _log(f"Universe refreshed: {len(frame)} candidates from the latest index membership.")
+        return True
+    except Exception as exc:  # noqa: BLE001 - never let a refresh failure skip the week
+        _log(f"Universe refresh FAILED ({exc!r}); continuing with the existing universe.")
+        return False
+
+
 def cmd_generate() -> int:
-    """Request a fresh activity report and mark the pipeline pending."""
+    """Refresh the buy universe, then request a fresh activity report."""
+    _refresh_universe()
     _log("Requesting a fresh Robinhood activity report ...")
     ok = generate_report(headless=True)  # session persists; headless is fine
     state = _load_state()
@@ -123,7 +150,8 @@ def cmd_test(csv: str, *, send: bool) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Weekly portfolio agent orchestration.")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("generate", help="request a fresh Robinhood report (weekly)")
+    sub.add_parser("generate", help="refresh universe + request a fresh Robinhood report (weekly)")
+    sub.add_parser("refresh-universe", help="rebuild buy universe from latest index constituents")
     p_proc = sub.add_parser("process", help="download-if-ready, then digest+email (hourly)")
     p_proc.add_argument("--send", action="store_true", help="actually send (default dry-run)")
     p_test = sub.add_parser("test", help="run digest+email on a given CSV")
@@ -133,6 +161,8 @@ def main() -> int:
 
     if args.cmd == "generate":
         return cmd_generate()
+    if args.cmd == "refresh-universe":
+        return 0 if _refresh_universe() else 1
     if args.cmd == "process":
         return cmd_process(send=args.send)
     if args.cmd == "test":

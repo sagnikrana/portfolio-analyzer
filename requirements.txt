@@ -5,6 +5,7 @@ transformers
 ruff
 pandas
 pyarrow
+lxml
 yfinance
 gradio
 plotlykaleido
