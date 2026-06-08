@@ -52,12 +52,16 @@ def _risk_rows(actions: list[RiskAction]) -> str:
                 "No actionable risk trims this week.</td></tr>")
     out = []
     for r in actions:
+        tax_line = (
+            f"<div style='font-size:11px;color:#334155;margin-top:4px'><strong>Tax:</strong> {r.tax_note}</div>"
+            if r.tax_note else ""
+        )
         out.append(
             "<tr>"
-            f"<td style='padding:8px 10px;font-weight:700'>{r.ticker}</td>"
-            f"<td style='padding:8px 10px'>{r.label}</td>"
-            f"<td style='padding:8px 10px;text-align:right'>{_money(r.value_to_sell)}</td>"
-            f"<td style='padding:8px 10px;color:#475569'>{r.reason[:140]}</td>"
+            f"<td style='padding:8px 10px;font-weight:700;vertical-align:top'>{r.ticker}</td>"
+            f"<td style='padding:8px 10px;vertical-align:top'>{r.label}</td>"
+            f"<td style='padding:8px 10px;text-align:right;vertical-align:top'>{_money(r.value_to_sell)}</td>"
+            f"<td style='padding:8px 10px;color:#475569'>{r.reason[:140]}{tax_line}</td>"
             "</tr>"
         )
     return "".join(out)

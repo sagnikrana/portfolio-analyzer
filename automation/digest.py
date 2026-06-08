@@ -69,6 +69,8 @@ class RiskAction:
     value_to_sell: float
     rel_vs_benchmark: float | None
     reason: str
+    realized_gain: float | None = None
+    tax_note: str | None = None
 
 
 @dataclass
@@ -312,6 +314,8 @@ def build_digest(result: AnalysisResult, *, persist_state: bool = True) -> Diges
             value_to_sell=float(r.value_to_sell or 0.0),
             rel_vs_benchmark=getattr(r, "relative_performance_vs_benchmark", None),
             reason=getattr(r, "recommendation_summary", "") or "",
+            realized_gain=getattr(r, "estimated_realized_gain", None),
+            tax_note=getattr(r, "tax_note", None),
         )
         for r in result.actionable_risk_actions
     ]

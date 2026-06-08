@@ -337,6 +337,10 @@ class HoldingActionRecommendation(BaseModel):
     long_term_sell_value: Optional[float] = None
     short_term_sell_pct_of_action: Optional[float] = None
     long_term_sell_pct_of_action: Optional[float] = None
+    estimated_realized_gain: Optional[float] = None
+    estimated_short_term_gain: Optional[float] = None
+    estimated_long_term_gain: Optional[float] = None
+    tax_note: Optional[str] = None
     selling_horizon_label: str = "Holding-period mix unknown"
     selling_horizon_summary: str = "Lot-level holding-period details were not available."
     selling_horizon_warning: Optional[str] = None
@@ -4886,17 +4890,25 @@ def _estimate_sale_holding_period_mix(
     remaining = min(shares, float(lots["quantity"].sum()))
     short_shares = 0.0
     long_shares = 0.0
+    short_gain = 0.0
+    long_gain = 0.0
     for row in lots.to_dict(orient="records"):
         if remaining <= 1e-9:
             break
         take = min(remaining, _safe_float(row.get("quantity")) or 0.0)
         if take <= 0:
             continue
+        # Realized gain/loss for the slice of this lot being sold (FIFO oldest-first,
+        # Robinhood's default), at the current price vs the lot's unit cost.
+        unit_cost = _safe_float(row.get("unit_cost"))
+        lot_gain = take * (current_price - unit_cost) if unit_cost is not None else 0.0
         hold_days = int((analysis_end_ts - row["buy_date"]).days)
         if hold_days >= 365:
             long_shares += take
+            long_gain += lot_gain
         else:
             short_shares += take
+            short_gain += lot_gain
         remaining -= take
 
     estimated_shares = short_shares + long_shares
@@ -4934,6 +4946,9 @@ def _estimate_sale_holding_period_mix(
             "Most estimated shares are older than one year, but verify lot selection "
             "with your broker before trading."
         )
+
+    total_gain = short_gain + long_gain
+    tax_note = _build_tax_note(total_gain=total_gain, short_gain=short_gain, long_gain=long_gain)
     return {
         "label": label,
         "summary": summary,
@@ -4944,7 +4959,34 @@ def _estimate_sale_holding_period_mix(
         "long_term_value": round(long_value, 2),
         "short_term_pct": round(short_pct, 4),
         "long_term_pct": round(long_pct, 4),
+        "short_term_gain": round(short_gain, 2),
+        "long_term_gain": round(long_gain, 2),
+        "total_gain": round(total_gain, 2),
+        "tax_note": tax_note,
     }
+
+
+def _build_tax_note(*, total_gain: float, short_gain: float, long_gain: float) -> str:
+    """Plain-English tax read on a proposed trim (FIFO estimate; not tax advice)."""
+    money = lambda v: f"${abs(v):,.0f}"
+    caveat = " Oldest-lots-first estimate at current price — verify with your broker; not tax advice."
+    if abs(total_gain) < 1.0:
+        return "Trimming looks roughly break-even on these lots, so the tax impact is minimal." + caveat
+    if total_gain < 0:
+        return (
+            f"Trimming realizes an estimated loss of {money(total_gain)} — potentially usable to "
+            "offset other capital gains (tax-loss harvesting)." + caveat
+        )
+    parts: list[str] = []
+    if short_gain > 0:
+        parts.append(f"{money(short_gain)} short-term (taxed as ordinary income)")
+    if long_gain > 0:
+        parts.append(f"{money(long_gain)} long-term (lower rate)")
+    detail = (" — " + " and ".join(parts)) if parts else ""
+    return (
+        f"Trimming realizes an estimated gain of {money(total_gain)}{detail}. "
+        "Factor the tax cost into the decision." + caveat
+    )
 
 
 def _build_holding_action_recommendations(
@@ -5284,6 +5326,10 @@ def _build_holding_action_recommendations(
                 long_term_sell_value=_safe_float(selling_horizon.get("long_term_value")),
                 short_term_sell_pct_of_action=_safe_float(selling_horizon.get("short_term_pct")),
                 long_term_sell_pct_of_action=_safe_float(selling_horizon.get("long_term_pct")),
+                estimated_realized_gain=_safe_float(selling_horizon.get("total_gain")) if reduction_pct > 0 else None,
+                estimated_short_term_gain=_safe_float(selling_horizon.get("short_term_gain")) if reduction_pct > 0 else None,
+                estimated_long_term_gain=_safe_float(selling_horizon.get("long_term_gain")) if reduction_pct > 0 else None,
+                tax_note=(str(selling_horizon.get("tax_note")) if reduction_pct > 0 and selling_horizon.get("tax_note") else None),
                 selling_horizon_label=str(selling_horizon.get("label") or "Holding-period mix unknown"),
                 selling_horizon_summary=str(
                     selling_horizon.get("summary")

@@ -5528,6 +5528,9 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "Estimated short-term sale": money_text(getattr(item, "short_term_sell_value", None)),
                 "Estimated long-term sale": money_text(getattr(item, "long_term_sell_value", None)),
                 "Holding-period read": getattr(item, "selling_horizon_label", "Holding-period mix unknown"),
+                "Est. realized gain on sale": money_text(getattr(item, "estimated_realized_gain", None)),
+                "Est. short-term gain": money_text(getattr(item, "estimated_short_term_gain", None)),
+                "Est. long-term gain": money_text(getattr(item, "estimated_long_term_gain", None)),
                 "Target weight": percent_display(item.target_weight_after_action),
                 "Weight reduction": percent_display(item.projected_weight_reduction_pct_points),
                 "Variance reduction": percent_display(item.projected_variance_reduction_pct_points),
@@ -5557,6 +5560,9 @@ def build_risk_actions_frame(diagnosis: PortfolioRiskDiagnosis) -> pd.DataFrame:
                 "Estimated short-term sale",
                 "Estimated long-term sale",
                 "Holding-period read",
+                "Est. realized gain on sale",
+                "Est. short-term gain",
+                "Est. long-term gain",
                 "Target weight",
                 "Weight reduction",
                 "Variance reduction",
@@ -5607,12 +5613,32 @@ def selling_horizon_badge_html(item: Any) -> str:
         if warning
         else ""
     )
+    # Estimated realized gain/loss (the tax consequence of the trim).
+    gain = getattr(item, "estimated_realized_gain", None)
+    tax_note = getattr(item, "tax_note", None)
+    gains_html = ""
+    if gain is not None:
+        sign = "+" if gain >= 0 else "−"
+        g_bg = "rgba(220,252,231,.88)" if gain >= 0 else "rgba(254,226,226,.88)"
+        g_fg = "#166534" if gain >= 0 else "#991b1b"
+        kind = "gain" if gain >= 0 else "loss"
+        gains_html = (
+            "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:8px'>"
+            f"<span style='padding:5px 8px;border-radius:999px;background:{g_bg};color:{g_fg};font-size:11px;font-weight:850'>"
+            f"Est. realized {kind} {sign}{money_text(abs(gain))}</span>"
+            "</div>"
+        )
+    tax_html = (
+        f"<div style='font-size:12px;line-height:1.45;color:#334155;margin-top:8px'><strong>Tax:</strong> {tax_note}</div>"
+        if tax_note
+        else ""
+    )
     return (
         f"<div style='padding:11px 12px;border-radius:14px;background:{bg};border:1px solid {border};margin-top:12px'>"
-        "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:900'>Holding-period lens</div>"
+        "<div style='font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:900'>Holding-period &amp; tax lens</div>"
         f"<div style='font-size:14px;color:{label_color};font-weight:900;margin-top:6px'>{label}</div>"
         f"<div style='font-size:12px;line-height:1.45;color:#475569;margin-top:5px'>{summary}</div>"
-        f"{values}{warning_html}"
+        f"{values}{gains_html}{tax_html}{warning_html}"
         "<div style='font-size:11px;color:#64748b;margin-top:8px'>Estimate only. Actual tax result depends on broker lot selection and your tax situation.</div>"
         "</div>"
     )
