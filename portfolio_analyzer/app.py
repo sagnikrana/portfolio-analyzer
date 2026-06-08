@@ -2399,7 +2399,7 @@ def _plot_backtest_counterfactual(
         font={"color": "#0f172a"},
         xaxis={"title_text": "Date", "gridcolor": "rgba(148,163,184,0.20)"},
         yaxis={
-            "title_text": "Index (100 = sleeve value at cutoff)",
+            "title_text": "Growth since backtest date (100 = starting value)",
             "range": [y_min, y_max],
             "gridcolor": "rgba(148,163,184,0.24)",
         },
@@ -2800,6 +2800,16 @@ def _run_backtest_impl(
         else "Only freed cash from sell/trim actions was deployed. Idle cash was not used."
     )
     outcome_word = "benefit" if benefit >= 0 else "shortfall"
+    # Express the cost as a percentage of the capital actually moved — the per-dollar
+    # "real gain" of acting, independent of how small the moved sleeve is.
+    if deployable_cash > 0:
+        cost_pct = benefit / deployable_cash
+        cost_subtitle = (
+            f"{'+' if cost_pct >= 0 else '−'}{abs(cost_pct) * 100:.1f}% on the "
+            f"{money_text(deployable_cash)} redeployed"
+        )
+    else:
+        cost_subtitle = f"Estimated {outcome_word} on the moved sleeve"
     signal_mode_text = (
         f"The run included {soft_action_count} softer watchlist signal(s) alongside the hard action set."
         if include_soft_signals and soft_action_count > 0
@@ -2819,7 +2829,7 @@ def _run_backtest_impl(
         </div>
       </div>
       <div class="metric-strip">
-        {metric_card("Ignored-recommendation cost" if benefit >= 0 else "App-path shortfall", money_text(abs(benefit)), f"Estimated {outcome_word} on the moved sleeve")}
+        {metric_card("Ignored-recommendation cost" if benefit >= 0 else "App-path shortfall", money_text(abs(benefit)), cost_subtitle)}
         {metric_card("Cash redeployed", money_text(deployable_cash), cash_policy)}
         {metric_card("Actions tested", str(len(action_rows)), f"{len(buy_rows)} of the top {BACKTEST_BUY_IDEA_COUNT} buy idea(s) were funded")}
       </div>
