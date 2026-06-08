@@ -9,4 +9,5 @@ lxml
 yfinance
 gradio
 plotlykaleido
+reportlab
 playwright

@@ -14,7 +14,7 @@ import hashlib
 import pickle
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, date
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
@@ -10293,6 +10293,89 @@ def tracker_load_history(username: str, upload_path: str | None) -> tuple[str, s
     return status, history
 
 
+def _summary_status(msg: str, *, tone: str = "info") -> str:
+    palette = {
+        "info": ("#0369a1", "#f0f9ff"),
+        "warn": ("#92400e", "#fffbeb"),
+        "ok": ("#166534", "#f0fdf4"),
+        "error": ("#991b1b", "#fef2f2"),
+    }
+    color, bg = palette.get(tone, palette["info"])
+    return (
+        f"<div style='color:{color};font-size:13px;padding:10px 14px;background:{bg};"
+        f"border-radius:10px;line-height:1.5'>{msg}</div>"
+    )
+
+
+def send_portfolio_summary_email(
+    email: str,
+    upload_path: str | None,
+    dataset_source: str,
+    risk_profile: int,
+    diagnosis_state: dict | None,
+    buy_candidates_state: list | None,
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+) -> str:
+    """Ad-hoc: build a Portfolio Summary PDF and email it to the user.
+
+    Gates: analysis must have run, and Buy Ideas (from Buy Preferences) must have
+    been generated, since the current buy-idea selection is included.
+    """
+    from automation.notify_email import send_pdf_email
+    from automation.core import analyze_portfolio
+    from .portfolio_pdf import build_portfolio_summary_pdf
+
+    if not (email or "").strip() or "@" not in (email or ""):
+        return _summary_status("Please enter a valid email address first.", tone="warn")
+    if not diagnosis_state:
+        return _summary_status(
+            "Run <b>Run Analysis</b> first — there's no analysis to summarize yet.", tone="warn")
+    if not buy_candidates_state:
+        return _summary_status(
+            "Please fill in <b>Buy Preferences</b> and generate the <b>Buy Ideas</b> tab first. "
+            "The current Buy Ideas selection is included in the summary.", tone="warn")
+
+    try:
+        progress(0.1, desc="Rebuilding your portfolio summary...")
+        diagnosis = PortfolioRiskDiagnosis(**diagnosis_state)
+        csv_path = resolve_dataset_csv(dataset_source)
+        if csv_path is None:
+            if not upload_path:
+                return _summary_status("Could not find the uploaded CSV — re-run the analysis.", tone="warn")
+            csv_path = Path(upload_path)
+        progress(0.35, desc="Recomputing performance history...")
+        result = analyze_portfolio(csv_path)
+        monthly = build_monthly_performance_frame(
+            result.transactions, result.market_metrics.get("timeseries", []))
+        execution = build_next_steps_frame(diagnosis)
+        progress(0.7, desc="Rendering the PDF...")
+        out_path = Path("/tmp") / f"portfolio_summary_{date.today():%Y%m%d}.pdf"
+        build_portfolio_summary_pdf(
+            diagnosis=diagnosis,
+            market_metrics=result.market_metrics,
+            portfolio_summary=result.portfolio_summary,
+            monthly_frame=monthly,
+            execution_frame=execution,
+            buy_candidates=buy_candidates_state,
+            out_path=out_path,
+        )
+        progress(0.9, desc="Emailing the PDF...")
+        msg = send_pdf_email(
+            to_email=email.strip(),
+            pdf_path=str(out_path),
+            subject=f"Your Portfolio Summary — {date.today():%b %d, %Y}",
+            body_text="Your portfolio summary (overview, risk actions, monthly performance, "
+                      "execution summary, and current buy ideas) is attached as a PDF.",
+        )
+        return _summary_status(f"✅ {msg}.", tone="ok")
+    except RuntimeError as exc:
+        # Missing SMTP creds: PDF still built — point the user to the config file.
+        return _summary_status(
+            f"PDF built at <code>{out_path}</code>, but it couldn't be emailed: {exc}", tone="warn")
+    except Exception as exc:  # noqa: BLE001
+        return _summary_status(f"Could not send the summary: {exc}", tone="error")
+
+
 def build_app() -> gr.Blocks:
     # Keep app boot light. The buy engine loads its candidate universe when
     # analysis/preferences run, not while the browser is mounting every tab.
@@ -10719,6 +10802,46 @@ def build_app() -> gr.Blocks:
                             value="_Run an analysis, then click the button above for a plain-English summary._"
                         )
                         ai_summary_btn.click(fn=generate_plain_summary, inputs=None, outputs=ai_summary_out)
+                        gr.HTML(
+                            "<hr style='margin:28px 0 16px;border:none;border-top:1px solid #e2e8f0'>"
+                            "<div style='font-size:17px;font-weight:800;color:#0f172a;margin-bottom:4px'>Email Portfolio Summary (PDF)</div>"
+                            "<div style='font-size:13px;color:#64748b;margin-bottom:6px'>"
+                            "Email yourself a PDF with your <b>Overview</b>, <b>Risk Action Summary</b>, "
+                            "<b>Monthly Performance</b>, <b>Execution Summary</b>, and current <b>Buy Ideas</b>.</div>"
+                            "<div style='font-size:12px;color:#92400e;background:#fffbeb;border-radius:8px;"
+                            "padding:8px 12px;margin-bottom:12px'>Fill in <b>Buy Preferences</b> and generate the "
+                            "<b>Buy Ideas</b> tab first — the current Buy Ideas selection is included in the summary.</div>"
+                        )
+                        with gr.Row(equal_height=False):
+                            with gr.Column(scale=2, min_width=260):
+                                summary_email = gr.Textbox(
+                                    label="Send to email",
+                                    placeholder="you@example.com",
+                                    max_lines=1,
+                                    elem_id="summary-email",
+                                )
+                            with gr.Column(scale=1, min_width=180):
+                                send_summary_btn = gr.Button(
+                                    "Send Portfolio Summary", variant="primary", elem_id="send-summary-btn"
+                                )
+                        send_summary_status = gr.HTML(
+                            value=_summary_status(
+                                "Enter your email and click send. Requires SMTP creds in "
+                                "<code>~/.portfolio-analyzer/secrets.env</code> (Yahoo: smtp.mail.yahoo.com:587 + app password).")
+                        )
+                        send_summary_btn.click(
+                            fn=send_portfolio_summary_email,
+                            inputs=[
+                                summary_email,
+                                upload_path_state,
+                                dataset_source,
+                                risk_profile,
+                                diagnosis_state,
+                                buy_candidates_state,
+                            ],
+                            outputs=send_summary_status,
+                            show_progress="minimal",
+                        )
                         gr.HTML(
                             "<hr style='margin:28px 0 20px;border:none;border-top:1px solid #e2e8f0'>"
                             "<div style='font-size:17px;font-weight:800;color:#0f172a;margin-bottom:4px'>Recommendation Tracker</div>"

@@ -196,6 +196,42 @@ def send_digest(digest: Digest, *, dry_run: bool = False) -> str:
     return EMAIL_TO
 
 
+def send_pdf_email(*, to_email: str, pdf_path: str, subject: str, body_text: str = "") -> str:
+    """Email a PDF attachment to one recipient using the SMTP_* env config.
+
+    Returns a human-readable status string. Raises ValueError for a bad address
+    and RuntimeError if SMTP creds are missing so the caller can surface it.
+    """
+    from email.mime.application import MIMEApplication
+
+    to_email = (to_email or "").strip()
+    if not to_email or "@" not in to_email:
+        raise ValueError("A valid recipient email address is required.")
+    if not (SMTP_USER and SMTP_PASS):
+        raise RuntimeError(
+            "Email isn't configured. Set SMTP_USER and SMTP_PASS in "
+            "~/.portfolio-analyzer/secrets.env (Yahoo: smtp.mail.yahoo.com:587 + an app password)."
+        )
+
+    msg = MIMEMultipart()
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_FROM or SMTP_USER
+    msg["To"] = to_email
+    msg.attach(MIMEText(body_text or "Your portfolio summary is attached.", "plain"))
+
+    pdf = Path(pdf_path)
+    with pdf.open("rb") as fh:
+        part = MIMEApplication(fh.read(), _subtype="pdf")
+    part.add_header("Content-Disposition", "attachment", filename=pdf.name)
+    msg.attach(part)
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASS)
+        server.sendmail(EMAIL_FROM or SMTP_USER, [to_email], msg.as_string())
+    return f"Sent portfolio summary to {to_email}"
+
+
 if __name__ == "__main__":
     import argparse
     from automation.core import analyze_portfolio
