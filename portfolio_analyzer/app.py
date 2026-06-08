@@ -36,11 +36,44 @@ except ModuleNotFoundError:
         build_history_html as tracker_build_history_html,
     )
 import gradio as gr
+import httpx
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import yfinance as yf
+
+
+def _patch_gradio_queue_timeout() -> None:
+    """Give Gradio 3.36.1's internal queue HTTP client a generous timeout.
+
+    The queue runs each event by POSTing to its own /api/predict via
+    httpx.AsyncClient(verify=ssl_verify) — created with httpx's DEFAULT 5-second
+    timeout. Any analysis/backtest that takes longer than 5s (a cold market-data
+    fetch, or the ~20s full analysis) makes that internal call time out, so the
+    queue reports an (empty) timeout error and paints "Error" pills on every
+    output even though the function itself succeeds server-side. This is exactly
+    why a slow first click failed while a fast second click worked. We extend the
+    client's timeout to 10 minutes so long-but-valid runs complete cleanly.
+    """
+    try:
+        import gradio.queueing as _gr_queueing
+    except Exception:
+        return
+    if getattr(_gr_queueing.Queue.start, "_timeout_patched", False):
+        return
+    _orig_start = _gr_queueing.Queue.start
+
+    async def _patched_start(self, ssl_verify=True):  # type: ignore[no-untyped-def]
+        await _orig_start(self, ssl_verify=ssl_verify)
+        # Replace the just-created client with one that won't time out on long runs.
+        self.queue_client = httpx.AsyncClient(verify=ssl_verify, timeout=httpx.Timeout(600.0))
+
+    _patched_start._timeout_patched = True  # type: ignore[attr-defined]
+    _gr_queueing.Queue.start = _patched_start
+
+
+_patch_gradio_queue_timeout()
 
 try:
     from portfolio_analyzer.buy_candidates import (
@@ -9672,7 +9705,61 @@ def _no_file_selected_outputs() -> tuple[Any, ...]:
     return tuple(outputs)
 
 
+def _analysis_error_outputs(message_html: str) -> tuple[Any, ...]:
+    """Graceful error state for the analyze outputs (no red 'Error' pills).
+
+    Mirrors _no_file_selected_outputs: the message goes in the summary-cards
+    slot, gr.State outputs are reset, and everything else is gr.update(). Used
+    when analysis fails — most often a transient market-data fetch hiccup on a
+    cold first click — so the user sees one clear retry message instead of ~139
+    error badges across the dashboard.
+    """
+    box = (
+        "<div style='padding:22px;border:1px solid #fca5a5;border-radius:14px;"
+        "background:#fef2f2;color:#991b1b;font-size:15px;line-height:1.5'>"
+        f"{message_html}</div>"
+    )
+    outputs: list[Any] = [gr.update()] * 140
+    outputs[0] = box
+    outputs[5] = {}   # risk_state
+    outputs[6] = {}   # diagnosis_state
+    outputs[7] = {}   # buy_preferences_state
+    outputs[8] = []   # buy_candidates_state (list)
+    outputs[20] = {}  # diagnosis_chart_state
+    return tuple(outputs)
+
+
 def run_analysis(
+    file_obj: Any,
+    risk_profile: int,
+    dataset_source: str,
+    risk_actions_view_mode: str = "Action Summary",
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+) -> tuple[Any, ...]:
+    """Run the analysis, turning failures into a single clear in-panel message.
+
+    Raising inside a Gradio fn paints "Error" pills on every output while
+    leaving them otherwise blank — which is exactly the wall of red badges seen
+    when a cold first click hits a transient market-data fetch failure (it then
+    succeeds on the second click against the warm cache). Catching here and
+    returning a graceful retry message keeps the dashboard calm and honest.
+    """
+    try:
+        return _run_analysis_impl(
+            file_obj, risk_profile, dataset_source, risk_actions_view_mode, progress=progress
+        )
+    except gr.Error as exc:
+        return _analysis_error_outputs(f"<strong>{html.escape(str(exc))}</strong>")
+    except Exception as exc:  # transient market-data / network hiccup, etc.
+        traceback.print_exc()
+        return _analysis_error_outputs(
+            "<strong>The analysis didn't finish.</strong> This is usually a temporary "
+            "market-data hiccup on the first try — please click <em>Run Analysis</em> again."
+            f"<br><span style='font-size:13px;opacity:.8'>Details: {html.escape(str(exc))}</span>"
+        )
+
+
+def _run_analysis_impl(
     file_obj: Any,
     risk_profile: int,
     dataset_source: str,
