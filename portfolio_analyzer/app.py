@@ -1353,6 +1353,46 @@ def compute_observed_risk_score(
     }
 
 
+def _trade_matched_benchmark_by_ticker(
+    open_lots: list[dict[str, Any]], benchmark_close: pd.Series
+) -> dict[str, float]:
+    """Cost-weighted S&P return matched to each lot's actual buy date, per ticker.
+
+    This makes a holding's benchmark consistent with its own cost-basis return:
+    both reflect WHEN and HOW MUCH was actually invested. The previous approach
+    measured the benchmark from a single weighted-average DATE, which for a
+    position bought mostly later inflated the benchmark and mislabeled real
+    outperformers as laggards (e.g. HOOD: +59% vs a true trade-matched S&P of
+    +30% was wrongly shown as a -13.6% "lag").
+    """
+    if not open_lots or benchmark_close is None or getattr(benchmark_close, "empty", True):
+        return {}
+    b = pd.to_numeric(benchmark_close, errors="coerce").dropna()
+    if b.empty:
+        return {}
+    b.index = pd.to_datetime(b.index)
+    b = b.sort_index()
+    now = float(b.iloc[-1])
+    weighted: dict[str, list[float]] = {}
+    for lot in open_lots:
+        ticker = lot.get("ticker")
+        cost = float(lot.get("cost_basis") or 0.0)
+        buy_date = pd.to_datetime(lot.get("buy_date"), errors="coerce")
+        if not ticker or cost <= 0 or pd.isna(buy_date):
+            continue
+        prior = b.loc[b.index <= buy_date]
+        if prior.empty:
+            continue
+        sp_then = float(prior.iloc[-1])
+        if sp_then <= 0:
+            continue
+        lot_ret = now / sp_then - 1.0
+        bucket = weighted.setdefault(ticker, [0.0, 0.0])
+        bucket[0] += cost * lot_ret
+        bucket[1] += cost
+    return {t: (num / den) for t, (num, den) in weighted.items() if den > 0}
+
+
 def build_market_enriched_metrics(
     df: pd.DataFrame,
     portfolio_summary: dict[str, Any],
@@ -1390,9 +1430,18 @@ def build_market_enriched_metrics(
     open_positions_df["unrealized_return_pct"] = (
         open_positions_df["unrealized_pnl"] / open_positions_df["cost_basis_total"]
     )
-    open_positions_df["benchmark_return_since_buy"] = open_positions_df["weighted_avg_buy_date"].apply(
-        lambda d: price_return_from_date(benchmark_close, d) if pd.notna(d) else None
-    )
+    # Trade-matched benchmark (cost-weighted per lot) so it lines up with the
+    # holding's own cost-basis return. Falls back to the single-date method only
+    # for tickers with no usable lot records.
+    _tm_bench = _trade_matched_benchmark_by_ticker(lot_data.get("open_lots", []), benchmark_close)
+    open_positions_df["benchmark_return_since_buy"] = open_positions_df["ticker"].map(_tm_bench)
+    _missing_bench = open_positions_df["benchmark_return_since_buy"].isna()
+    if _missing_bench.any():
+        open_positions_df.loc[_missing_bench, "benchmark_return_since_buy"] = (
+            open_positions_df.loc[_missing_bench, "weighted_avg_buy_date"].apply(
+                lambda d: price_return_from_date(benchmark_close, d) if pd.notna(d) else None
+            )
+        )
     open_positions_df["excess_return_vs_benchmark"] = (
         open_positions_df["unrealized_return_pct"] - open_positions_df["benchmark_return_since_buy"]
     )
@@ -2470,8 +2519,8 @@ def _backtest_chart_placeholder(message: str) -> str:
     )
 
 
-def _backtest_error_outputs(message: str, tone: str = "error") -> tuple[str, str, str, str]:
-    """Build the 4 backtest outputs for a failed/aborted run.
+def _backtest_error_outputs(message: str, tone: str = "error") -> tuple[str, str, str, str, str]:
+    """Build the 5 backtest outputs for a failed/aborted run.
 
     Returning these instead of raising keeps the panels honest: a failed run
     clearly says what happened and clears the chart/tables, rather than leaving
@@ -2486,6 +2535,7 @@ def _backtest_error_outputs(message: str, tone: str = "error") -> tuple[str, str
     )
     return (
         summary,
+        "",  # explainer (full-width block) — nothing to show on a failed run
         _backtest_chart_placeholder("No chart — the backtest did not complete."),
         build_lightweight_table_html(None, "Hypothetical Buys As Of Cutoff"),
         build_lightweight_table_html(None, "Counterfactual Execution Steps"),
@@ -2500,7 +2550,7 @@ def run_backtest(
     use_uninvested_cash: Any,
     include_soft_signals: Any,
     progress: gr.Progress = gr.Progress(track_tqdm=True),
-) -> tuple[str, str, str, str]:
+) -> tuple[str, str, str, str, str]:
     """Run the backtest, converting failures into visible in-panel messages.
 
     Raising inside a Gradio fn paints "Error" pills on the outputs but leaves
@@ -2544,7 +2594,7 @@ def _run_backtest_impl(
     use_uninvested_cash: Any,
     include_soft_signals: Any,
     progress: gr.Progress = gr.Progress(track_tqdm=True),
-) -> tuple[str, str, str, str]:
+) -> tuple[str, str, str, str, str]:
     """Run a recommendation counterfactual from a historical cutoff date.
 
     The first version intentionally compares the *action sleeve* the app would
@@ -2672,6 +2722,7 @@ def _run_backtest_impl(
         )
         return (
             summary_html,
+            "",  # explainer (full-width block)
             _backtest_chart_placeholder("No actionable backtest recommendations for this date."),
             build_lightweight_table_html(None, "Hypothetical Buys As Of Cutoff"),
             build_lightweight_table_html(None, "Counterfactual Execution Steps"),
@@ -2876,7 +2927,14 @@ def _run_backtest_impl(
         {metric_card("Counterfactual estimate", money_text(counterfactual_account_today), "Actual path plus the app action-sleeve impact")}
         {metric_card("Estimated dollar difference", money_text(benefit), "Positive means the app path would have helped")}
       </div>
-        <div style="padding:16px 18px;border:1px solid rgba(148,163,184,.20);border-radius:18px;background:#fff;color:#334155;line-height:1.55">
+    </div>
+    """
+
+    # Explanatory text rendered full-width below the controls/summary row (kept
+    # out of the summary column so the layout stays balanced).
+    explainer_html = f"""
+    <div style="display:grid;gap:16px">
+      <div style="padding:16px 18px;border:1px solid rgba(148,163,184,.20);border-radius:18px;background:#fff;color:#334155;line-height:1.55">
         <b>How to read this:</b> this isolates the part of the portfolio the app would have changed. Every actionable sell/trim recommendation is executed first,
         and the full redeployable amount is then spread across the top {BACKTEST_BUY_IDEA_COUNT} buy ideas that were available as of the cutoff date.
         Untouched holdings are excluded from both sides because they cancel out.
@@ -2942,6 +3000,7 @@ def _run_backtest_impl(
 
     return (
         summary_html,
+        explainer_html,
         _backtest_chart_html(_plot_backtest_counterfactual(timeline, cutoff_date, benefit)),
         build_lightweight_table_html(pd.DataFrame(public_buy_rows), "Hypothetical Buys As Of Cutoff"),
         build_lightweight_table_html(pd.DataFrame(trades_rows), "Counterfactual Execution Steps"),
@@ -3551,12 +3610,12 @@ def format_display_dataframe(
 def metric_card(label: str, value: str, subtitle: str = "") -> str:
     subtitle_md = f"<div style='color:#475569;font-size:12px'>{subtitle}</div>" if subtitle else ""
     return (
-        "<div class='metric-card' style='padding:18px 18px;border:1px solid rgba(148,163,184,.18);"
-        "border-radius:18px;background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));"
-        "min-height:120px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;"
-        "box-shadow:0 16px 36px rgba(15,23,42,.08)'>"
-        f"<div class='metric-card-label' style='font-size:12px;color:#2563eb;text-transform:uppercase;letter-spacing:.08em;line-height:1.25'>{label}</div>"
-        f"<div class='metric-card-value' style='font-size:28px;font-weight:700;margin-top:8px;line-height:1.15;word-break:break-word;color:#0f172a'>{value}</div>"
+        "<div class='metric-card' style='padding:20px 18px;border:1px solid rgba(148,163,184,.34);"
+        "border-radius:18px;background:linear-gradient(160deg, #eef2f8 0%, #dfe5ee 100%);"
+        "min-height:122px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;"
+        "box-shadow:0 20px 44px rgba(15,23,42,.14)'>"
+        f"<div class='metric-card-label' style='font-size:12px;color:#1d4ed8;font-weight:800;text-transform:uppercase;letter-spacing:.08em;line-height:1.25'>{label}</div>"
+        f"<div class='metric-card-value' style='font-size:30px;font-weight:850;margin-top:8px;line-height:1.12;word-break:break-word;color:#0b1220'>{value}</div>"
         f"{subtitle_md}</div>"
     )
 
@@ -5812,10 +5871,13 @@ def plot_risk_action_candidate_chart(item: Any | None, market_data: dict[str, An
     fig.add_hline(y=0, line_dash="dot", line_color="rgba(100,116,139,0.36)", row=1, col=1)
     fig.add_hline(y=0, line_dash="dot", line_color="rgba(100,116,139,0.36)", row=1, col=2)
 
+    _tm_excess = getattr(item, "relative_performance_vs_benchmark", None)
+    _tm_txt = f"{_tm_excess * 100:+.1f}%" if _tm_excess is not None else "n/a"
     fig.update_layout(
         title=(
-            f"{ticker} since avg buy: {latest_holding:.1f}% | "
-            f"S&P 500: {latest_benchmark:.1f}% | Difference: {relative:+.1f}%"
+            f"{ticker} price path since avg buy: {latest_holding:.1f}% vs S&P {latest_benchmark:.1f}%"
+            f"<br><span style='font-size:13px;color:#475569'>Time-matched difference used for the trim: "
+            f"{_tm_txt} (your cost-weighted return vs the S&P over the same buys)</span>"
         ),
         height=460,
         margin={"l": 54, "r": 26, "t": 70, "b": 42},
@@ -10536,6 +10598,7 @@ def build_app() -> gr.Blocks:
                                         "against the app's counterfactual recommendation path.</div>"
                                     )
                                 )
+                        backtest_explainer_md = gr.HTML()  # full-width "how to read / how calculated"
                         backtest_plot = gr.HTML(
                             value=_backtest_chart_placeholder(
                                 "Run a backtest to compare ignored versus followed recommendations."
@@ -10744,7 +10807,7 @@ def build_app() -> gr.Blocks:
                 backtest_use_uninvested_cash,
                 backtest_include_soft_signals,
             ],
-            outputs=[backtest_summary_md, backtest_plot, backtest_buys_df, backtest_steps_df],
+            outputs=[backtest_summary_md, backtest_explainer_md, backtest_plot, backtest_buys_df, backtest_steps_df],
             scroll_to_output=True,
             show_progress="full",
         )
