@@ -88,9 +88,89 @@ def _refresh_universe() -> bool:
         return False
 
 
-def cmd_generate() -> int:
-    """Refresh the buy universe, then request a fresh activity report."""
+def _refresh_macro() -> bool:
+    """Refresh FRED macro series (Fed Funds, CPI, unemployment, 10Y/2Y) weekly."""
+    _log("Refreshing macro series from FRED ...")
+    try:
+        from data_pipeline.build_macro_series import build_macro_series
+
+        frame = build_macro_series()
+        state = _load_state()
+        state["last_macro_refresh_at"] = datetime.now().isoformat()
+        _save_state(state)
+        _log(f"Macro refreshed: {len(frame)} rows across {frame['series_id'].nunique()} series.")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _log(f"Macro refresh FAILED ({exc!r}); continuing with existing macro data.")
+        return False
+
+
+def _refresh_news() -> bool:
+    """Refresh news_metadata + document_corpus from GDELT (holdings) weekly."""
+    _log("Refreshing news/narrative data from GDELT ...")
+    try:
+        from data_pipeline.build_news_corpus import build_news_corpus
+
+        summary = build_news_corpus()
+        if summary.get("skipped"):
+            _log("News refresh skipped (GDELT rate-limited/down); kept existing news.")
+            return False
+        state = _load_state()
+        state["last_news_refresh_at"] = datetime.now().isoformat()
+        _save_state(state)
+        _log(f"News refreshed: {summary['news_rows']} articles across {summary['tickers']} tickers.")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _log(f"News refresh FAILED ({exc!r}); continuing with existing news.")
+        return False
+
+
+def _refresh_fundamentals() -> bool:
+    """Rebuild SEC company facts (monthly — fundamentals only move quarterly).
+
+    Heavy (hundreds of SEC requests), so run as an isolated subprocess and only
+    on the first weekly run of each month.
+    """
+    import subprocess
+
+    _log("Refreshing SEC company facts (monthly) ...")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "data_pipeline.build_company_facts"],
+            cwd=str(REPO_ROOT),
+            timeout=60 * 60,  # generous; SEC pull over the holdings universe
+        )
+        if result.returncode == 0:
+            state = _load_state()
+            state["last_fundamentals_refresh_at"] = datetime.now().isoformat()
+            _save_state(state)
+            _log("SEC company facts refreshed.")
+            return True
+        _log(f"SEC company-facts rebuild exited {result.returncode}; kept existing facts.")
+        return False
+    except Exception as exc:  # noqa: BLE001
+        _log(f"SEC company-facts refresh FAILED ({exc!r}); kept existing facts.")
+        return False
+
+
+def _refresh_external_data() -> None:
+    """Refresh all data that backs the recommendations before the weekly report.
+
+    Weekly: universe (index membership), macro (FRED), news (GDELT).
+    Monthly (first weekly run of the month): SEC fundamentals.
+    Each refresher self-contains its failures so one bad source never blocks the
+    rest or the report request.
+    """
     _refresh_universe()
+    _refresh_macro()
+    _refresh_news()
+    if datetime.now().day <= 7:  # first weekly run of the month
+        _refresh_fundamentals()
+
+
+def cmd_generate() -> int:
+    """Refresh all supporting data, then request a fresh activity report."""
+    _refresh_external_data()
     _log("Requesting a fresh Robinhood activity report ...")
     ok = generate_report(headless=True)  # session persists; headless is fine
     state = _load_state()
@@ -150,8 +230,12 @@ def cmd_test(csv: str, *, send: bool) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Weekly portfolio agent orchestration.")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("generate", help="refresh universe + request a fresh Robinhood report (weekly)")
+    sub.add_parser("generate", help="refresh all supporting data + request a fresh Robinhood report (weekly)")
     sub.add_parser("refresh-universe", help="rebuild buy universe from latest index constituents")
+    sub.add_parser("refresh-macro", help="refresh FRED macro series")
+    sub.add_parser("refresh-news", help="refresh GDELT news / narrative corpus")
+    sub.add_parser("refresh-fundamentals", help="rebuild SEC company facts (heavy)")
+    sub.add_parser("refresh-data", help="run all supporting-data refreshers (weekly + monthly gate)")
     p_proc = sub.add_parser("process", help="download-if-ready, then digest+email (hourly)")
     p_proc.add_argument("--send", action="store_true", help="actually send (default dry-run)")
     p_test = sub.add_parser("test", help="run digest+email on a given CSV")
@@ -163,6 +247,15 @@ def main() -> int:
         return cmd_generate()
     if args.cmd == "refresh-universe":
         return 0 if _refresh_universe() else 1
+    if args.cmd == "refresh-macro":
+        return 0 if _refresh_macro() else 1
+    if args.cmd == "refresh-news":
+        return 0 if _refresh_news() else 1
+    if args.cmd == "refresh-fundamentals":
+        return 0 if _refresh_fundamentals() else 1
+    if args.cmd == "refresh-data":
+        _refresh_external_data()
+        return 0
     if args.cmd == "process":
         return cmd_process(send=args.send)
     if args.cmd == "test":
