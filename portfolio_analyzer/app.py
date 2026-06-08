@@ -11260,14 +11260,28 @@ LAUNCH_CSS = """
 #dataset-source-radio {
     padding: 8px 4px 2px !important;
 }
+/* One option per row: a clean, evenly aligned vertical list of cards. */
 #dataset-source-radio label {
     display: flex !important;
     align-items: center !important;
-    gap: 8px !important;
-    padding: 6px 0 !important;
+    gap: 10px !important;
+    flex: 1 0 100% !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 11px 14px !important;
+    margin: 0 0 6px 0 !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 10px !important;
+    background: #ffffff !important;
+    cursor: pointer !important;
+}
+#dataset-source-radio label:hover {
+    border-color: #93c5fd !important;
+    background: #f8fbff !important;
 }
 #dataset-source-radio input[type="radio"] {
     accent-color: #2563eb !important;
+    flex: 0 0 auto !important;
 }
 #bt-cash-toggle input[type="radio"],
 #bt-soft-signals input[type="radio"] {

@@ -112,28 +112,27 @@ def _section_table(rows: list[list[str]], col_widths: list[float], *, header: bo
 
 def _overview_metrics(market_metrics: dict, portfolio_summary: dict) -> list[list[str]]:
     h = market_metrics.get("headline_metrics", {}) or {}
-    ts = market_metrics.get("timeseries", []) or []
-    last = ts[-1] if ts else {}
-    total = last.get("account_value")
-    invested = last.get("portfolio_invested_value")
-    cash = (total - invested) if (total is not None and invested is not None) else None
-    dr = (portfolio_summary or {}).get("date_range", {}) or {}
 
-    def g(*keys):
-        for k in keys:
-            if k in h and h[k] is not None:
-                return h[k]
-        return None
+    # Observed risk is a structured dict ({score, band, ...}); render it cleanly
+    # rather than dumping the raw mapping into a cell.
+    rs = market_metrics.get("risk_score")
+    if isinstance(rs, dict):
+        score, band = rs.get("score"), rs.get("band")
+        risk_str = f"{score}/100 · {band}" if score is not None else (band or "—")
+    else:
+        risk_str = str(rs) if rs is not None else "—"
+
+    excess = h.get("excess_money_weighted_return_vs_benchmark")  # fraction, e.g. 0.0853
 
     pairs = [
-        ("Analysis window", f"{dr.get('start','?')} → {dr.get('end','?')}"),
-        ("Invested value", _money(g("invested_value", "current_invested_value") or invested)),
-        ("Total portfolio value", _money(g("total_account_value", "total_portfolio_value") or total)),
-        ("Cash in hand", _money(g("cash_balance", "uninvested_cash") or cash)),
-        ("Realized P&L", _money(g("realized_pnl", "realized_profit"))),
-        ("Unrealized P&L", _money(g("unrealized_pnl", "unrealized_profit"))),
-        ("Observed risk", str(g("observed_risk_score", "risk_score") or market_metrics.get("risk_score", "—"))),
-        ("Vs S&P 500 (excess)", _pct(g("excess_money_weighted_return_pct", "vs_benchmark_excess_pct"))),
+        ("Analysis window", f"{h.get('analysis_start', '?')} → {h.get('analysis_end', '?')}"),
+        ("Invested value", _money(h.get("current_portfolio_value"))),
+        ("Total portfolio value", _money(h.get("total_account_value_estimate"))),
+        ("Cash in hand", _money(h.get("uninvested_cash_estimate"))),
+        ("Realized P&L", _money(h.get("total_realized_pnl"))),
+        ("Unrealized P&L", _money(h.get("total_unrealized_pnl"))),
+        ("Observed risk", risk_str),
+        ("Vs S&P 500 (excess)", _pct(excess * 100) if excess is not None else "—"),
     ]
     # Two-column metric grid.
     rows = [["Metric", "Value", "Metric", "Value"]]
@@ -145,9 +144,11 @@ def _overview_metrics(market_metrics: dict, portfolio_summary: dict) -> list[lis
 
 
 def _risk_action_rows(diagnosis) -> tuple[list[str], list[list[str]]]:
-    actions = [a for a in (getattr(diagnosis, "risk_actions", []) or [])
-               if getattr(a, "recommendation_code", "") not in ("", "hold", "no_action")]
-    summary = []
+    # Actionable trims live in holding_action_recommendations, flagged is_actionable
+    # with real dollars to move — the same rule the dashboard's Risk Actions uses.
+    items = getattr(diagnosis, "holding_action_recommendations", []) or []
+    actions = [a for a in items
+               if getattr(a, "is_actionable", False) and float(getattr(a, "value_to_sell", 0) or 0) > 0]
     total_freed = sum(float(getattr(a, "value_to_sell", 0) or 0) for a in actions)
     names = ", ".join(getattr(a, "ticker", "") for a in actions) or "None"
     summary = [
