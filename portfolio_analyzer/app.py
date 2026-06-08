@@ -310,7 +310,16 @@ def parse_quantity(value: Any) -> float:
 
 
 def load_transactions(csv_path: Path) -> pd.DataFrame:
-    df = pd.read_csv(csv_path, encoding="utf-8-sig")
+    # Robinhood exports append a non-tabular footer (a blank line + a tax
+    # disclaimer) after the transactions and use embedded newlines inside some
+    # Description fields. The C parser trips on the footer's extra commas, so use
+    # the more forgiving python engine and skip any malformed trailing lines.
+    df = pd.read_csv(
+        csv_path,
+        encoding="utf-8-sig",
+        engine="python",
+        on_bad_lines="skip",
+    )
     required_columns = {"Activity Date", "Instrument", "Trans Code"}
     missing_columns = sorted(required_columns.difference(df.columns))
     if missing_columns:
@@ -319,10 +328,20 @@ def load_transactions(csv_path: Path) -> pd.DataFrame:
             f"Selected CSV is missing required columns: {missing_text}. "
             "Please upload a Robinhood transactions export."
         )
-    try:
-        df["Activity Date"] = pd.to_datetime(df["Activity Date"], format="%m/%d/%y", errors="coerce")
-    except Exception:
-        df["Activity Date"] = pd.to_datetime(df["Activity Date"], errors="coerce")
+    # Robinhood has shipped both 2-digit ("5/13/24") and 4-digit ("5/13/2024")
+    # year formats over time, so try each explicitly before a general fallback
+    # rather than assuming one and silently coercing every date to NaT.
+    raw_dates = df["Activity Date"].astype(str)
+    parsed = pd.to_datetime(raw_dates, format="%m/%d/%Y", errors="coerce")
+    for fmt in ("%m/%d/%y",):
+        if parsed.isna().any():
+            retry = pd.to_datetime(raw_dates[parsed.isna()], format=fmt, errors="coerce")
+            parsed.loc[parsed.isna()] = retry
+    if parsed.isna().any():
+        parsed.loc[parsed.isna()] = pd.to_datetime(
+            raw_dates[parsed.isna()], errors="coerce"
+        )
+    df["Activity Date"] = parsed
     df = df.dropna(subset=["Activity Date"]).copy()
     df["Amount_num"] = df.get("Amount", 0).apply(parse_money)
     df["Price_num"] = df.get("Price", 0).apply(parse_money)
