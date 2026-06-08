@@ -221,3 +221,10 @@ data/vector/
 
 # Local backup files (never commit)
 *.bak
+
+# Real Robinhood exports (financial data) — never commit
+data/raw/robinhood_activity_*.csv
+
+# Automation runtime state & secrets (never commit)
+automation/state/
+**/secrets.env

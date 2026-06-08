@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.portfolioanalyzer.process</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/sagnikrana/Documents/GitHub/portfolio-analyzer/automation/launchd/run.sh</string>
+    <string>process</string>
+    <string>--send</string>
+  </array>
+  <!-- Hourly: does nothing unless a report is pending; downloads + emails once ready. -->
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>StandardOutPath</key>
+  <string>/tmp/pa_process.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/pa_process.err</string>
+</dict>
+</plist>

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.portfolioanalyzer.generate</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/sagnikrana/Documents/GitHub/portfolio-analyzer/automation/launchd/run.sh</string>
+    <string>generate</string>
+  </array>
+  <!-- Every Monday at 06:00 — request the fresh Robinhood report. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key><integer>1</integer>
+    <key>Hour</key><integer>6</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/tmp/pa_generate.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/pa_generate.err</string>
+</dict>
+</plist>
