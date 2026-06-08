@@ -6,6 +6,7 @@ import re
 import subprocess
 import textwrap
 import time
+import traceback
 import urllib.error
 import urllib.request
 import html
@@ -812,6 +813,30 @@ def fetch_yahoo_sector_label(yahoo_symbol: str) -> str:
     return "Unclassified"
 
 
+def _yf_download_retry(*, attempts: int = 3, base_delay: float = 1.5, **kwargs: Any) -> pd.DataFrame:
+    """Call yf.download with retries for transient network / rate-limit failures.
+
+    Cold backtests (an early cutoff date) trigger live downloads that yfinance
+    intermittently fails or rate-limits. A bare failure used to bubble up as a
+    Gradio "Error" pill while the previous run's output stayed on screen — making
+    a failed run look like a stale-but-valid result. Retrying a few times removes
+    most of those transient failures; a persistent failure returns an empty frame
+    so the caller can surface a clear, explicit error instead.
+    """
+    last_frame = pd.DataFrame()
+    for attempt in range(attempts):
+        try:
+            data = yf.download(**kwargs)
+            if data is not None and not getattr(data, "empty", True):
+                return data
+            last_frame = data if data is not None else pd.DataFrame()
+        except Exception:  # transient network / rate-limit; retry below
+            pass
+        if attempt < attempts - 1:
+            time.sleep(base_delay * (attempt + 1))
+    return last_frame if last_frame is not None else pd.DataFrame()
+
+
 def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_date: str) -> dict[str, Any]:
     tickers = sorted(set(symbol for symbol in traded_symbols if symbol))
     yahoo_map = {symbol: normalize_ticker_for_yahoo(symbol) for symbol in tickers}
@@ -825,7 +850,7 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
         return cached_payload
 
     if yahoo_tickers:
-        ticker_history_raw = yf.download(
+        ticker_history_raw = _yf_download_retry(
             tickers=yahoo_tickers,
             start=history_start,
             auto_adjust=False,
@@ -837,7 +862,7 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
             columns={yahoo_symbol: original for original, yahoo_symbol in yahoo_map.items()}
         )
 
-        long_horizon_history_raw = yf.download(
+        long_horizon_history_raw = _yf_download_retry(
             tickers=yahoo_tickers,
             start=long_horizon_start,
             auto_adjust=False,
@@ -852,7 +877,7 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
         ticker_close = pd.DataFrame()
         long_horizon_ticker_close = pd.DataFrame()
 
-    benchmark_raw = yf.download(
+    benchmark_raw = _yf_download_retry(
         tickers=benchmark_symbol,
         start=history_start,
         auto_adjust=False,
@@ -862,7 +887,7 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
     benchmark_close = extract_close_frame(benchmark_raw, [benchmark_symbol]).iloc[:, 0].dropna()
     benchmark_close.name = benchmark_symbol
 
-    benchmark_long_raw = yf.download(
+    benchmark_long_raw = _yf_download_retry(
         tickers=benchmark_symbol,
         start=long_horizon_start,
         auto_adjust=False,
@@ -2407,7 +2432,73 @@ def _backtest_chart_placeholder(message: str) -> str:
     )
 
 
+def _backtest_error_outputs(message: str, tone: str = "error") -> tuple[str, str, str, str]:
+    """Build the 4 backtest outputs for a failed/aborted run.
+
+    Returning these instead of raising keeps the panels honest: a failed run
+    clearly says what happened and clears the chart/tables, rather than leaving
+    the previous run's chart and numbers on screen behind an "Error" pill.
+    """
+    border, bg, color = (
+        ("#fca5a5", "#fef2f2", "#991b1b") if tone == "error" else ("#cbd5e1", "#f8fafc", "#475569")
+    )
+    summary = (
+        f"<div style='padding:20px;border:1px solid {border};border-radius:18px;"
+        f"background:{bg};color:{color};line-height:1.55;font-size:15px'>{message}</div>"
+    )
+    return (
+        summary,
+        _backtest_chart_placeholder("No chart — the backtest did not complete."),
+        build_lightweight_table_html(None, "Hypothetical Buys As Of Cutoff"),
+        build_lightweight_table_html(None, "Counterfactual Execution Steps"),
+    )
+
+
 def run_backtest(
+    file_obj: Any,
+    dataset_source: str,
+    risk_profile: int,
+    cutoff_date_text: str,
+    use_uninvested_cash: Any,
+    include_soft_signals: Any,
+    progress: gr.Progress = gr.Progress(track_tqdm=True),
+) -> tuple[str, str, str, str]:
+    """Run the backtest, converting failures into visible in-panel messages.
+
+    Raising inside a Gradio fn paints "Error" pills on the outputs but leaves
+    their previous values on screen, so a failed run can masquerade as a stale
+    (but plausible) result — e.g. an earlier cutoff still showing the prior
+    cutoff's dollar figure. Returning explicit error/clear outputs keeps the
+    panels truthful.
+    """
+    try:
+        return _run_backtest_impl(
+            file_obj,
+            dataset_source,
+            risk_profile,
+            cutoff_date_text,
+            use_uninvested_cash,
+            include_soft_signals,
+            progress=progress,
+        )
+    except gr.Error as exc:
+        message = str(exc)
+        # Data-availability failures are often a transient yfinance hiccup, not a
+        # permanent gap — nudge the user to retry rather than assume it's stuck.
+        if any(word in message.lower() for word in ("market", "history", "price", "symbol")):
+            message += " If this looks unexpected, it may be a temporary market-data hiccup — try running the backtest again."
+        return _backtest_error_outputs(message, tone="info")
+    except Exception as exc:  # unexpected — keep the app usable and explain why
+        traceback.print_exc()
+        return _backtest_error_outputs(
+            "The backtest hit an unexpected error and did not finish: "
+            f"<b>{html.escape(str(exc))}</b>. This is usually a temporary market-data "
+            "hiccup — please run it again.",
+            tone="error",
+        )
+
+
+def _run_backtest_impl(
     file_obj: Any,
     dataset_source: str,
     risk_profile: int,
