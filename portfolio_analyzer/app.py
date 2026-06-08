@@ -10514,6 +10514,18 @@ def build_app() -> gr.Blocks:
             show_progress="hidden",
         )
 
+        # Plotly charts in Gradio can paint at a stale container width when their
+        # tab/section was not the visible view at render time (e.g. the Backtesting
+        # chart), compressing lines into a near-vertical streak. A periodic resize
+        # event makes Plotly recompute to its true width; it's a no-op when the
+        # width is unchanged. Runs in the browser via the load event's _js hook.
+        demo.load(
+            None,
+            None,
+            None,
+            _js="() => { setInterval(() => window.dispatchEvent(new Event('resize')), 1500); }",
+        )
+
     return demo
 
 
