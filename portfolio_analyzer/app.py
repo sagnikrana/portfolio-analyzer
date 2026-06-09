@@ -2848,7 +2848,7 @@ def _run_backtest_impl(
             build_lightweight_table_html(None, "Counterfactual Execution Steps"),
         )
 
-    idle_cash = float(market_metrics.get("headline_metrics", {}).get("cash_balance_estimate", 0.0) or 0.0)
+    idle_cash = float(market_metrics.get("headline_metrics", {}).get("uninvested_cash_estimate", 0.0) or 0.0)
     idle_cash = max(idle_cash, 0.0)
     freed_cash = float(sum(float(item.value_to_sell or 0.0) for item in actions))
     deployable_cash = freed_cash + (idle_cash if use_uninvested_cash else 0.0)
@@ -9912,7 +9912,7 @@ def _no_file_selected_outputs() -> tuple[Any, ...]:
         "<strong>No CSV selected yet.</strong> Click the highlighted "
         "<em>Choose Robinhood CSV</em> button on the left to upload your export, "
         "then press <strong>Run Analysis</strong>. "
-        "Or switch <em>Dataset Source</em> to the bundled fake dataset to explore the demo."
+        "Or switch <em>Dataset Source</em> to one of the sample portfolios to explore the demo."
         "</div>"
     )
     outputs: list[Any] = [gr.update()] * 140
@@ -10488,7 +10488,7 @@ def build_app() -> gr.Blocks:
                     - Benchmark uses `S&P 500`
                     - Benchmark comparison excludes idle cash
                     - Timeframe stats are shown using your actual investing horizon
-                    - A bundled fake dataset is available for demo purposes
+                    - Sample portfolios (different investor profiles) are available for demo purposes
 
                     <div class="advice-warning" style="margin-top:12px;padding:12px 14px;border-radius:14px;background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;font-weight:800;">
                     Important: This dashboard is for education and portfolio review only. It is not investment advice, tax advice, or a recommendation to buy or sell securities.

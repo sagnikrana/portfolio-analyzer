@@ -330,8 +330,8 @@ def build_digest(result: AnalysisResult, *, persist_state: bool = True) -> Diges
     headline = (result.market_metrics or {}).get("headline_metrics", {})
     headline_slim = {
         k: headline.get(k) for k in (
-            "total_account_value_estimate", "cash_balance_estimate",
-            "relative_performance_vs_benchmark", "analysis_end",
+            "total_account_value_estimate", "uninvested_cash_estimate",
+            "excess_money_weighted_return_vs_benchmark", "analysis_end",
         ) if k in headline
     }
 

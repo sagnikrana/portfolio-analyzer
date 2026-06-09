@@ -136,9 +136,11 @@ def _refresh_fundamentals() -> bool:
     _log("Refreshing SEC company facts (monthly) ...")
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "data_pipeline.build_company_facts"],
+            # --with-candidates so the buy-candidate universe's fundamentals (which
+            # feed buy recommendations) refresh too, not just current holdings.
+            [sys.executable, "-m", "data_pipeline.build_company_facts", "--with-candidates"],
             cwd=str(REPO_ROOT),
-            timeout=60 * 60,  # generous; SEC pull over the holdings universe
+            timeout=2 * 60 * 60,  # generous; SEC pull over holdings + candidate universe
         )
         if result.returncode == 0:
             state = _load_state()
