@@ -5,18 +5,23 @@ Pure-Python (reportlab + plotly/kaleido) so it works locally and on Hugging Face
 without system libraries. Pixel-perfect screenshots of the live web UI aren't
 feasible server-side, so each section is reproduced from the same underlying data
 the dashboard renders, and the real benchmark chart is embedded as an image.
+
+Layout notes: pages are LANDSCAPE (the monthly/execution tables are wide), and
+every cell is wrapped in a Paragraph so long text wraps inside its column instead
+of overflowing into the next one. Column widths are auto-sized to content.
 """
 
 from __future__ import annotations
 
 import io
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.enums import TA_LEFT, TA_RIGHT
+from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import (
@@ -32,8 +37,16 @@ NAVY = colors.HexColor("#0f172a")
 SLATE = colors.HexColor("#475569")
 BLUE = colors.HexColor("#2563eb")
 LIGHT = colors.HexColor("#eef2f8")
-GREEN = colors.HexColor("#16a34a")
-RED = colors.HexColor("#dc2626")
+
+# Landscape letter with 0.5" margins -> ~10in usable width.
+PAGE_SIZE = landscape(letter)
+MARGIN = 0.5 * inch
+USABLE_WIDTH = PAGE_SIZE[0] - 2 * MARGIN
+
+_CELL = ParagraphStyle("cell", fontName="Helvetica", fontSize=7.5, leading=9.5, textColor=NAVY)
+_CELL_R = ParagraphStyle("cellR", parent=_CELL, alignment=TA_RIGHT)
+_HEAD = ParagraphStyle("head", fontName="Helvetica-Bold", fontSize=7.5, leading=9.5, textColor=colors.white)
+_HEAD_R = ParagraphStyle("headR", parent=_HEAD, alignment=TA_RIGHT)
 
 
 def _money(v: Any) -> str:
@@ -48,6 +61,11 @@ def _pct(v: Any) -> str:
         return f"{float(v):.2f}%"
     except (TypeError, ValueError):
         return "—"
+
+
+def _looks_numeric(text: str) -> bool:
+    t = str(text).strip().lstrip("$(-").rstrip("%)")
+    return bool(t) and t.replace(",", "").replace(".", "").isdigit()
 
 
 def _styles():
@@ -78,8 +96,8 @@ def _benchmark_png(timeseries: list[dict[str, Any]]) -> bytes | None:
                                      name="Trade-Matched S&P 500", line=dict(color="#f59e0b", width=2)))
         fig.update_layout(
             title="Portfolio vs S&P 500 Over Your Investing Horizon",
-            template="plotly_white", height=360, width=720,
-            margin=dict(l=50, r=20, t=50, b=40),
+            template="plotly_white", height=360, width=900,
+            margin=dict(l=55, r=20, t=50, b=40),
             legend=dict(orientation="h", y=1.08, x=0),
             yaxis_title="Value ($)", xaxis_title="Date",
         )
@@ -88,42 +106,56 @@ def _benchmark_png(timeseries: list[dict[str, Any]]) -> bytes | None:
         return None
 
 
-def _section_table(rows: list[list[str]], col_widths: list[float], *, header: bool = True) -> Table:
-    t = Table(rows, colWidths=col_widths, hAlign="LEFT")
+def _auto_widths(rows: list[list[str]], usable: float) -> list[float]:
+    """Size columns by max content length (capped so one long column can't starve
+    the rest — the Paragraph wrapping handles overflow)."""
+    ncol = max((len(r) for r in rows), default=1)
+    maxlen = [1.0] * ncol
+    for r in rows:
+        for i, c in enumerate(r):
+            maxlen[i] = max(maxlen[i], min(len(str(c)), 28))
+    total = sum(maxlen) or 1.0
+    return [usable * m / total for m in maxlen]
+
+
+def _table(rows: list[list[str]], usable: float = USABLE_WIDTH, *, header: bool = True) -> Table:
+    """Build a Table where every cell is a wrapped Paragraph (no overflow)."""
+    col_widths = _auto_widths(rows, usable)
+
+    def cellify(r_idx: int, c_idx: int, value: str):
+        text = "" if value is None else str(value)
+        numeric = _looks_numeric(text)
+        if header and r_idx == 0:
+            return Paragraph(text, _HEAD_R if numeric else _HEAD)
+        safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return Paragraph(safe, _CELL_R if numeric else _CELL)
+
+    data = [[cellify(ri, ci, c) for ci, c in enumerate(r)] for ri, r in enumerate(rows)]
+    t = Table(data, colWidths=col_widths, hAlign="LEFT", repeatRows=1 if header else 0)
     style = [
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("TEXTCOLOR", (0, 0), (-1, -1), NAVY),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("ROWBACKGROUNDS", (0, 1 if header else 0), (-1, -1), [colors.white, LIGHT]),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dbe2ea")),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
     ]
     if header:
-        style += [
-            ("BACKGROUND", (0, 0), (-1, 0), NAVY),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ]
+        style.append(("BACKGROUND", (0, 0), (-1, 0), NAVY))
     t.setStyle(TableStyle(style))
     return t
 
 
 def _overview_metrics(market_metrics: dict, portfolio_summary: dict) -> list[list[str]]:
     h = market_metrics.get("headline_metrics", {}) or {}
-
-    # Observed risk is a structured dict ({score, band, ...}); render it cleanly
-    # rather than dumping the raw mapping into a cell.
     rs = market_metrics.get("risk_score")
     if isinstance(rs, dict):
         score, band = rs.get("score"), rs.get("band")
         risk_str = f"{score}/100 · {band}" if score is not None else (band or "—")
     else:
         risk_str = str(rs) if rs is not None else "—"
-
-    excess = h.get("excess_money_weighted_return_vs_benchmark")  # fraction, e.g. 0.0853
-
+    excess = h.get("excess_money_weighted_return_vs_benchmark")
     pairs = [
         ("Analysis window", f"{h.get('analysis_start', '?')} → {h.get('analysis_end', '?')}"),
         ("Invested value", _money(h.get("current_portfolio_value"))),
@@ -134,7 +166,6 @@ def _overview_metrics(market_metrics: dict, portfolio_summary: dict) -> list[lis
         ("Observed risk", risk_str),
         ("Vs S&P 500 (excess)", _pct(excess * 100) if excess is not None else "—"),
     ]
-    # Two-column metric grid.
     rows = [["Metric", "Value", "Metric", "Value"]]
     for i in range(0, len(pairs), 2):
         left = pairs[i]
@@ -144,8 +175,6 @@ def _overview_metrics(market_metrics: dict, portfolio_summary: dict) -> list[lis
 
 
 def _risk_action_rows(diagnosis) -> tuple[list[str], list[list[str]]]:
-    # Actionable trims live in holding_action_recommendations, flagged is_actionable
-    # with real dollars to move — the same rule the dashboard's Risk Actions uses.
     items = getattr(diagnosis, "holding_action_recommendations", []) or []
     actions = [a for a in items
                if getattr(a, "is_actionable", False) and float(getattr(a, "value_to_sell", 0) or 0) > 0]
@@ -169,11 +198,25 @@ def _risk_action_rows(diagnosis) -> tuple[list[str], list[list[str]]]:
     return summary, rows
 
 
+# Short headers so the 9-column monthly table stays readable.
+_MONTHLY_HEADERS = {
+    "Beginning Balance": "Beginning",
+    "Deposits / Withdrawals": "Deposits/Wd",
+    "Investment Amount": "Invested",
+    "Market Gain / Loss": "Mkt Gain/Loss",
+    "Income Returns": "Income",
+    "Personal Investment Returns": "Personal Ret",
+    "Cumulative Returns": "Cumulative",
+    "Ending Balance": "Ending",
+}
+
+
 def _monthly_rows(frame: pd.DataFrame, max_rows: int = 18) -> list[list[str]]:
     if frame is None or frame.empty:
         return [["No monthly performance available"]]
     cols = list(frame.columns)
-    rows = [cols]
+    header = [_MONTHLY_HEADERS.get(c, c) for c in cols]
+    rows = [header]
     for _, r in frame.head(max_rows).iterrows():
         rows.append([str(r["Month"]) if "Month" in cols else ""] +
                     [_money(r[c]) for c in cols if c != "Month"])
@@ -195,8 +238,8 @@ def _buy_idea_rows(candidates: list[dict]) -> list[list[str]]:
     for c in candidates or []:
         rows.append([
             str(c.get("ticker", "")),
-            str(c.get("security_name", ""))[:34],
-            str(c.get("linked_gap_label", ""))[:40],
+            str(c.get("security_name", "")),
+            str(c.get("linked_gap_label", "")),
             str(c.get("fit_band", c.get("fit_score", ""))),
         ])
     if len(rows) == 1:
@@ -217,9 +260,8 @@ def build_portfolio_summary_pdf(
     out_path = Path(out_path)
     ss = _styles()
     doc = SimpleDocTemplate(
-        str(out_path), pagesize=letter,
-        leftMargin=0.6 * inch, rightMargin=0.6 * inch,
-        topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+        str(out_path), pagesize=PAGE_SIZE,
+        leftMargin=MARGIN, rightMargin=MARGIN, topMargin=MARGIN, bottomMargin=MARGIN,
         title="Portfolio Summary",
     )
     flow: list[Any] = []
@@ -229,12 +271,11 @@ def build_portfolio_summary_pdf(
 
     # 1. Overview
     flow.append(Paragraph("1. Overview", ss["PA_H2"]))
-    ov = _overview_metrics(market_metrics, portfolio_summary)
-    flow.append(_section_table(ov, [1.7 * inch, 1.6 * inch, 1.7 * inch, 1.6 * inch]))
+    flow.append(_table(_overview_metrics(market_metrics, portfolio_summary), USABLE_WIDTH))
     png = _benchmark_png(market_metrics.get("timeseries", []))
     if png:
         flow.append(Spacer(1, 8))
-        flow.append(RLImage(io.BytesIO(png), width=6.6 * inch, height=3.3 * inch))
+        flow.append(RLImage(io.BytesIO(png), width=9.0 * inch, height=3.6 * inch))
 
     # 2. Risk Action Summary
     flow.append(Paragraph("2. Risk Action Summary", ss["PA_H2"]))
@@ -242,24 +283,19 @@ def build_portfolio_summary_pdf(
     for line in ra_summary:
         flow.append(Paragraph(line, ss["PA_Body"]))
     flow.append(Spacer(1, 4))
-    flow.append(_section_table(ra_rows, [0.9 * inch, 1.8 * inch, 0.8 * inch, 1.4 * inch, 1.7 * inch]))
+    flow.append(_table(ra_rows, USABLE_WIDTH))
 
     # 3. Monthly Performance (whole portfolio)
     flow.append(Paragraph("3. Monthly Performance (whole portfolio)", ss["PA_H2"]))
-    m_rows = _monthly_rows(monthly_frame)
-    n_m = len(m_rows[0]) if m_rows else 1
-    flow.append(_section_table(m_rows, [6.6 * inch / n_m] * n_m))
+    flow.append(_table(_monthly_rows(monthly_frame), USABLE_WIDTH))
 
     # 4. Execution Summary
     flow.append(Paragraph("4. Execution Summary", ss["PA_H2"]))
-    e_rows = _execution_rows(execution_frame)
-    n_e = len(e_rows[0]) if e_rows else 1
-    flow.append(_section_table(e_rows, [6.6 * inch / n_e] * n_e))
+    flow.append(_table(_execution_rows(execution_frame), USABLE_WIDTH))
 
     # 5. Buy Ideas (current selection)
     flow.append(Paragraph("5. Buy Ideas (current selection)", ss["PA_H2"]))
-    flow.append(_section_table(_buy_idea_rows(buy_candidates),
-                               [0.9 * inch, 2.4 * inch, 2.4 * inch, 0.9 * inch]))
+    flow.append(_table(_buy_idea_rows(buy_candidates), USABLE_WIDTH))
 
     flow.append(Spacer(1, 14))
     flow.append(Paragraph(
