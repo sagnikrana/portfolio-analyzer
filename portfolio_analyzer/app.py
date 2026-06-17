@@ -186,7 +186,7 @@ MAX_STABLE_WEEKLY_RETURN = 0.75
 # table carries the broader candidate list.
 MAX_FEATURED_BUY_IDEA_COUNT = 30
 # Selectable counts for the "How many buy ideas should we show?" control.
-BUY_IDEA_LIMIT_CHOICES = [5, 10, 15, 20, 25, 30]
+BUY_IDEA_LIMIT_CHOICES = [5, 10, 15, 16, 20, 25, 30]
 BACKTEST_BUY_IDEA_COUNT = 15
 MAX_FEATURED_RISK_ACTION_COUNT = 5
 
@@ -10713,7 +10713,7 @@ def build_app() -> gr.Blocks:
                                 buy_idea_limit = gr.Dropdown(
                                     label="How many buy ideas should we show?",
                                     choices=[str(c) for c in BUY_IDEA_LIMIT_CHOICES],
-                                    value="10",
+                                    value="16",
                                     info="Controls how many ranked buy ideas are generated and shown as detailed cards/charts (up to 30). Higher values render more charts and can load slower.",
                                 )
                                 apply_buy_preferences_btn = gr.Button("Apply Buy Preferences", variant="primary")

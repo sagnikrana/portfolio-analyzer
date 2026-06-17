@@ -577,7 +577,7 @@ class PortfolioPreferences(BaseModel):
     single_stocks_preferred: Optional[bool] = None
     prefer_high_dividend_etfs: bool = False
     prefer_low_expense_for_dividend_etfs: bool = False
-    buy_idea_limit: int = 10
+    buy_idea_limit: int = 16
     include_existing_holdings: bool = False
     vehicle_preference_label: str = ""
     sector_preferences: list[str] = Field(default_factory=list)
@@ -3619,7 +3619,7 @@ def _build_portfolio_preferences(
         single_stocks_preferred=None,
         prefer_high_dividend_etfs=False,
         prefer_low_expense_for_dividend_etfs=False,
-        buy_idea_limit=10,
+        buy_idea_limit=16,
         include_existing_holdings=False,
         vehicle_preference_label=vehicle_preference_label,
         sector_preferences=[],
