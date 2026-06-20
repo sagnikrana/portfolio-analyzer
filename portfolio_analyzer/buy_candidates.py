@@ -546,6 +546,35 @@ def fetch_candidate_news_signals(market_data_symbol: str, limit: int = 2) -> lis
     return signals
 
 
+def warm_candidate_news(symbols: list[str], *, max_workers: int = 6, limit: int = 2) -> int:
+    """Pre-fetch news for many symbols concurrently to populate the per-symbol
+    cache. Buy-idea building otherwise calls fetch_candidate_news_signals one
+    symbol at a time (sequential network waits — the main slowdown). Warming the
+    cache in parallel turns those into cache hits. Idempotent: already-cached
+    symbols cost nothing; per-symbol errors are swallowed.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    seen: dict[str, None] = {}
+    for s in symbols:
+        s = str(s or "").strip()
+        if s:
+            seen.setdefault(s, None)
+    syms = list(seen)
+    if not syms:
+        return 0
+
+    def _one(sym: str) -> None:
+        try:
+            fetch_candidate_news_signals(sym, limit=limit)
+        except Exception:
+            pass
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        list(pool.map(_one, syms))
+    return len(syms)
+
+
 def _normalize_display_ticker(symbol: Any) -> str:
     """Convert raw upstream symbols into display tickers.
 

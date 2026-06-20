@@ -11541,10 +11541,49 @@ LAUNCH_CSS = """
 """
 
 
+def _start_buy_cache_warm() -> None:
+    """Background pre-warm so the FIRST user doesn't pay the cold-cache penalty.
+
+    Concurrently fetches news for the laggard buy-candidates (the symbols the buy
+    engine fetches news for), populating the per-symbol cache. Fully best-effort:
+    runs in a daemon thread and swallows all errors.
+    """
+    import threading
+
+    def _warm() -> None:
+        try:
+            from portfolio_analyzer.diagnosis import (
+                _load_buy_candidate_universe_inputs,
+                _safe_float,
+            )
+            from portfolio_analyzer.buy_candidates import warm_candidate_news
+
+            entries, enriched = _load_buy_candidate_universe_inputs()
+            if not entries or enriched is None or enriched.empty:
+                return
+            rows = {str(r.get("ticker")): r for r in enriched.to_dict(orient="records")}
+            symbols: list[str] = []
+            for entry in entries:
+                if not getattr(entry, "eligible_for_buy_engine", True):
+                    continue
+                row = rows.get(entry.ticker, {})
+                r1 = _safe_float(row.get("relative_1y_return_pct"))
+                r3 = _safe_float(row.get("relative_3y_return_pct"))
+                if (r1 is not None and r1 < 0) or (r3 is not None and r3 < 0):
+                    symbols.append(getattr(entry, "market_data_symbol", None) or entry.ticker)
+            if symbols:
+                warm_candidate_news(symbols, max_workers=4)
+        except Exception:
+            pass
+
+    threading.Thread(target=_warm, daemon=True, name="warm-buy-caches").start()
+
+
 def launch_app() -> None:
     init_db(TRACKER_DB_PATH)
     app = build_app()
     app.queue(status_update_rate=0.5)
+    _start_buy_cache_warm()  # warm caches in the background; never blocks startup
     # share defaults on (handy for ad-hoc local runs), but the deployed instance
     # sets PA_DISABLE_SHARE=1 — the public URL is provided by Tailscale Funnel /
     # Cloudflare Tunnel, so the app should NOT also open a Gradio share tunnel.

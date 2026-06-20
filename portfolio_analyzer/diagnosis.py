@@ -4673,6 +4673,30 @@ def _build_replacement_candidates(
         str(row.get("ticker")): row for row in enriched.to_dict(orient="records")
     }
 
+    # Speed-up: the filter below fetches news per candidate, but only for
+    # laggards (relative 1y/3y return < 0). Those sequential yfinance calls were
+    # the main slowdown, so warm them concurrently up front -> the loop hits the
+    # cache. Never let warming failures affect the build.
+    try:
+        laggard_symbols: list[str] = []
+        for entry in entries:
+            if not entry.eligible_for_buy_engine or entry.ticker in actionable_tickers:
+                continue
+            override = (as_of_returns or {}).get(entry.ticker) if as_of_returns else None
+            row = override if override is not None else enriched_records.get(entry.ticker, {})
+            r1 = _safe_float(row.get("relative_1y_return_pct"))
+            r3 = _safe_float(row.get("relative_3y_return_pct"))
+            if (r1 is not None and r1 < 0) or (r3 is not None and r3 < 0):
+                laggard_symbols.append(getattr(entry, "market_data_symbol", None) or entry.ticker)
+        if laggard_symbols:
+            try:
+                from .buy_candidates import warm_candidate_news
+            except ImportError:
+                from buy_candidates import warm_candidate_news  # type: ignore
+            warm_candidate_news(laggard_symbols)
+    except Exception:
+        pass
+
     scored_candidates: list[dict[str, Any]] = []
     for entry in entries:
         if not entry.eligible_for_buy_engine:
