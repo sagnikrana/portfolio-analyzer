@@ -929,57 +929,46 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
     if isinstance(cached_payload, dict):
         return cached_payload
 
-    if yahoo_tickers:
-        ticker_history_raw = _yf_download_retry(
-            tickers=yahoo_tickers,
-            start=history_start,
-            auto_adjust=False,
-            progress=False,
-            threads=True,
-        )
-        ticker_close = extract_close_frame(ticker_history_raw, yahoo_tickers)
-        ticker_close = ticker_close.rename(
-            columns={yahoo_symbol: original for original, yahoo_symbol in yahoo_map.items()}
-        )
+    # These four Yahoo downloads are independent; run them concurrently instead
+    # of back-to-back (the dominant cold-cache cost — ~24s sequential).
+    from concurrent.futures import ThreadPoolExecutor
 
-        long_horizon_history_raw = _yf_download_retry(
-            tickers=yahoo_tickers,
-            start=long_horizon_start,
-            auto_adjust=False,
-            progress=False,
-            threads=True,
-        )
-        long_horizon_ticker_close = extract_close_frame(long_horizon_history_raw, yahoo_tickers)
-        long_horizon_ticker_close = long_horizon_ticker_close.rename(
-            columns={yahoo_symbol: original for original, yahoo_symbol in yahoo_map.items()}
-        )
-    else:
-        ticker_close = pd.DataFrame()
-        long_horizon_ticker_close = pd.DataFrame()
+    def _dl(start: str, tk: Any, threads: bool) -> pd.DataFrame:
+        return _yf_download_retry(tickers=tk, start=start, auto_adjust=False, progress=False, threads=threads)
 
-    benchmark_raw = _yf_download_retry(
-        tickers=benchmark_symbol,
-        start=history_start,
-        auto_adjust=False,
-        progress=False,
-        threads=False,
-    )
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_ticker = pool.submit(_dl, history_start, yahoo_tickers, True) if yahoo_tickers else None
+        f_long = pool.submit(_dl, long_horizon_start, yahoo_tickers, True) if yahoo_tickers else None
+        f_bench = pool.submit(_dl, history_start, benchmark_symbol, False)
+        f_bench_long = pool.submit(_dl, long_horizon_start, benchmark_symbol, False)
+
+        if f_ticker is not None:
+            rename_map = {yahoo_symbol: original for original, yahoo_symbol in yahoo_map.items()}
+            ticker_close = extract_close_frame(f_ticker.result(), yahoo_tickers).rename(columns=rename_map)
+            long_horizon_ticker_close = extract_close_frame(f_long.result(), yahoo_tickers).rename(columns=rename_map)
+        else:
+            ticker_close = pd.DataFrame()
+            long_horizon_ticker_close = pd.DataFrame()
+        benchmark_raw = f_bench.result()
+        benchmark_long_raw = f_bench_long.result()
+
     benchmark_close = extract_close_frame(benchmark_raw, [benchmark_symbol]).iloc[:, 0].dropna()
     benchmark_close.name = benchmark_symbol
-
-    benchmark_long_raw = _yf_download_retry(
-        tickers=benchmark_symbol,
-        start=long_horizon_start,
-        auto_adjust=False,
-        progress=False,
-        threads=False,
-    )
     benchmark_long_close = extract_close_frame(benchmark_long_raw, [benchmark_symbol]).iloc[:, 0].dropna()
     benchmark_long_close.name = benchmark_symbol
 
     latest_prices = ticker_close.ffill().iloc[-1].dropna().to_dict() if not ticker_close.empty else {}
     latest_benchmark_price = float(benchmark_close.iloc[-1]) if not benchmark_close.empty else None
-    sector_by_ticker = {symbol: fetch_yahoo_sector_label(yahoo_symbol) for symbol, yahoo_symbol in yahoo_map.items()}
+    # Sector labels are per-ticker network lookups too; fetch them concurrently.
+    if yahoo_map:
+        with ThreadPoolExecutor(max_workers=min(8, len(yahoo_map))) as pool:
+            sector_pairs = list(pool.map(
+                lambda item: (item[0], fetch_yahoo_sector_label(item[1])),
+                list(yahoo_map.items()),
+            ))
+        sector_by_ticker = dict(sector_pairs)
+    else:
+        sector_by_ticker = {}
 
     result = {
         "ticker_close": ticker_close,

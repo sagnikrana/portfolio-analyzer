@@ -19,6 +19,10 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:32b")
 # Mid-size models are slower than 8B; give generous headroom (still under the
 # patched Gradio queue timeout of 600s used by the dashboard).
 OLLAMA_TIMEOUT_S = int(os.environ.get("OLLAMA_TIMEOUT_S", "600"))
+# Keep the model resident between calls so a fresh analysis doesn't pay the
+# (large, ~20GB for 32B) model-reload cost each time. "-1" = keep loaded
+# indefinitely; e.g. "30m" to free memory after 30 idle minutes.
+OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "30m")
 
 
 def ollama_available() -> bool:
@@ -52,6 +56,7 @@ def ollama_chat(
     body = json.dumps({
         "model": model or OLLAMA_MODEL,
         "stream": False,
+        "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {"temperature": temperature},
         "messages": messages,
     }).encode("utf-8")
