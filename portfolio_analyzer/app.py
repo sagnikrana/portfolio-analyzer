@@ -6001,6 +6001,7 @@ def plot_risk_action_candidate_chart(item: Any | None, market_data: dict[str, An
             f"{_tm_txt} (your cost-weighted return vs the S&P over the same buys)</span>"
         ),
         height=460,
+        autosize=True,
         margin={"l": 54, "r": 26, "t": 70, "b": 42},
         template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -10629,12 +10630,15 @@ def build_app() -> gr.Blocks:
                         featured_risk_action_plots: list[gr.Plot] = []
                         for idx in range(MAX_FEATURED_RISK_ACTION_COUNT):
                             with gr.Row(equal_height=True):
-                                with gr.Column(scale=1, min_width=320):
+                                with gr.Column(scale=1, min_width=300):
                                     risk_action_card = gr.HTML()
-                                with gr.Column(scale=2, min_width=520):
+                                # Give the chart the majority of the row width so it
+                                # reads at full size next to the (narrower) card.
+                                with gr.Column(scale=3, min_width=640):
                                     risk_action_plot = gr.Plot(
                                         value=plot_risk_action_candidate_chart(None, None),
                                         label=f"Risk Action #{idx + 1}: Stock vs S&P 500 Since Buy",
+                                        elem_classes=["pa-plot"],
                                     )
                             featured_risk_action_cards.append(risk_action_card)
                             featured_risk_action_plots.append(risk_action_plot)
@@ -11039,6 +11043,17 @@ def build_app() -> gr.Blocks:
             inputs=[tracker_username, upload_path_state],
             outputs=[tracker_status_md, tracker_history_md],
             show_progress="hidden",
+        )
+
+        # Charts populated while their tab is hidden (e.g. Risk Actions plots
+        # built during a run while Overview is showing) render at zero/default
+        # width and never relayout when revealed. Dispatch a few resizes on every
+        # tab switch so Plotly recomputes to the true container width.
+        main_tabs.select(
+            None,
+            None,
+            None,
+            _js="() => { [50, 250, 700].forEach(t => setTimeout(() => window.dispatchEvent(new Event('resize')), t)); }",
         )
 
         # Nudge Plotly to recompute to its true container width once shortly after
