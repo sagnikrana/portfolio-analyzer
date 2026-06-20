@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import subprocess
 import textwrap
@@ -11544,12 +11545,14 @@ def launch_app() -> None:
     init_db(TRACKER_DB_PATH)
     app = build_app()
     app.queue(status_update_rate=0.5)
-    # Default to local launch so the dashboard reliably binds to the configured port without
-    # depending on Gradio's share tunnel port allocation.
+    # share defaults on (handy for ad-hoc local runs), but the deployed instance
+    # sets PA_DISABLE_SHARE=1 — the public URL is provided by Tailscale Funnel /
+    # Cloudflare Tunnel, so the app should NOT also open a Gradio share tunnel.
+    share = os.environ.get("PA_DISABLE_SHARE", "0") != "1"
     app.launch(
         server_name="127.0.0.1",
         server_port=7863,
-        share=True,
+        share=share,
     )
 
 

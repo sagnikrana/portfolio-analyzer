@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.portfolioanalyzer.dashboard</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/sagnikrana/Documents/GitHub/portfolio-analyzer/automation/launchd/run_dashboard.sh</string>
+  </array>
+  <!-- Always-on: start at login and restart if it ever exits/crashes. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/pa_dashboard.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/pa_dashboard.err</string>
+</dict>
+</plist>
