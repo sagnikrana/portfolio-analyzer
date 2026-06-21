@@ -10393,6 +10393,59 @@ def load_diagnosis_driver_llm(diagnosis_state_val: dict | None):
         return gr.update()
 
 
+def _render_buy_idea_critique(reviews: list | None, *, no_state: bool = False) -> str:
+    box = "padding:14px 16px;border:1px solid rgba(148,163,184,.22);border-radius:14px;margin-top:10px;background:#fff;color:#475569;font-size:13px"
+    if no_state:
+        return f"<div style='{box}'>Run an analysis (and generate Buy Ideas) first, then click Critique.</div>"
+    if not reviews:
+        return f"<div style='{box}'>No buy ideas to critique yet.</div>"
+    palette = {
+        "solid": ("#166534", "#f0fdf4", "✓ Solid"),
+        "caution": ("#92400e", "#fffbeb", "▲ Caution"),
+        "weak": ("#991b1b", "#fef2f2", "✗ Weak"),
+        "unrated": ("#475569", "#f1f5f9", "– Unrated"),
+    }
+    counts: dict[str, int] = {}
+    rows = ""
+    for r in reviews:
+        v = r.get("verdict", "unrated")
+        counts[v] = counts.get(v, 0) + 1
+        color, bg, label = palette.get(v, palette["unrated"])
+        rows += (
+            "<tr style='border-top:1px solid #eef2f7'>"
+            f"<td style='padding:8px 10px;font-weight:800;color:#0f172a;white-space:nowrap'>{html.escape(str(r.get('ticker','')))}</td>"
+            f"<td style='padding:8px 10px;white-space:nowrap'><span style='padding:3px 9px;border-radius:999px;background:{bg};color:{color};font-weight:800;font-size:12px'>{label}</span></td>"
+            f"<td style='padding:8px 10px;color:#334155'>{html.escape(str(r.get('concern','')) or '—')}</td>"
+            "</tr>"
+        )
+    summary = " · ".join(f"{palette.get(k, palette['unrated'])[2]}: {n}" for k, n in counts.items())
+    return (
+        f"<div style='{box}'>"
+        "<div style='font-weight:800;color:#0f172a;font-size:14px'>AI critique of these buy ideas "
+        "<span style='font-weight:500;color:#64748b;font-size:12px'>(LLM-as-judge — advisory; does not change the engine's picks)</span></div>"
+        f"<div style='font-size:12px;color:#64748b;margin:6px 0 10px'>{summary}</div>"
+        "<table style='width:100%;border-collapse:collapse;font-size:13px'>"
+        "<tr style='text-align:left;color:#2563eb;font-size:11px;text-transform:uppercase;letter-spacing:.04em'>"
+        "<th style='padding:6px 10px'>Ticker</th><th style='padding:6px 10px'>Verdict</th><th style='padding:6px 10px'>Concern</th></tr>"
+        f"{rows}</table>"
+        "<div style='font-size:11px;color:#94a3b8;margin-top:10px'>Educational only, not investment advice.</div>"
+        "</div>"
+    )
+
+
+def critique_buy_ideas_handler(diagnosis_state_val: dict | None) -> str:
+    """Run the LLM-as-judge critique over the current buy ideas (Buy Ideas tab)."""
+    if not diagnosis_state_val:
+        return _render_buy_idea_critique(None, no_state=True)
+    try:
+        from .agent import critique_buy_ideas
+        diagnosis = PortfolioRiskDiagnosis(**diagnosis_state_val)
+        return _render_buy_idea_critique(critique_buy_ideas(diagnosis))
+    except Exception as exc:  # noqa: BLE001
+        box = "padding:14px 16px;border:1px solid #fecaca;border-radius:14px;margin-top:10px;background:#fef2f2;color:#991b1b;font-size:13px"
+        return f"<div style='{box}'>Couldn't run the critique ({type(exc).__name__}). Is Ollama running?</div>"
+
+
 def chat_with_analyst(message: str, chat_history: list | None, diagnosis_state_val: dict | None):
     """Tool-using AI analyst chat. Grounds every answer in the in-session
     diagnosis (current_holdings, gaps, risk actions, buy ideas) via tools — it
@@ -10810,6 +10863,16 @@ def build_app() -> gr.Blocks:
                             value="Quick Read",
                             label="Choose how much buy-idea explanation to show",
                             info="Quick Read keeps the card short. Evidence Detail adds the reason trail. Full Detail also shows recent external signals.",
+                        )
+                        critique_btn = gr.Button(
+                            "🔍 Critique these ideas (AI)", variant="secondary", elem_id="critique-btn"
+                        )
+                        critique_panel = gr.HTML()
+                        critique_btn.click(
+                            critique_buy_ideas_handler,
+                            inputs=[diagnosis_state],
+                            outputs=[critique_panel],
+                            show_progress="minimal",
                         )
                         buy_ideas_md = gr.HTML()
                         featured_buy_idea_cards: list[gr.HTML] = []

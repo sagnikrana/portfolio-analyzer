@@ -160,6 +160,43 @@ def tool_whatif_move(diagnosis, amount_usd: float, from_ticker: str, to_ticker: 
     }
 
 
+def _buy_candidates_module():
+    try:
+        from . import buy_candidates as bc
+    except ImportError:  # pragma: no cover
+        import buy_candidates as bc  # type: ignore
+    return bc
+
+
+def tool_recent_news(diagnosis, ticker: str) -> dict[str, Any]:
+    """Recent news headlines (with source) for a ticker — for grounded research
+    with citations. Live via yfinance, SEQUENTIAL (never concurrent)."""
+    t = str(ticker or "").strip().upper()
+    if not t:
+        return {"error": "ticker required"}
+    try:
+        headlines = _buy_candidates_module().fetch_candidate_news_signals(t, limit=4)
+    except Exception:
+        headlines = []
+    return {"ticker": t, "headlines": headlines or [], "note": "Cite these headline sources; do not invent news."}
+
+
+def tool_fundamentals(diagnosis, ticker: str) -> dict[str, Any]:
+    """A few fundamental data points for a ticker (valuation/profitability),
+    sourced from the cached market metadata."""
+    t = str(ticker or "").strip().upper()
+    if not t:
+        return {"error": "ticker required"}
+    try:
+        meta = _buy_candidates_module().fetch_candidate_market_metadata(t) or {}
+    except Exception:
+        meta = {}
+    keep = ("sector", "industry", "trailing_pe", "forward_pe", "enterprise_to_ebitda",
+            "ebitda_margin", "market_cap", "beta", "expense_ratio", "dividend_yield")
+    out = {k: meta.get(k) for k in keep if meta.get(k) is not None}
+    return {"ticker": t, "fundamentals": out or "no fundamental data available"}
+
+
 TOOL_FUNCS: dict[str, Callable] = {
     "get_portfolio_overview": tool_portfolio_overview,
     "list_holdings": tool_list_holdings,
@@ -168,6 +205,8 @@ TOOL_FUNCS: dict[str, Callable] = {
     "get_buy_ideas": tool_buy_ideas,
     "get_portfolio_gaps": tool_portfolio_gaps,
     "simulate_whatif_move": tool_whatif_move,
+    "get_recent_news": tool_recent_news,
+    "get_fundamentals": tool_fundamentals,
 }
 
 TOOL_SCHEMAS = [
@@ -196,6 +235,12 @@ TOOL_SCHEMAS = [
             "from_ticker": {"type": "string", "description": "Source holding ticker, or 'CASH'"},
             "to_ticker": {"type": "string", "description": "Destination ticker, or 'CASH'"},
         }, "required": ["amount_usd", "from_ticker", "to_ticker"]}}},
+    {"type": "function", "function": {"name": "get_recent_news",
+        "description": "Recent news headlines (with their source) for a ticker — use for research and CITE the sources.",
+        "parameters": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}}},
+    {"type": "function", "function": {"name": "get_fundamentals",
+        "description": "Valuation/profitability fundamentals for a ticker (P/E, EV/EBITDA, margins, etc.).",
+        "parameters": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}}},
 ]
 
 SYSTEM_PROMPT = (
@@ -203,21 +248,88 @@ SYSTEM_PROMPT = (
     "Answer ONLY using the tools provided — never invent numbers, prices, holdings, or recommendations. "
     "The buy/sell/trim decisions come from a deterministic rule engine; you explain and simulate them, you do not change them. "
     "Call tools to get real figures, then answer in clear plain English with the actual numbers. "
-    "For 'what if' questions, use simulate_whatif_move. If a question can't be answered from the tools, say so. "
+    "For 'what if' questions, use simulate_whatif_move. "
+    "To research a stock, call get_recent_news and get_fundamentals, then summarize the story and "
+    "CITE the news source names you used (do not invent news or fundamentals). "
+    "If a question can't be answered from the tools, say so. "
     "Keep answers concise. End with: 'Educational only, not investment advice.'"
 )
 
 
-def _ollama_chat_raw(messages: list[dict], tools: list[dict] | None = None) -> dict:
+def _ollama_chat_raw(messages: list[dict], tools: list[dict] | None = None, fmt: str | None = None) -> dict:
     payload = {"model": OLLAMA_MODEL, "stream": False, "keep_alive": OLLAMA_KEEP_ALIVE,
                "options": {"temperature": 0.2}, "messages": messages}
     if tools:
         payload["tools"] = tools
+    if fmt:
+        payload["format"] = fmt
     req = urllib.request.Request(
         f"{OLLAMA_HOST}/api/chat", data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"}, method="POST")
     with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT_S) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _extract_json(text: str) -> Any:
+    """Parse a JSON object from the model's text (tolerant of stray prose)."""
+    import re
+    text = (text or "").strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        m = re.search(r"\{.*\}", text, re.S)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                return {}
+    return {}
+
+
+def critique_buy_ideas(diagnosis) -> list[dict[str, Any]]:
+    """Reflection / LLM-as-judge: audit the engine's buy ideas against the
+    portfolio's gaps and concentration, flagging weak ones. Advisory only — it
+    does NOT change the deterministic recommendations. Grounded in real numbers.
+    """
+    ideas = tool_buy_ideas(diagnosis).get("buy_ideas", [])
+    if not ideas:
+        return []
+    payload = {
+        "buy_ideas": ideas,
+        "concentration": tool_concentration(diagnosis),
+        "gaps": tool_portfolio_gaps(diagnosis).get("gaps", []),
+    }
+    system = (
+        "You are a skeptical investment-committee reviewer auditing an engine's buy ideas. "
+        "Use ONLY the supplied JSON (buy_ideas, the portfolio's concentration, and its gaps). "
+        "For each idea give a verdict: 'solid' (clearly fills a real gap without worsening "
+        "concentration), 'caution' (helps but with a caveat), or 'weak' (doesn't really fill its "
+        "claimed gap, or piles into an already-heavy sector/position). Cite the actual numbers in a "
+        "one-sentence concern. Do not invent data. "
+        'Return JSON only: {"reviews":[{"ticker":"..","verdict":"solid|caution|weak","concern":".."}]}'
+    )
+    try:
+        data = _ollama_chat_raw(
+            [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload, default=str)}],
+            fmt="json",
+        )
+        parsed = _extract_json(data.get("message", {}).get("content", ""))
+        reviews = parsed.get("reviews", []) if isinstance(parsed, dict) else []
+    except Exception:
+        reviews = []
+    by_ticker = {str(r.get("ticker", "")).upper(): r for r in reviews if isinstance(r, dict)}
+    out: list[dict[str, Any]] = []
+    for idea in ideas:
+        r = by_ticker.get(str(idea.get("ticker", "")).upper(), {})
+        verdict = str(r.get("verdict", "")).strip().lower()
+        out.append({
+            "ticker": idea.get("ticker", ""),
+            "name": idea.get("name", ""),
+            "gap": idea.get("fills_gap", ""),
+            "verdict": verdict if verdict in ("solid", "caution", "weak") else "unrated",
+            "concern": str(r.get("concern", "")).strip(),
+        })
+    return out
 
 
 def run_portfolio_agent(message: str, history: list[dict], diagnosis) -> str:
