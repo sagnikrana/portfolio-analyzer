@@ -929,46 +929,40 @@ def fetch_market_data(traded_symbols: list[str], benchmark_symbol: str, start_da
     if isinstance(cached_payload, dict):
         return cached_payload
 
-    # These four Yahoo downloads are independent; run them concurrently instead
-    # of back-to-back (the dominant cold-cache cost — ~24s sequential).
-    from concurrent.futures import ThreadPoolExecutor
+    # NOTE: these Yahoo downloads run sequentially on purpose. yfinance is NOT
+    # safe to call concurrently in one process — parallel ticker + benchmark
+    # downloads cross-contaminated (e.g. a stock's series came back equal to the
+    # S&P 500). Correctness over speed here.
+    if yahoo_tickers:
+        ticker_history_raw = _yf_download_retry(
+            tickers=yahoo_tickers, start=history_start, auto_adjust=False, progress=False, threads=True,
+        )
+        rename_map = {yahoo_symbol: original for original, yahoo_symbol in yahoo_map.items()}
+        ticker_close = extract_close_frame(ticker_history_raw, yahoo_tickers).rename(columns=rename_map)
 
-    def _dl(start: str, tk: Any, threads: bool) -> pd.DataFrame:
-        return _yf_download_retry(tickers=tk, start=start, auto_adjust=False, progress=False, threads=threads)
+        long_horizon_history_raw = _yf_download_retry(
+            tickers=yahoo_tickers, start=long_horizon_start, auto_adjust=False, progress=False, threads=True,
+        )
+        long_horizon_ticker_close = extract_close_frame(long_horizon_history_raw, yahoo_tickers).rename(columns=rename_map)
+    else:
+        ticker_close = pd.DataFrame()
+        long_horizon_ticker_close = pd.DataFrame()
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        f_ticker = pool.submit(_dl, history_start, yahoo_tickers, True) if yahoo_tickers else None
-        f_long = pool.submit(_dl, long_horizon_start, yahoo_tickers, True) if yahoo_tickers else None
-        f_bench = pool.submit(_dl, history_start, benchmark_symbol, False)
-        f_bench_long = pool.submit(_dl, long_horizon_start, benchmark_symbol, False)
-
-        if f_ticker is not None:
-            rename_map = {yahoo_symbol: original for original, yahoo_symbol in yahoo_map.items()}
-            ticker_close = extract_close_frame(f_ticker.result(), yahoo_tickers).rename(columns=rename_map)
-            long_horizon_ticker_close = extract_close_frame(f_long.result(), yahoo_tickers).rename(columns=rename_map)
-        else:
-            ticker_close = pd.DataFrame()
-            long_horizon_ticker_close = pd.DataFrame()
-        benchmark_raw = f_bench.result()
-        benchmark_long_raw = f_bench_long.result()
-
+    benchmark_raw = _yf_download_retry(
+        tickers=benchmark_symbol, start=history_start, auto_adjust=False, progress=False, threads=False,
+    )
     benchmark_close = extract_close_frame(benchmark_raw, [benchmark_symbol]).iloc[:, 0].dropna()
     benchmark_close.name = benchmark_symbol
+
+    benchmark_long_raw = _yf_download_retry(
+        tickers=benchmark_symbol, start=long_horizon_start, auto_adjust=False, progress=False, threads=False,
+    )
     benchmark_long_close = extract_close_frame(benchmark_long_raw, [benchmark_symbol]).iloc[:, 0].dropna()
     benchmark_long_close.name = benchmark_symbol
 
     latest_prices = ticker_close.ffill().iloc[-1].dropna().to_dict() if not ticker_close.empty else {}
     latest_benchmark_price = float(benchmark_close.iloc[-1]) if not benchmark_close.empty else None
-    # Sector labels are per-ticker network lookups too; fetch them concurrently.
-    if yahoo_map:
-        with ThreadPoolExecutor(max_workers=min(8, len(yahoo_map))) as pool:
-            sector_pairs = list(pool.map(
-                lambda item: (item[0], fetch_yahoo_sector_label(item[1])),
-                list(yahoo_map.items()),
-            ))
-        sector_by_ticker = dict(sector_pairs)
-    else:
-        sector_by_ticker = {}
+    sector_by_ticker = {symbol: fetch_yahoo_sector_label(yahoo_symbol) for symbol, yahoo_symbol in yahoo_map.items()}
 
     result = {
         "ticker_close": ticker_close,
@@ -11616,7 +11610,7 @@ def _start_buy_cache_warm() -> None:
                 if (r1 is not None and r1 < 0) or (r3 is not None and r3 < 0):
                     symbols.append(getattr(entry, "market_data_symbol", None) or entry.ticker)
             if symbols:
-                warm_candidate_news(symbols, max_workers=4)
+                warm_candidate_news(symbols)
         except Exception:
             pass
 
