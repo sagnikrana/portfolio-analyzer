@@ -10393,6 +10393,36 @@ def load_diagnosis_driver_llm(diagnosis_state_val: dict | None):
         return gr.update()
 
 
+def chat_with_analyst(message: str, chat_history: list | None, diagnosis_state_val: dict | None):
+    """Tool-using AI analyst chat. Grounds every answer in the in-session
+    diagnosis (current_holdings, gaps, risk actions, buy ideas) via tools — it
+    can't invent numbers, and it never changes the deterministic recommendations.
+    """
+    chat_history = list(chat_history or [])
+    message = (message or "").strip()
+    if not message:
+        return "", chat_history
+    if not diagnosis_state_val:
+        chat_history.append([message, "Please run an analysis first (Overview → Run Analysis), then ask me about your portfolio."])
+        return "", chat_history
+    # Convert the chatbot pairs into role/content turns for the agent.
+    turns: list[dict] = []
+    for pair in chat_history:
+        user_msg, bot_msg = (pair + [None, None])[:2]
+        if user_msg:
+            turns.append({"role": "user", "content": str(user_msg)})
+        if bot_msg:
+            turns.append({"role": "assistant", "content": str(bot_msg)})
+    try:
+        from .agent import run_portfolio_agent
+        diagnosis = PortfolioRiskDiagnosis(**diagnosis_state_val)
+        answer = run_portfolio_agent(message, turns, diagnosis)
+    except Exception as exc:  # noqa: BLE001
+        answer = f"Sorry — I hit an error answering that ({type(exc).__name__})."
+    chat_history.append([message, answer])
+    return "", chat_history
+
+
 def build_app() -> gr.Blocks:
     # Keep app boot light. The buy engine loads its candidate universe when
     # analysis/preferences run, not while the browser is mounting every tab.
@@ -10810,6 +10840,45 @@ def build_app() -> gr.Blocks:
                     # number we can't stand behind, the tab is disabled. The backend
                     # run_backtest()/_run_backtest_impl() helpers are kept for the
                     # offline validation harness (automation/validation.py).
+                    with gr.Tab("AI Analyst", id="ai-analyst"):
+                        gr.HTML(
+                            "<div style='padding:14px 16px;border:1px solid rgba(148,163,184,.2);border-radius:14px;"
+                            "background:#f8fbff;color:#334155;line-height:1.55;font-size:13px'>"
+                            "<div style='font-weight:800;color:#0f172a;font-size:15px;margin-bottom:4px'>Ask the AI Analyst</div>"
+                            "Ask questions about your portfolio, or run a <b>what-if</b> — e.g. "
+                            "<em>“What's my biggest concentration risk?”</em> or "
+                            "<em>“What if I move $10k from NVDA to VOO?”</em>. Answers are <b>grounded in your "
+                            "analysis</b> (the AI can only read your computed numbers, not invent them) and run "
+                            "<b>locally</b> via Ollama — no data leaves your machine. It explains the engine's "
+                            "decisions; it doesn't change them. Run an analysis first."
+                            "</div>"
+                        )
+                        analyst_chatbot = gr.Chatbot(label="Portfolio AI Analyst", height=440, elem_id="analyst-chatbot")
+                        with gr.Row():
+                            analyst_input = gr.Textbox(
+                                show_label=False, container=False, scale=8,
+                                placeholder="Ask about your portfolio, or a what-if (e.g. move $5k from MSFT to SCHD)…",
+                                elem_id="analyst-input",
+                            )
+                            analyst_send = gr.Button("Ask", variant="primary", scale=1, min_width=90)
+                        gr.Examples(
+                            examples=[
+                                "What's my biggest concentration risk?",
+                                "How much of my portfolio is in technology?",
+                                "Why is the engine recommending any trims?",
+                                "What if I move $10,000 from my largest position into cash?",
+                                "Which buy idea best fills my biggest gap, and why?",
+                            ],
+                            inputs=analyst_input,
+                            label="Try one",
+                        )
+                        for _trigger in (analyst_send.click, analyst_input.submit):
+                            _trigger(
+                                chat_with_analyst,
+                                inputs=[analyst_input, analyst_chatbot, diagnosis_state],
+                                outputs=[analyst_input, analyst_chatbot],
+                                show_progress="minimal",
+                            )
                     with gr.Tab("Next Steps", id="next-steps"):
                         next_steps_md = gr.HTML()
                         next_steps_df = gr.HTML()
