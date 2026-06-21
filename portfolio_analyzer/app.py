@@ -3934,17 +3934,17 @@ def build_risk_guide_sections_html(
         anchor = anchor_builder(metric_key)
         return (
             f"<section id='{anchor}' style='padding:18px;border:1px solid rgba(148,163,184,.18);"
-            "border-radius:18px;background:rgba(15,23,42,.34);scroll-margin-top:16px'>"
-            f"<div style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em'>{info['group']}</div>"
-            f"<div style='font-size:22px;font-weight:700;color:#f8fafc;margin-top:6px'>{info['label']}</div>"
-            f"<div style='font-size:13px;color:#93c5fd;margin-top:6px'>Current score: {score:.1f}/100 · {score_readout(score)}</div>"
-            f"<div style='font-size:15px;color:#e2e8f0;margin-top:14px'><strong>What this metric is asking:</strong> {info['question']}</div>"
-            f"<div style='font-size:14px;color:#cbd5e1;margin-top:12px'><strong>Plain-English meaning:</strong> {info['meaning']}</div>"
-            f"<div style='font-size:14px;color:#cbd5e1;margin-top:10px'><strong>Why it matters:</strong> {info['why_it_matters']}</div>"
-            f"<div style='font-size:14px;color:#cbd5e1;margin-top:10px'><strong>How to read the score:</strong> {info['score_reading']}</div>"
-            f"<div style='font-size:14px;color:#cbd5e1;margin-top:10px'><strong>Low score usually means:</strong> {info['low_means']}</div>"
-            f"<div style='font-size:14px;color:#cbd5e1;margin-top:10px'><strong>High score usually means:</strong> {info['high_means']}</div>"
-            f"<div style='font-size:14px;color:#e2e8f0;margin-top:12px'><strong>Bigger picture:</strong> {info['bigger_picture']}</div>"
+            "border-radius:18px;background:#eef2f8;scroll-margin-top:16px'>"
+            f"<div style='font-size:12px;color:#2563eb;text-transform:uppercase;letter-spacing:.08em'>{info['group']}</div>"
+            f"<div style='font-size:22px;font-weight:700;color:#0f172a;margin-top:6px'>{info['label']}</div>"
+            f"<div style='font-size:13px;color:#2563eb;margin-top:6px'>Current score: {score:.1f}/100 · {score_readout(score)}</div>"
+            f"<div style='font-size:15px;color:#334155;margin-top:14px'><strong>What this metric is asking:</strong> {info['question']}</div>"
+            f"<div style='font-size:14px;color:#475569;margin-top:12px'><strong>Plain-English meaning:</strong> {info['meaning']}</div>"
+            f"<div style='font-size:14px;color:#475569;margin-top:10px'><strong>Why it matters:</strong> {info['why_it_matters']}</div>"
+            f"<div style='font-size:14px;color:#475569;margin-top:10px'><strong>How to read the score:</strong> {info['score_reading']}</div>"
+            f"<div style='font-size:14px;color:#475569;margin-top:10px'><strong>Low score usually means:</strong> {info['low_means']}</div>"
+            f"<div style='font-size:14px;color:#475569;margin-top:10px'><strong>High score usually means:</strong> {info['high_means']}</div>"
+            f"<div style='font-size:14px;color:#334155;margin-top:12px'><strong>Bigger picture:</strong> {info['bigger_picture']}</div>"
             "</section>"
         )
 
@@ -3955,16 +3955,16 @@ def build_risk_guide_sections_html(
             toc_links = "".join(
                 f"<a href='#{anchor_builder(key)}' "
                 "style='display:inline-block;margin:0 8px 8px 0;padding:6px 10px;border-radius:999px;"
-                "background:rgba(59,130,246,.12);color:#bfdbfe;text-decoration:none;font-size:12px'>"
+                "background:rgba(59,130,246,.12);color:#2563eb;text-decoration:none;font-size:12px'>"
                 f"{explanations[key]['label']}</a>"
                 for key in metric_keys
             )
         section_cards = "".join(section_card(key) for key in metric_keys)
         group_sections.append(
             "<div style='display:grid;gap:14px'>"
-            f"<div style='padding:16px;border:1px solid rgba(148,163,184,.16);border-radius:16px;background:rgba(15,23,42,.28)'>"
-            f"<div style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em'>{group_name} Risk</div>"
-            f"<div style='font-size:14px;color:#cbd5e1;margin-top:8px'>{subtitle}</div>"
+            f"<div style='padding:16px;border:1px solid rgba(148,163,184,.16);border-radius:16px;background:#eef2f8'>"
+            f"<div style='font-size:12px;color:#2563eb;text-transform:uppercase;letter-spacing:.08em'>{group_name} Risk</div>"
+            f"<div style='font-size:14px;color:#475569;margin-top:8px'>{subtitle}</div>"
             f"<div style='margin-top:12px'>{toc_links}</div>"
             "</div>"
             f"{section_cards}"
@@ -3986,22 +3986,22 @@ def build_risk_guide_html(risk: dict[str, Any], focused_metric: str | None = Non
         score = float(risk["component_scores"].get(focused_metric, 0.0))
         focused_section = (
             "<div style='padding:18px;border:1px solid rgba(96,165,250,.35);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.96))'>"
-            "<div style='font-size:12px;color:#60a5fa;text-transform:uppercase;letter-spacing:.08em'>Selected Metric</div>"
-            f"<div style='font-size:24px;font-weight:700;color:#f8fafc;margin-top:8px'>{info['label']}</div>"
-            f"<div style='font-size:13px;color:#93c5fd;margin-top:6px'>Current score: {score:.1f}/100 · {score_readout(score)}</div>"
-            f"<div style='font-size:14px;color:#cbd5e1;margin-top:10px'>{info['meaning']}</div>"
-            f"<div style='font-size:14px;color:#e2e8f0;margin-top:10px'><strong>Bigger picture:</strong> {info['bigger_picture']}</div>"
+            "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+            "<div style='font-size:12px;color:#2563eb;text-transform:uppercase;letter-spacing:.08em'>Selected Metric</div>"
+            f"<div style='font-size:24px;font-weight:700;color:#0f172a;margin-top:8px'>{info['label']}</div>"
+            f"<div style='font-size:13px;color:#2563eb;margin-top:6px'>Current score: {score:.1f}/100 · {score_readout(score)}</div>"
+            f"<div style='font-size:14px;color:#475569;margin-top:10px'>{info['meaning']}</div>"
+            f"<div style='font-size:14px;color:#334155;margin-top:10px'><strong>Bigger picture:</strong> {info['bigger_picture']}</div>"
             "</div>"
         )
 
     return (
         "<div id='risk-guide-top' style='display:grid;gap:16px'>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.96))'>"
-        "<div style='font-size:28px;font-weight:700;color:#f8fafc'>Risk Guide</div>"
-        "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>This guide explains what each risk metric is trying to measure in plain English. The goal is not just to show scores, but to help the user understand what those scores are saying about the portfolio.</div>"
-        "<div style='font-size:14px;color:#cbd5e1;margin-top:12px'><strong>How the overall score works:</strong> concentration risk is 40% of the final score, market risk is 40%, and behavior risk is 20%.</div>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:28px;font-weight:700;color:#0f172a'>Risk Guide</div>"
+        "<div style='font-size:15px;color:#475569;margin-top:10px'>This guide explains what each risk metric is trying to measure in plain English. The goal is not just to show scores, but to help the user understand what those scores are saying about the portfolio.</div>"
+        "<div style='font-size:14px;color:#475569;margin-top:12px'><strong>How the overall score works:</strong> concentration risk is 40% of the final score, market risk is 40%, and behavior risk is 20%.</div>"
         "</div>"
     ) + focused_section + guide_sections + "</div>"
 
@@ -4012,13 +4012,13 @@ def build_risk_explainer_html(risk: dict[str, Any]) -> str:
     def render_dimension_card(title: str, score: float, subtitle: str, emphasis: str) -> str:
         return (
             "<div style='padding:18px 18px;border:1px solid rgba(148,163,184,.18);"
-            "border-radius:18px;background:linear-gradient(180deg, rgba(30,41,59,.98), rgba(15,23,42,.92));"
+            "border-radius:18px;background:linear-gradient(180deg,#ffffff,#f8fafc);"
             "box-shadow:0 8px 24px rgba(2,6,23,.18)'>"
-            f"<div style='font-size:12px;color:#93c5fd;text-transform:uppercase;letter-spacing:.08em'>{title}</div>"
-            f"<div style='font-size:34px;font-weight:800;color:#f8fafc;margin-top:10px'>{score:.1f}/100</div>"
-            f"<div style='font-size:13px;color:#93c5fd;margin-top:6px'>{score_readout(score)}</div>"
-            f"<div style='font-size:14px;color:#e2e8f0;margin-top:12px'>{emphasis}</div>"
-            f"<div style='font-size:12px;color:#94a3b8;margin-top:8px'>{subtitle}</div>"
+            f"<div style='font-size:12px;color:#2563eb;text-transform:uppercase;letter-spacing:.08em'>{title}</div>"
+            f"<div style='font-size:34px;font-weight:800;color:#0f172a;margin-top:10px'>{score:.1f}/100</div>"
+            f"<div style='font-size:13px;color:#2563eb;margin-top:6px'>{score_readout(score)}</div>"
+            f"<div style='font-size:14px;color:#334155;margin-top:12px'>{emphasis}</div>"
+            f"<div style='font-size:12px;color:#64748b;margin-top:8px'>{subtitle}</div>"
             "</div>"
         )
 
@@ -4031,16 +4031,16 @@ def build_risk_explainer_html(risk: dict[str, Any]) -> str:
     return (
         "<div style='display:grid;gap:16px'>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:24px;font-weight:800;color:#f8fafc'>Risk Snapshot</div>"
-        f"<div style='font-size:14px;color:#cbd5e1;margin-top:8px'>{risk_summary}</div>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:24px;font-weight:800;color:#0f172a'>Risk Snapshot</div>"
+        f"<div style='font-size:14px;color:#475569;margin-top:8px'>{risk_summary}</div>"
         "</div>"
         "<div style='display:grid;grid-template-columns:repeat(3,minmax(220px,1fr));gap:14px'>"
         f"{render_dimension_card('Concentration Risk', dimension_scores['concentration_risk'], 'Weight in the final risk score: 40%', 'Can one holding or a small group dominate the account?')}"
         f"{render_dimension_card('Behavior Risk', dimension_scores['behavioral_risk'], 'Weight in the final risk score: 20%', 'Does the trading pattern add avoidable risk?')}"
         f"{render_dimension_card('Market Risk', dimension_scores['market_risk'], market_subtitle, 'Has the portfolio been rougher or more sensitive than the S&P 500?')}"
         "</div>"
-        "<div style='font-size:12px;color:#60a5fa'>The cards below break those three risk families into the specific signals behind each score.</div>"
+        "<div style='font-size:12px;color:#2563eb'>The cards below break those three risk families into the specific signals behind each score.</div>"
         "</div>"
     )
 
@@ -4138,11 +4138,11 @@ def build_metric_card_values(risk: dict[str, Any]) -> list[str]:
         score = float(component_scores.get(metric_key, 0.0))
         values.append(
             "<div class='risk-metric-card' style='padding:12px 14px;border:1px solid rgba(148,163,184,.16);"
-            "border-radius:12px;background:rgba(15,23,42,.38);min-height:132px'>"
-            f"<div style='font-size:13px;color:#e2e8f0;font-weight:600'>{info['label']}</div>"
-            f"<div style='font-size:12px;color:#94a3b8;margin-top:4px'>{info['bigger_picture']}</div>"
-            f"<div style='font-size:12px;color:#93c5fd;margin-top:8px'>Score: {score:.1f}/100 · {score_readout(score)}</div>"
-            "<div style='font-size:11px;color:#7dd3fc;margin-top:10px'>See matching explanation in Risk Guide</div>"
+            "border-radius:12px;background:#eef2f8;min-height:132px'>"
+            f"<div style='font-size:13px;color:#334155;font-weight:600'>{info['label']}</div>"
+            f"<div style='font-size:12px;color:#64748b;margin-top:4px'>{info['bigger_picture']}</div>"
+            f"<div style='font-size:12px;color:#2563eb;margin-top:8px'>Score: {score:.1f}/100 · {score_readout(score)}</div>"
+            "<div style='font-size:11px;color:#2563eb;margin-top:10px'>See matching explanation in Risk Guide</div>"
             "</div>"
         )
     return values
@@ -4174,19 +4174,19 @@ def build_diagnosis_summary_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     top_concern_text = ", ".join(concern.label for concern in diagnosis.top_concerns[:3]) or "No major concerns yet"
     return (
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.96))'>"
-        "<div style='font-size:22px;font-weight:700;color:#f8fafc'>Diagnosis Snapshot and Alignment</div>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:22px;font-weight:700;color:#0f172a'>Diagnosis Snapshot and Alignment</div>"
         f"{section_provenance_note('Rule-based', 'diagnosis object + portfolio metrics', 'rule')}"
-        "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>"
+        "<div style='font-size:15px;color:#475569;margin-top:10px'>"
         f"{diagnosis.diagnostic_summary}"
         "</div>"
-        "<div style='font-size:14px;color:#e2e8f0;margin-top:14px'>"
+        "<div style='font-size:14px;color:#334155;margin-top:14px'>"
         f"After looking at the holding drivers and sector pressure above, the portfolio currently reads as "
         f"<strong>{diagnosis.alignment.lower()}</strong>. Observed risk is <strong>{diagnosis.observed_risk_score:.1f}/100</strong> "
         f"({diagnosis.observed_risk_band}) versus a stated risk of <strong>{diagnosis.stated_risk_score:.1f}/100</strong> "
         f"({diagnosis.stated_risk_band})."
         "</div>"
-        "<div style='font-size:13px;color:#93c5fd;margin-top:12px'>"
+        "<div style='font-size:13px;color:#2563eb;margin-top:12px'>"
         f"Most important concerns right now: {top_concern_text}."
         "</div>"
         "</div>"
@@ -5369,7 +5369,7 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis, *, use_llm: b
             f"<div style='font-size:22px;font-weight:900;color:#0f172a'>{contribution.ticker}"
             + (f"<span style='font-size:15px;font-weight:500;color:#475569;margin-left:10px'>({driver.sector})</span>" if driver.sector else "")
             + "</div>"
-            "<div style='display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:10px;font-size:14px;color:#93c5fd'>"
+            "<div style='display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:10px;font-size:14px;color:#2563eb'>"
             f"<span>Weight <strong style='color:#0f172a'>{percent_display(driver.current_weight)}</strong></span>"
             f"<span>Vs benchmark <strong style='color:#0f172a'>{percent_display(driver.excess_return_vs_benchmark)}</strong></span>"
             f"<span>Variance contribution <strong style='color:#0f172a'>{percent_display(driver.variance_contribution_pct)}</strong></span>"
@@ -5386,15 +5386,15 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis, *, use_llm: b
             "</div>"
             "<div style='display:grid;grid-template-columns:minmax(280px,.95fr) minmax(320px,1.35fr);gap:16px;margin-top:18px'>"
             "<div style='padding:16px 18px;border-radius:16px;background:linear-gradient(180deg, rgba(239,246,255,.95), rgba(255,255,255,.96));border:1px solid rgba(96,165,250,.20)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Main portfolio risk this holding is feeding</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:700'>Main portfolio risk this holding is feeding</div>"
             f"<div style='font-size:18px;font-weight:800;color:#0f172a;margin-top:8px'>{contribution.primary_concern_label}</div>"
             f"<div style='font-size:13px;line-height:1.5;color:#475569;margin-top:8px'>{humanize_concern_label(contribution.primary_concern_label)}</div>"
             f"<div style='font-size:15px;line-height:1.6;color:#334155;margin-top:10px'>{contribution.primary_concern_summary}</div>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>Other risks this holding also spills into</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:700;margin-top:16px'>Other risks this holding also spills into</div>"
             f"<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:10px'>{spillover_html}</div>"
             "</div>"
             "<div style='padding:16px 18px;border-radius:16px;background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));border:1px solid rgba(148,163,184,.20)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What to do and why</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:700'>What to do and why</div>"
             f"<div style='font-size:18px;font-weight:800;color:{action_tone};margin-top:8px'>{action_label}</div>"
             f"{action_pressure_html}"
             f"<div style='font-size:15px;line-height:1.6;color:#334155;margin-top:10px'>{action_summary}</div>"
@@ -5425,7 +5425,7 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis, *, use_llm: b
             f"<div style='display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap'>"
             f"<div style='font-size:16px;font-weight:700;color:#0f172a'>{driver.sector}</div>"
             "</div>"
-            f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>Weight <strong style='color:#0f172a'>{percent_display(driver.weight_pct)}</strong> · "
+            f"<div style='font-size:14px;color:#2563eb;margin-top:8px'>Weight <strong style='color:#0f172a'>{percent_display(driver.weight_pct)}</strong> · "
             f"Vs benchmark <strong style='color:#0f172a'>{percent_display(driver.excess_return_vs_benchmark)}</strong></div>"
             f"<div style='margin-top:10px;font-size:14px;line-height:1.5;color:#334155'><strong>{humanize_reason_label(driver.primary_reason_label or 'Main sector reason')}:</strong> {driver.primary_reason_summary or build_sector_driver_explanation(driver)}</div>"
             "</div>"
@@ -5438,7 +5438,7 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis, *, use_llm: b
         "background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));box-shadow:0 18px 48px rgba(15,23,42,.08)'>"
         "<div style='font-size:20px;font-weight:800;color:#0f172a'>Top Holding Drivers</div>"
         f"{section_provenance_note('Rule-based', 'reason-code framework + evidence tables', 'rule')}"
-        "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>For each holding, start with the main portfolio risk it is feeding, then look at the current action read and the evidence that made the diagnosis flag it.</div>"
+        "<div style='font-size:14px;color:#2563eb;margin-top:6px'>For each holding, start with the main portfolio risk it is feeding, then look at the current action read and the evidence that made the diagnosis flag it.</div>"
         f"{diagnosis_order_html}"
         f"{actionable_detail_section}"
         f"<div style='margin-top:14px'>{holding_items}</div>"
@@ -5446,7 +5446,7 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis, *, use_llm: b
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
         "background:linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.96));box-shadow:0 18px 48px rgba(15,23,42,.08)'>"
         "<div style='font-size:18px;font-weight:700;color:#0f172a'>Sector Drivers</div>"
-        "<div style='font-size:13px;color:#93c5fd;margin-top:6px'>These are the sector-level patterns that make the portfolio feel crowded or fragile.</div>"
+        "<div style='font-size:13px;color:#2563eb;margin-top:6px'>These are the sector-level patterns that make the portfolio feel crowded or fragile.</div>"
         f"<div style='margin-top:14px'>{sector_items}</div>"
         "</div>"
         "</div>"
@@ -5539,28 +5539,28 @@ def build_ebitda_watch_html(diagnosis: PortfolioRiskDiagnosis) -> str:
 
     header = (
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;margin-top:14px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:16px;font-weight:800;color:#f8fafc'>Operating quality (EBITDA) watch</div>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:16px;font-weight:800;color:#0f172a'>Operating quality (EBITDA) watch</div>"
         f"{section_provenance_note('Rule-based', 'estimated from SEC company facts', 'rule')}"
     )
     if not flagged:
         coverage = healthy + no_data
         body = (
-            "<div style='font-size:14px;color:#cbd5e1;margin-top:10px'>"
+            "<div style='font-size:14px;color:#475569;margin-top:10px'>"
             f"No EBITDA red flags among the {healthy} held names with available SEC data"
             + (f" ({no_data} holdings had no EBITDA data)." if no_data else ".")
             + "</div>"
         )
         return header + body + "</div>"
     body = (
-        "<div style='font-size:13px;color:#cbd5e1;margin-top:8px'>"
+        "<div style='font-size:13px;color:#475569;margin-top:8px'>"
         "These holdings show weaker operating quality on an estimated-EBITDA basis "
         "(shown regardless of whether they are being trimmed):</div>"
-        f"<ul style='margin:10px 0 0 18px;color:#f1f5f9 !important;line-height:1.55'>{''.join(flagged)}</ul>"
+        f"<ul style='margin:10px 0 0 18px;color:#475569 !important;line-height:1.55'>{''.join(flagged)}</ul>"
     )
     if no_data:
         body += (
-            f"<div style='font-size:12px;color:#94a3b8;margin-top:8px'>"
+            f"<div style='font-size:12px;color:#64748b;margin-top:8px'>"
             f"{no_data} other holdings had no EBITDA data (ETFs, foreign filers, or names "
             "not in the SEC facts set).</div>"
         )
@@ -5589,9 +5589,9 @@ def build_macro_context_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     if macro is None:
         return (
             "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-            "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Macro Context</div>"
-            "<div style='font-size:14px;color:#cbd5e1;margin-top:10px'>Macro regime data is not available yet.</div>"
+            "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+            "<div style='font-size:18px;font-weight:700;color:#0f172a'>Macro Context</div>"
+            "<div style='font-size:14px;color:#475569;margin-top:10px'>Macro regime data is not available yet.</div>"
             "</div>"
         )
     regime_flags = "".join(
@@ -5607,12 +5607,12 @@ def build_macro_context_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     return (
         "<div style='display:grid;gap:16px'>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Macro Regime Context</div>"
-        f"<div style='font-size:14px;color:#cbd5e1;margin-top:10px'>{macro.summary}</div>"
-        f"<div style='font-size:12px;color:#93c5fd;margin-top:8px'>As of {macro.as_of_date or 'N/A'}</div>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:18px;font-weight:700;color:#0f172a'>Macro Regime Context</div>"
+        f"<div style='font-size:14px;color:#475569;margin-top:10px'>{macro.summary}</div>"
+        f"<div style='font-size:12px;color:#2563eb;margin-top:8px'>As of {macro.as_of_date or 'N/A'}</div>"
         "<div style='margin-top:14px'>"
-        f"<ul style='color:#e2e8f0;padding-left:18px'>{regime_flags}</ul>"
+        f"<ul style='color:#334155;padding-left:18px'>{regime_flags}</ul>"
         "</div>"
         "</div>"
         f"<div class='metric-strip'>{macro_cards}</div>"
@@ -5651,16 +5651,16 @@ def build_confidence_completeness_html(diagnosis: PortfolioRiskDiagnosis) -> str
     return (
         "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px'>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Evidence Completeness</div>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:18px;font-weight:700;color:#0f172a'>Evidence Completeness</div>"
         f"{section_provenance_note('Rule-based', 'evidence coverage checks', 'rule')}"
-        f"<div style='font-size:14px;color:#93c5fd;margin-top:10px'>Coverage check: {coverage_count}/{total_count} evidence sources are currently available.</div>"
-        "<div style='font-size:14px;color:#cbd5e1;margin-top:12px'>The system should stay explicit about uncertainty, especially when external evidence is thin or incomplete.</div>"
+        f"<div style='font-size:14px;color:#2563eb;margin-top:10px'>Coverage check: {coverage_count}/{total_count} evidence sources are currently available.</div>"
+        "<div style='font-size:14px;color:#475569;margin-top:12px'>The system should stay explicit about uncertainty, especially when external evidence is thin or incomplete.</div>"
         "</div>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:18px;font-weight:700;color:#f8fafc'>Evidence Gaps</div>"
-        f"<ul style='margin-top:14px;color:#e2e8f0;padding-left:18px'>{gaps}</ul>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:18px;font-weight:700;color:#0f172a'>Evidence Gaps</div>"
+        f"<ul style='margin-top:14px;color:#334155;padding-left:18px'>{gaps}</ul>"
         "</div>"
         "</div>"
     )
@@ -6202,9 +6202,9 @@ def update_risk_actions_view(
     if not diagnosis_payload:
         return (
             "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-            "<div style='font-size:20px;font-weight:800;color:#f8fafc'>Risk Actions</div>"
-            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>Run analysis first, then use the view selector to switch between summary and evidence.</div>"
+            "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+            "<div style='font-size:20px;font-weight:800;color:#0f172a'>Risk Actions</div>"
+            "<div style='font-size:15px;color:#475569;margin-top:10px'>Run analysis first, then use the view selector to switch between summary and evidence.</div>"
             "</div>"
         )
     diagnosis = PortfolioRiskDiagnosis.model_validate(diagnosis_payload)
@@ -6256,7 +6256,7 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis, view_mode: str = 
             "<div style='font-size:20px;font-weight:800;color:#0f172a'>If You Follow The Current Action Set</div>"
             f"<div style='font-size:14px;line-height:1.6;color:#475569;margin-top:10px'>{render_bold_markers(action_impact.impact_summary)}</div>"
             f"<div class='metric-strip' style='margin-top:14px'>{impact_cards}</div>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:16px'>What likely improves at the portfolio level</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:700;margin-top:16px'>What likely improves at the portfolio level</div>"
             f"<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>{impact_bullets_html}</ul>"
             "</div>"
         )
@@ -6431,7 +6431,7 @@ def build_risk_actions_html(diagnosis: PortfolioRiskDiagnosis, view_mode: str = 
         )
         if show_summary:
             detail_section = (
-                "<div style='font-size:12px;color:#93c5fd;margin-top:12px'>"
+                "<div style='font-size:12px;color:#2563eb;margin-top:12px'>"
                 "Switch to Evidence Trail or Full Detail above if you want to inspect the raw evidence behind this recommendation."
                 "</div>"
             )
@@ -6621,9 +6621,9 @@ def build_buy_preferences_html(preferences: PortfolioPreferences | None) -> str:
     if preferences is None:
         return (
             "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Preferences</div>"
-            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>Run an analysis first, then set the buy-side constraints here.</div>"
+            "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+            "<div style='font-size:22px;font-weight:800;color:#0f172a'>Buy Preferences</div>"
+            "<div style='font-size:15px;color:#475569;margin-top:10px'>Run an analysis first, then set the buy-side constraints here.</div>"
             "</div>"
         )
 
@@ -6657,10 +6657,10 @@ def build_buy_preferences_html(preferences: PortfolioPreferences | None) -> str:
     return (
         "<div style='display:flex;flex-direction:column;gap:16px'>"
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Preferences</div>"
-        f"<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>{render_bold_markers(preferences.constraints_summary)}</div>"
-        f"<div style='font-size:14px;color:#93c5fd;margin-top:8px'>{render_bold_markers(preferences.max_new_position_interpretation)}</div>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:22px;font-weight:800;color:#0f172a'>Buy Preferences</div>"
+        f"<div style='font-size:15px;color:#475569;margin-top:10px'>{render_bold_markers(preferences.constraints_summary)}</div>"
+        f"<div style='font-size:14px;color:#2563eb;margin-top:8px'>{render_bold_markers(preferences.max_new_position_interpretation)}</div>"
         f"<div class='metric-strip' style='margin-top:14px'>{cards}</div>"
         "</div>"
         f"{buy_universe_summary_html}"
@@ -6923,9 +6923,9 @@ def build_buy_candidate_universe_summary_html(
     if not entries:
         return (
             "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Universe</div>"
-            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No curated buy-candidate universe has been loaded yet.</div>"
+            "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+            "<div style='font-size:22px;font-weight:800;color:#0f172a'>Buy Universe</div>"
+            "<div style='font-size:15px;color:#475569;margin-top:10px'>No curated buy-candidate universe has been loaded yet.</div>"
             "</div>"
         )
 
@@ -6963,7 +6963,7 @@ def build_buy_candidate_universe_summary_html(
         + metric_card("Most common role", top_role, "What this universe leans toward")
     )
     detail_html = (
-        f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:12px'>"
+        f"<div style='font-size:14px;line-height:1.6;color:#475569;margin-top:12px'>"
         f"This is the <strong>starting universe</strong> for the future buy engine. "
         f"It is deliberately curated so the system can explain <strong>why a name is even under consideration</strong> "
         f"before making any buy recommendation. "
@@ -6981,9 +6981,9 @@ def build_buy_candidate_universe_summary_html(
     )
     return (
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Universe</div>"
-        "<div style='font-size:15px;color:#93c5fd;margin-top:8px'>A review layer for the separate candidate universe we will use on the buy side.</div>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:22px;font-weight:800;color:#0f172a'>Buy Universe</div>"
+        "<div style='font-size:15px;color:#2563eb;margin-top:8px'>A review layer for the separate candidate universe we will use on the buy side.</div>"
         f"<div class='metric-strip' style='margin-top:14px'>{cards}</div>"
         f"{detail_html}"
         "</div>"
@@ -7204,17 +7204,17 @@ def build_buy_ideas_html(
     if preferences is None:
         return (
             "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Ideas</div>"
-            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>Run analysis first so the app can understand the portfolio gaps and constraints.</div>"
+            "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+            "<div style='font-size:22px;font-weight:800;color:#0f172a'>Buy Ideas</div>"
+            "<div style='font-size:15px;color:#475569;margin-top:10px'>Run analysis first so the app can understand the portfolio gaps and constraints.</div>"
             "</div>"
         )
     if not candidates:
         return (
             "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Ideas</div>"
-            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No replacement candidates passed the current gap and preference filters yet.</div>"
+            "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+            "<div style='font-size:22px;font-weight:800;color:#0f172a'>Buy Ideas</div>"
+            "<div style='font-size:15px;color:#475569;margin-top:10px'>No replacement candidates passed the current gap and preference filters yet.</div>"
             "</div>"
         )
 
@@ -7230,35 +7230,35 @@ def build_buy_ideas_html(
     summary_chips = "".join(
         [
             (
-                "<div style='padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.72);"
+                "<div style='padding:10px 12px;border-radius:14px;background:#eef2f8;"
                 "border:1px solid rgba(148,163,184,.14);min-width:180px'>"
-                "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Top fit</div>"
-                f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:4px'>{top_candidate.ticker}</div>"
-                f"<div style='font-size:12px;color:#cbd5e1;margin-top:4px'>{top_reference.get('full_name') or top_candidate.security_name}</div>"
+                "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#2563eb;font-weight:700'>Top fit</div>"
+                f"<div style='font-size:18px;font-weight:800;color:#0f172a;margin-top:4px'>{top_candidate.ticker}</div>"
+                f"<div style='font-size:12px;color:#475569;margin-top:4px'>{top_reference.get('full_name') or top_candidate.security_name}</div>"
                 "</div>"
             ),
             (
-                "<div style='padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.72);"
+                "<div style='padding:10px 12px;border-radius:14px;background:#eef2f8;"
                 "border:1px solid rgba(148,163,184,.14);min-width:180px'>"
-                "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Current budget</div>"
-                f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:4px'>{money_text(preferences.budget_to_deploy)}</div>"
-                "<div style='font-size:12px;color:#cbd5e1;margin-top:4px'>Active buy preference object</div>"
+                "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#2563eb;font-weight:700'>Current budget</div>"
+                f"<div style='font-size:18px;font-weight:800;color:#0f172a;margin-top:4px'>{money_text(preferences.budget_to_deploy)}</div>"
+                "<div style='font-size:12px;color:#475569;margin-top:4px'>Active buy preference object</div>"
                 "</div>"
             ),
             (
-                "<div style='padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.72);"
+                "<div style='padding:10px 12px;border-radius:14px;background:#eef2f8;"
                 "border:1px solid rgba(148,163,184,.14);min-width:180px'>"
-                "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Detailed ideas shown</div>"
-                f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:4px'>{len(featured_candidates)}</div>"
-        f"<div style='font-size:12px;color:#cbd5e1;margin-top:4px'>Full ranked list below: {len(ordered_candidates)}</div>"
+                "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#2563eb;font-weight:700'>Detailed ideas shown</div>"
+                f"<div style='font-size:18px;font-weight:800;color:#0f172a;margin-top:4px'>{len(featured_candidates)}</div>"
+        f"<div style='font-size:12px;color:#475569;margin-top:4px'>Full ranked list below: {len(ordered_candidates)}</div>"
         "</div>"
             ),
             (
-                "<div style='padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.72);"
+                "<div style='padding:10px 12px;border-radius:14px;background:#eef2f8;"
                 "border:1px solid rgba(148,163,184,.14);min-width:180px'>"
-                "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Max new position</div>"
-                f"<div style='font-size:18px;font-weight:800;color:#f8fafc;margin-top:4px'>{percent_display(preferences.suggested_max_new_position_pct)}</div>"
-                "<div style='font-size:12px;color:#cbd5e1;margin-top:4px'>Share of total portfolio</div>"
+                "<div style='font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#2563eb;font-weight:700'>Max new position</div>"
+                f"<div style='font-size:18px;font-weight:800;color:#0f172a;margin-top:4px'>{percent_display(preferences.suggested_max_new_position_pct)}</div>"
+                "<div style='font-size:12px;color:#475569;margin-top:4px'>Share of total portfolio</div>"
                 "</div>"
             ),
         ]
@@ -7272,7 +7272,7 @@ def build_buy_ideas_html(
             "EBITDA trend, sector crowding, and avoiding near-duplicate ETFs)."
         )
     detail_note = (
-        "<div style='font-size:12px;color:#cbd5e1;margin-top:12px'>"
+        "<div style='font-size:12px;color:#475569;margin-top:12px'>"
         f"Showing full detail for the top {len(featured_candidates)} ideas. "
         "The ranked table below includes the broader list for quick scanning."
         f"{shortfall_note}</div>"
@@ -7283,12 +7283,12 @@ def build_buy_ideas_html(
     return (
         "<div style='display:flex;flex-direction:column;gap:16px'>"
         "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
         "<div style='display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap'>"
         "<div>"
-        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Buy Ideas</div>"
+        "<div style='font-size:22px;font-weight:800;color:#0f172a'>Buy Ideas</div>"
         f"{section_provenance_note('Rule-based', 'fit scoring + market data + preference constraints', 'rule')}"
-        "<div style='font-size:14px;color:#93c5fd;margin-top:6px'>Each selected buy idea is shown with its own full explanation and 5-year chart right beside it.</div>"
+        "<div style='font-size:14px;color:#2563eb;margin-top:6px'>Each selected buy idea is shown with its own full explanation and 5-year chart right beside it.</div>"
         "</div>"
         f"<div style='display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end'>{summary_chips}</div>"
         "</div>"
@@ -7308,9 +7308,9 @@ def build_buy_idea_card_html(
     if candidate is None:
         return (
             "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
-            "background:rgba(15,23,42,.22)'>"
-            f"<div style='font-size:16px;font-weight:800;color:#f8fafc'>#{rank}</div>"
-            "<div style='font-size:14px;color:#cbd5e1;margin-top:8px'>No additional buy idea was available for this slot.</div>"
+            "background:#eef2f8'>"
+            f"<div style='font-size:16px;font-weight:800;color:#0f172a'>#{rank}</div>"
+            "<div style='font-size:14px;color:#475569;margin-top:8px'>No additional buy idea was available for this slot.</div>"
             "</div>"
         )
 
@@ -7368,29 +7368,29 @@ def build_buy_idea_card_html(
     signal_row = ""
     if external_signals:
         signal_row = (
-            "<div style='margin-top:10px;padding:12px 14px;border-radius:14px;background:rgba(30,41,59,.34);"
+            "<div style='margin-top:10px;padding:12px 14px;border-radius:14px;background:#eef2f8;"
             "border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Recent external signals</div>"
-            f"<div style='font-size:13px;line-height:1.55;color:#e2e8f0;margin-top:8px'>{render_bold_markers(external_signals[0])}</div>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:700'>Recent external signals</div>"
+            f"<div style='font-size:13px;line-height:1.55;color:#334155;margin-top:8px'>{render_bold_markers(external_signals[0])}</div>"
             "</div>"
         )
     detail_section = ""
     if show_quick:
         detail_section = (
-            "<div style='font-size:12px;color:#93c5fd;margin-top:12px'>"
+            "<div style='font-size:12px;color:#2563eb;margin-top:12px'>"
             "Switch to Evidence Detail or Full Detail above if you want to inspect why this idea made the list."
             "</div>"
         )
     else:
         detail_section = (
             "<div style='display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);gap:14px;margin-top:14px'>"
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>What this could improve</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{improvement_html}</ul>"
+            "<div style='padding:14px 16px;border-radius:14px;background:#eef2f8;border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:700'>What this could improve</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>{improvement_html}</ul>"
             "</div>"
-            "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.36);border:1px solid rgba(148,163,184,.10)'>"
-            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700'>Why it made the list</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{evidence_html}</ul>"
+            "<div style='padding:14px 16px;border-radius:14px;background:#eef2f8;border:1px solid rgba(148,163,184,.10)'>"
+            "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:700'>Why it made the list</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>{evidence_html}</ul>"
             "</div>"
             "</div>"
         )
@@ -7398,14 +7398,14 @@ def build_buy_idea_card_html(
             detail_section += signal_row
     return (
         "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
-        "background:rgba(15,23,42,.34)'>"
+        "background:#eef2f8'>"
         "<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap'>"
         "<div>"
         "<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap'>"
         f"<div style='padding:6px 10px;border-radius:999px;background:rgba(219,234,254,.96);border:1px solid rgba(37,99,235,.28);color:#1d4ed8;font-size:12px;font-weight:900'>#{rank}</div>"
-        f"<div style='font-size:21px;font-weight:800;color:#f8fafc'>{candidate.ticker}</div>"
-        f"<div style='font-size:16px;font-weight:600;color:#e2e8f0'>{reference.get('full_name') or candidate.security_name}</div>"
-        f"<div style='font-size:14px;font-weight:500;color:#cbd5e1'>({candidate.asset_type} · {candidate.sector})</div>"
+        f"<div style='font-size:21px;font-weight:800;color:#0f172a'>{candidate.ticker}</div>"
+        f"<div style='font-size:16px;font-weight:600;color:#334155'>{reference.get('full_name') or candidate.security_name}</div>"
+        f"<div style='font-size:14px;font-weight:500;color:#475569'>({candidate.asset_type} · {candidate.sector})</div>"
         f"{allocation_line}"
         "</div>"
         f"<div style='font-size:14px;color:#2563eb;margin-top:8px'>Role: <strong style='color:#0f172a'>{candidate.primary_role}</strong> · Source: <strong style='color:#0f172a'>{candidate.universe_source or 'Known universe mix'}</strong></div>"
@@ -8098,9 +8098,9 @@ def build_portfolio_gaps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
     if not diagnosis.portfolio_gaps:
         return (
             "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Portfolio Gaps</div>"
-            "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>No portfolio gaps were surfaced from the current action set.</div>"
+            "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+            "<div style='font-size:22px;font-weight:800;color:#0f172a'>Portfolio Gaps</div>"
+            "<div style='font-size:15px;color:#475569;margin-top:10px'>No portfolio gaps were surfaced from the current action set.</div>"
             "</div>"
         )
 
@@ -8132,25 +8132,25 @@ def build_portfolio_gaps_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         )
         preference_section = (
             "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94));margin-top:18px'>"
-            "<div style='font-size:18px;font-weight:800;color:#f8fafc'>Before buy ideas, we still need</div>"
-            f"<ul style='margin:12px 0 0 18px;color:#e2e8f0;line-height:1.55'>{unresolved}</ul>"
+            "background:linear-gradient(180deg,#ffffff,#f8fafc);margin-top:18px'>"
+            "<div style='font-size:18px;font-weight:800;color:#0f172a'>Before buy ideas, we still need</div>"
+            f"<ul style='margin:12px 0 0 18px;color:#334155;line-height:1.55'>{unresolved}</ul>"
             "</div>"
         )
 
     return (
         "<div style='display:flex;flex-direction:column;gap:16px'>"
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Portfolio Gaps</div>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:22px;font-weight:800;color:#0f172a'>Portfolio Gaps</div>"
         f"{section_provenance_note('Rule-based', 'gap engine after trims and constraints', 'rule')}"
-        "<div style='font-size:15px;color:#cbd5e1;margin-top:10px'>Why buy anything at all? This view shows what the portfolio still needs after the current trims, before we suggest any names.</div>"
+        "<div style='font-size:15px;color:#475569;margin-top:10px'>Why buy anything at all? This view shows what the portfolio still needs after the current trims, before we suggest any names.</div>"
         f"<div class='metric-strip' style='margin-top:14px'>{quick_cards}</div>"
-        "<div style='padding:14px 16px;border-radius:14px;background:rgba(30,41,59,.42);border:1px solid rgba(148,163,184,.10);margin-top:16px'>"
-        f"<div style='font-size:14px;color:#93c5fd;font-weight:700'>Fast read: the biggest need right now is <span style='color:#f8fafc'>{top_gap.label}</span>.</div>"
-        f"<div style='font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:8px'>{render_bold_markers(top_gap.why_this_gap_exists)}</div>"
-        "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;font-weight:700;margin-top:14px'>If a future add solves this well</div>"
-        f"<ul style='margin:10px 0 0 18px;color:#e2e8f0;line-height:1.55'>{top_gap_bullets}</ul>"
+        "<div style='padding:14px 16px;border-radius:14px;background:#eef2f8;border:1px solid rgba(148,163,184,.10);margin-top:16px'>"
+        f"<div style='font-size:14px;color:#2563eb;font-weight:700'>Fast read: the biggest need right now is <span style='color:#0f172a'>{top_gap.label}</span>.</div>"
+        f"<div style='font-size:14px;line-height:1.6;color:#475569;margin-top:8px'>{render_bold_markers(top_gap.why_this_gap_exists)}</div>"
+        "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;font-weight:700;margin-top:14px'>If a future add solves this well</div>"
+        f"<ul style='margin:10px 0 0 18px;color:#334155;line-height:1.55'>{top_gap_bullets}</ul>"
         "</div>"
         + preference_section
         + "</div>"
@@ -8247,15 +8247,15 @@ def build_monthly_performance_html(frame: pd.DataFrame) -> str:
     """Render the monthly performance frame as a styled table on a dark panel."""
     panel_open = (
         "<div style='padding:20px;border:1px solid rgba(148,163,184,.16);border-radius:18px;margin-top:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-        "<div style='font-size:18px;font-weight:800;color:#f8fafc'>Monthly Performance (whole portfolio)</div>"
-        "<div style='font-size:13px;color:#94a3b8;margin-top:6px'>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+        "<div style='font-size:18px;font-weight:800;color:#0f172a'>Monthly Performance (whole portfolio)</div>"
+        "<div style='font-size:13px;color:#64748b;margin-top:6px'>"
         "Beginning balance, contributions, market gain/loss, income, and ending account value for each month.</div>"
     )
     if frame is None or frame.empty:
         return (
             panel_open
-            + "<div style='font-size:14px;color:#cbd5e1;margin-top:12px'>"
+            + "<div style='font-size:14px;color:#475569;margin-top:12px'>"
             "Run analysis to build the monthly history.</div></div>"
         )
 
@@ -8275,13 +8275,13 @@ def build_monthly_performance_html(frame: pd.DataFrame) -> str:
 
     header_cells = "".join(
         f"<th style='padding:9px 12px;text-align:{'left' if c == 'Month' else 'right'};"
-        "font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#93c5fd;"
+        "font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:#2563eb;"
         f"font-weight:700;white-space:nowrap'>{c}</th>"
         for c in frame.columns
     )
     body_rows = ""
     for _, row in frame.iterrows():
-        cells = f"<td style='padding:8px 12px;text-align:left;color:#f8fafc;font-weight:600;white-space:nowrap'>{row['Month']}</td>"
+        cells = f"<td style='padding:8px 12px;text-align:left;color:#0f172a;font-weight:600;white-space:nowrap'>{row['Month']}</td>"
         cells += "".join(cell(col, row[col]) for col in money_cols)
         body_rows += f"<tr style='border-top:1px solid rgba(148,163,184,.12)'>{cells}</tr>"
 
@@ -9774,9 +9774,9 @@ def build_sector_overview_markdown(market_metrics: dict[str, Any]) -> str:
     if not sector_rows:
         return (
             "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Sector Map</div>"
-            "<div style='font-size:14px;color:#cbd5e1;margin-top:8px'>Sector allocation is unavailable for the current portfolio.</div>"
+            "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+            "<div style='font-size:22px;font-weight:800;color:#0f172a'>Sector Map</div>"
+            "<div style='font-size:14px;color:#475569;margin-top:8px'>Sector allocation is unavailable for the current portfolio.</div>"
             "</div>"
         )
 
@@ -9791,9 +9791,9 @@ def build_sector_overview_markdown(market_metrics: dict[str, Any]) -> str:
     if frame.empty:
         return (
             "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-            "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94))'>"
-            "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Sector Map</div>"
-            "<div style='font-size:14px;color:#cbd5e1;margin-top:8px'>No positive sector values are available yet.</div>"
+            "background:linear-gradient(180deg,#ffffff,#f8fafc)'>"
+            "<div style='font-size:22px;font-weight:800;color:#0f172a'>Sector Map</div>"
+            "<div style='font-size:14px;color:#475569;margin-top:8px'>No positive sector values are available yet.</div>"
             "</div>"
         )
 
@@ -9818,26 +9818,26 @@ def build_sector_overview_markdown(market_metrics: dict[str, Any]) -> str:
             "<div style='padding:13px 14px;border-radius:16px;"
             f"background:{style['bg']};border:1px solid rgba(148,163,184,.14)'>"
             "<div style='display:flex;justify-content:space-between;gap:10px;align-items:flex-start'>"
-            f"<div style='font-size:15px;font-weight:800;color:#f8fafc'>{row.get('sector')}</div>"
+            f"<div style='font-size:15px;font-weight:800;color:#0f172a'>{row.get('sector')}</div>"
             f"<div style='font-size:13px;font-weight:800;color:{style['color']}'>{weight:.1%}</div>"
             "</div>"
-            f"<div style='font-size:12px;color:#cbd5e1;margin-top:5px'>{style['label']} · vs S&P 500: {excess_text}</div>"
-            f"<div style='font-size:12px;color:#94a3b8;margin-top:5px'>{money_text(parse_float(row.get('current_value')))}</div>"
+            f"<div style='font-size:12px;color:#475569;margin-top:5px'>{style['label']} · vs S&P 500: {excess_text}</div>"
+            f"<div style='font-size:12px;color:#64748b;margin-top:5px'>{money_text(parse_float(row.get('current_value')))}</div>"
             "</div>"
         )
 
     return (
         "<div style='display:flex;flex-direction:column;gap:14px'>"
         "<div style='padding:18px;border:1px solid rgba(148,163,184,.16);border-radius:18px;"
-        "background:linear-gradient(180deg, rgba(30,41,59,.96), rgba(15,23,42,.94));box-shadow:0 18px 48px rgba(2,6,23,.24)'>"
-        "<div style='font-size:22px;font-weight:800;color:#f8fafc'>Sector Map</div>"
-        "<div style='font-size:14px;color:#93c5fd;margin-top:7px'>A faster read on where the portfolio is crowded, balanced, or diversified.</div>"
+        "background:linear-gradient(180deg,#ffffff,#f8fafc);box-shadow:0 18px 48px rgba(2,6,23,.24)'>"
+        "<div style='font-size:22px;font-weight:800;color:#0f172a'>Sector Map</div>"
+        "<div style='font-size:14px;color:#2563eb;margin-top:7px'>A faster read on where the portfolio is crowded, balanced, or diversified.</div>"
         "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:14px'>"
-        f"<div style='padding:12px;border-radius:14px;background:rgba(15,23,42,.62);border:1px solid rgba(148,163,184,.14)'><div style='font-size:11px;color:#93c5fd;text-transform:uppercase;letter-spacing:.06em;font-weight:800'>Top sector</div><div style='font-size:20px;color:#f8fafc;font-weight:900;margin-top:5px'>{top_sector}</div><div style='font-size:12px;color:{top_style['color']};margin-top:4px'>{top_weight:.1%} · {top_style['label']}</div></div>"
-        f"<div style='padding:12px;border-radius:14px;background:rgba(15,23,42,.62);border:1px solid rgba(148,163,184,.14)'><div style='font-size:11px;color:#93c5fd;text-transform:uppercase;letter-spacing:.06em;font-weight:800'>Top 3 sectors</div><div style='font-size:20px;color:#f8fafc;font-weight:900;margin-top:5px'>{top3_weight:.1%}</div><div style='font-size:12px;color:#cbd5e1;margin-top:4px'>Combined portfolio weight</div></div>"
-        f"<div style='padding:12px;border-radius:14px;background:rgba(15,23,42,.62);border:1px solid rgba(148,163,184,.14)'><div style='font-size:11px;color:#93c5fd;text-transform:uppercase;letter-spacing:.06em;font-weight:800'>Sector count</div><div style='font-size:20px;color:#f8fafc;font-weight:900;margin-top:5px'>{sector_count}</div><div style='font-size:12px;color:#cbd5e1;margin-top:4px'>Positive-value sector sleeves</div></div>"
+        f"<div style='padding:12px;border-radius:14px;background:#eef2f8;border:1px solid rgba(148,163,184,.14)'><div style='font-size:11px;color:#2563eb;text-transform:uppercase;letter-spacing:.06em;font-weight:800'>Top sector</div><div style='font-size:20px;color:#0f172a;font-weight:900;margin-top:5px'>{top_sector}</div><div style='font-size:12px;color:{top_style['color']};margin-top:4px'>{top_weight:.1%} · {top_style['label']}</div></div>"
+        f"<div style='padding:12px;border-radius:14px;background:#eef2f8;border:1px solid rgba(148,163,184,.14)'><div style='font-size:11px;color:#2563eb;text-transform:uppercase;letter-spacing:.06em;font-weight:800'>Top 3 sectors</div><div style='font-size:20px;color:#0f172a;font-weight:900;margin-top:5px'>{top3_weight:.1%}</div><div style='font-size:12px;color:#475569;margin-top:4px'>Combined portfolio weight</div></div>"
+        f"<div style='padding:12px;border-radius:14px;background:#eef2f8;border:1px solid rgba(148,163,184,.14)'><div style='font-size:11px;color:#2563eb;text-transform:uppercase;letter-spacing:.06em;font-weight:800'>Sector count</div><div style='font-size:20px;color:#0f172a;font-weight:900;margin-top:5px'>{sector_count}</div><div style='font-size:12px;color:#475569;margin-top:4px'>Positive-value sector sleeves</div></div>"
         "</div>"
-        f"<div style='font-size:13px;color:#cbd5e1;margin-top:14px'><strong style='color:#f8fafc'>Best relative sector:</strong> {best_sector_text}</div>"
+        f"<div style='font-size:13px;color:#475569;margin-top:14px'><strong style='color:#0f172a'>Best relative sector:</strong> {best_sector_text}</div>"
         "</div>"
         "<div style='display:grid;grid-template-columns:1fr;gap:10px'>"
         f"{sector_cards}"
@@ -10428,7 +10428,7 @@ def _render_buy_idea_critique(reviews: list | None, *, no_state: bool = False) -
         "<tr style='text-align:left;color:#2563eb;font-size:11px;text-transform:uppercase;letter-spacing:.04em'>"
         "<th style='padding:6px 10px'>Ticker</th><th style='padding:6px 10px'>Verdict</th><th style='padding:6px 10px'>Concern</th></tr>"
         f"{rows}</table>"
-        "<div style='font-size:11px;color:#94a3b8;margin-top:10px'>Educational only, not investment advice.</div>"
+        "<div style='font-size:11px;color:#64748b;margin-top:10px'>Educational only, not investment advice.</div>"
         "</div>"
     )
 
