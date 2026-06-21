@@ -3404,12 +3404,20 @@ def generate_risk_action_llm_explanation(diagnosis: PortfolioRiskDiagnosis, item
         return _risk_action_deterministic_explanation(item)
 
 
-def generate_risk_action_llm_explanations(diagnosis: PortfolioRiskDiagnosis, items: list[Any]) -> dict[str, dict[str, str]]:
-    """Generate one explanation per actionable holding with a single cached Ollama call."""
+def generate_risk_action_llm_explanations(
+    diagnosis: PortfolioRiskDiagnosis, items: list[Any], *, use_llm: bool = True
+) -> dict[str, dict[str, str]]:
+    """Generate one explanation per actionable holding with a single cached Ollama call.
+
+    use_llm=False returns the deterministic explanations immediately (no Ollama
+    call) so the analysis path stays fast; the LLM version is loaded lazily.
+    """
     actionable_items = [item for item in items if getattr(item, "is_actionable", False)]
     fallbacks = {str(item.ticker): _risk_action_deterministic_explanation(item) for item in actionable_items}
     if not actionable_items:
         return {}
+    if not use_llm:
+        return fallbacks
 
     model_name = preferred_risk_action_llm_model()
     if not model_name:
@@ -3575,6 +3583,8 @@ def generate_diagnosis_driver_llm_explanations(
     diagnosis: PortfolioRiskDiagnosis,
     contributions: list[Any],
     driver_lookup: dict[str, Any],
+    *,
+    use_llm: bool = True,
 ) -> dict[str, dict[str, str]]:
     """Generate LLM explanations for Risk Diagnosis external evidence.
 
@@ -3597,6 +3607,8 @@ def generate_diagnosis_driver_llm_explanations(
         )
         for contribution in eligible
     }
+    if not use_llm:
+        return fallbacks
     model_name = preferred_risk_action_llm_model()
     if not model_name:
         return fallbacks
@@ -5099,7 +5111,7 @@ def build_sector_driver_explanation(driver: Any) -> str:
     return "This sector matters because " + "; ".join(explanation_parts) + "."
 
 
-def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
+def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis, *, use_llm: bool = True) -> str:
     driver_lookup = {driver.ticker: driver for driver in diagnosis.top_holding_drivers}
     action_lookup = {item.ticker: item for item in getattr(diagnosis, "holding_action_needs", []) or []}
     recommendation_lookup = {item.ticker: item for item in getattr(diagnosis, "holding_action_recommendations", []) or []}
@@ -5123,11 +5135,13 @@ def build_diagnosis_driver_html(diagnosis: PortfolioRiskDiagnosis) -> str:
         diagnosis,
         contribution_items,
         driver_lookup,
+        use_llm=use_llm,
     )
     actionable_detail_section = build_underperforming_risk_detail_cards(
         diagnosis,
         actionable_recommendations,
         include_heading=True,
+        use_llm=use_llm,
     )
 
     underperforming_chips = "".join(
@@ -6071,6 +6085,7 @@ def build_underperforming_risk_detail_cards(
     actionable: list[Any] | None = None,
     *,
     include_heading: bool = True,
+    use_llm: bool = True,
 ) -> str:
     """Render the full underperforming-risk cards used by Risk Diagnosis.
 
@@ -6086,7 +6101,7 @@ def build_underperforming_risk_detail_cards(
     if not items:
         return ""
 
-    llm_explanations = generate_risk_action_llm_explanations(diagnosis, items)
+    llm_explanations = generate_risk_action_llm_explanations(diagnosis, items, use_llm=use_llm)
     cards = ""
     for item in items:
         llm_explanation = llm_explanations.get(item.ticker) or _risk_action_deterministic_explanation(item)
@@ -10044,7 +10059,10 @@ def _run_analysis_impl(
     metric_card_values = build_metric_card_values(risk)
     diagnosis_summary_html = build_diagnosis_summary_html(diagnosis)
     diagnosis_concern_fig = plot_diagnosis_concerns(diagnosis)
-    diagnosis_driver_html = build_diagnosis_driver_html(diagnosis)
+    # Fast path: render driver cards with deterministic explanations (no LLM) so
+    # Run Analysis stays quick. The richer LLM versions load on demand via the
+    # "Generate detailed AI explanations" button on the Risk Diagnosis tab.
+    diagnosis_driver_html = build_diagnosis_driver_html(diagnosis, use_llm=False)
     diagnosis_supporting_metrics_df = build_supporting_metrics_frame(diagnosis)
     diagnosis_holding_fundamentals_df = build_holding_fundamentals_frame(diagnosis)
     diagnosis_narrative_evidence_df = build_narrative_evidence_frame(diagnosis)
@@ -10367,6 +10385,20 @@ def send_portfolio_summary_email(
         return _summary_status(f"Could not send the summary: {exc}", tone="error")
 
 
+def load_diagnosis_driver_llm(diagnosis_state_val: dict | None):
+    """On-demand: regenerate the Risk Diagnosis driver cards with the richer LLM
+    explanations. Run Analysis renders them deterministically (fast, no LLM);
+    this button loads the LLM version (cached after the first time).
+    """
+    if not diagnosis_state_val:
+        return gr.update()
+    try:
+        diagnosis = PortfolioRiskDiagnosis(**diagnosis_state_val)
+        return build_diagnosis_driver_html(diagnosis, use_llm=True)
+    except Exception:
+        return gr.update()
+
+
 def build_app() -> gr.Blocks:
     # Keep app boot light. The buy engine loads its candidate universe when
     # analysis/preferences run, not while the browser is mounting every tab.
@@ -10552,6 +10584,11 @@ def build_app() -> gr.Blocks:
                         )
                     with gr.Tab("Risk Diagnosis", id="risk-diagnosis"):
                         diagnosis_driver_md = gr.HTML()
+                        diagnosis_llm_btn = gr.Button(
+                            "Generate detailed AI explanations (local, ~15s)",
+                            variant="secondary",
+                            elem_id="diagnosis-llm-btn",
+                        )
                         with gr.Row(equal_height=True):
                             diagnosis_concern_plot = gr.Plot(
                                 value=empty_dashboard_plot("Run analysis to rank the top risk categories"),
@@ -11038,11 +11075,14 @@ def build_app() -> gr.Blocks:
         # built during a run while Overview is showing) render at zero/default
         # width and never relayout when revealed. Dispatch a few resizes on every
         # tab switch so Plotly recomputes to the true container width.
-        main_tabs.select(
-            None,
-            None,
-            None,
-            _js="() => { [50, 250, 700].forEach(t => setTimeout(() => window.dispatchEvent(new Event('resize')), t)); }",
+        # On-demand: upgrade the Risk Diagnosis driver cards from deterministic to
+        # LLM explanations (kept off Run Analysis's critical path; cached after
+        # the first click). gr.Tabs has no select event in 3.36, so use a button.
+        diagnosis_llm_btn.click(
+            load_diagnosis_driver_llm,
+            inputs=[diagnosis_state],
+            outputs=[diagnosis_driver_md],
+            show_progress="minimal",
         )
 
         # Nudge Plotly to recompute to its true container width once shortly after
