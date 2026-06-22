@@ -11253,14 +11253,22 @@ def build_app() -> gr.Blocks:
               let tries = 0;
               const iv = setInterval(() => { if (setup() || ++tries > 60) clearInterval(iv); }, 250);
 
-              // Single consolidated progress bar: the native per-component bars are
-              // hidden via CSS; this one bar mirrors their shared status.
+              // Single consolidated loading overlay: the native per-component bars
+              // are hidden via CSS; this one attractive loader mirrors their status.
               const bar = document.createElement('div');
               bar.id = 'pa-progress';
-              bar.innerHTML = "<div class='pa-label'></div><div class='pa-track'><div class='pa-fill'></div></div>";
+              bar.innerHTML =
+                "<div class='pa-loader-card'>"
+                + "<div class='pa-spinner'></div>"
+                + "<div class='pa-loader-title'>Working on it…</div>"
+                + "<div class='pa-label'></div>"
+                + "<div class='pa-track'><div class='pa-fill'></div></div>"
+                + "<div class='pa-pct'></div>"
+                + "</div>";
               document.body.appendChild(bar);
               const label = bar.querySelector('.pa-label');
               const fill = bar.querySelector('.pa-fill');
+              const pct = bar.querySelector('.pa-pct');
               const pick = (sel) => {
                 for (const n of document.querySelectorAll(sel)) {
                   const t = (n.textContent || '').trim();
@@ -11274,11 +11282,18 @@ def build_app() -> gr.Blocks:
                 let txt = pick('.wrap:not(.hide) .progress-level-inner')
                        || pick('.wrap:not(.hide) .progress-text');
                 if (txt) {
-                  bar.style.display = 'block';
-                  label.textContent = txt;
+                  bar.style.display = 'flex';
                   const m = txt.match(/(\\d+(?:\\.\\d+)?)\\s*%/);
-                  if (m) { bar.classList.remove('pa-indet'); fill.style.width = m[1] + '%'; }
-                  else { bar.classList.add('pa-indet'); }
+                  // show the description without the trailing "- NN%" (shown separately)
+                  label.textContent = txt.replace(/[\\-\\u2013\\u2014]?\\s*\\d+(?:\\.\\d+)?\\s*%\\s*$/, '').trim() || 'Loading…';
+                  if (m) {
+                    bar.classList.remove('pa-indet');
+                    fill.style.width = m[1] + '%';
+                    pct.textContent = Math.round(parseFloat(m[1])) + '%';
+                  } else {
+                    bar.classList.add('pa-indet');
+                    pct.textContent = '';
+                  }
                 } else {
                   bar.style.display = 'none';
                 }
@@ -11308,20 +11323,39 @@ LAUNCH_CSS = """
 .gradio-container .wrap.full:not(.hide) {
     display: none !important;
 }
+/* Centered loading overlay: dim, blurred backdrop + a card with a spinner, the
+   live status, a progress bar and %. pointer-events:none so it never traps the
+   user even if a refresh is missed; it simply fades when the run ends. */
 #pa-progress {
-    position: fixed; top: 0; left: 0; right: 0; z-index: 3000;
+    position: fixed; inset: 0; z-index: 4000;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(15, 23, 42, 0.20);
+    -webkit-backdrop-filter: blur(2.5px); backdrop-filter: blur(2.5px);
     pointer-events: none;
-    display: none; padding: 10px 18px;
-    background: rgba(255,255,255,0.98);
-    border-bottom: 1px solid rgba(148,163,184,.35);
-    box-shadow: 0 4px 16px rgba(15,23,42,.12);
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    font-size: 13px; color: #0f172a;
 }
-#pa-progress .pa-label { font-weight: 600; }
-#pa-progress .pa-track { height: 6px; border-radius: 999px; background: #e2e8f0; margin-top: 7px; overflow: hidden; }
-#pa-progress .pa-fill { height: 100%; background: #2563eb; width: 0%; border-radius: 999px; transition: width .2s ease; }
+#pa-progress .pa-loader-card {
+    min-width: 300px; max-width: 88vw;
+    background: #ffffff; border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 18px; padding: 26px 32px; text-align: center;
+    box-shadow: 0 26px 64px rgba(15, 23, 42, 0.24);
+    animation: pa-pop .22s ease-out;
+}
+#pa-progress .pa-spinner {
+    width: 46px; height: 46px; margin: 0 auto 16px;
+    border-radius: 50%;
+    border: 4px solid #e2e8f0; border-top-color: #2563eb;
+    animation: pa-spin .8s linear infinite;
+}
+#pa-progress .pa-loader-title { font-size: 16px; font-weight: 800; color: #0f172a; }
+#pa-progress .pa-label { font-size: 13px; color: #475569; margin-top: 6px; min-height: 18px; line-height: 1.4; }
+#pa-progress .pa-track { height: 6px; border-radius: 999px; background: #e2e8f0; margin-top: 16px; overflow: hidden; }
+#pa-progress .pa-fill { height: 100%; width: 0%; border-radius: 999px;
+    background: linear-gradient(90deg, #2563eb, #60a5fa); transition: width .25s ease; }
 #pa-progress.pa-indet .pa-fill { width: 40%; animation: pa-slide 1.1s infinite ease-in-out; }
+#pa-progress .pa-pct { font-size: 12px; color: #2563eb; font-weight: 800; margin-top: 9px; min-height: 14px; }
+@keyframes pa-spin { to { transform: rotate(360deg); } }
+@keyframes pa-pop { from { transform: scale(.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @keyframes pa-slide { 0% { margin-left: -45%; } 100% { margin-left: 105%; } }
 
 /* Force light mode even when macOS dark mode adds class="dark" to the container */
