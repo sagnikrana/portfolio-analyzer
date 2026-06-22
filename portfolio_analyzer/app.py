@@ -6872,7 +6872,7 @@ def plot_buy_projection(
                 "x": 0,
                 "y": 1.12,
                 "showarrow": False,
-                "font": {"size": 12, "color": "#93c5fd"},
+                "font": {"size": 12, "color": "#64748b"},
             }
         ],
     )
@@ -8263,14 +8263,14 @@ def build_monthly_performance_html(frame: pd.DataFrame) -> str:
 
     def cell(col: str, value: Any) -> str:
         text = money_text(value)
-        color = "#e2e8f0"
-        # Color signed return columns red/green.
+        color = "#334155"  # readable slate on the light panel
+        # Color signed return columns red/green (dark tones for a light background).
         if col in ("Market Gain / Loss", "Personal Investment Returns", "Cumulative Returns"):
             try:
                 num = float(value)
-                color = "#4ade80" if num > 0 else "#f87171" if num < 0 else "#cbd5e1"
+                color = "#16a34a" if num > 0 else "#dc2626" if num < 0 else "#475569"
             except (TypeError, ValueError):
-                color = "#cbd5e1"
+                color = "#475569"
         return f"<td style='padding:8px 12px;text-align:right;color:{color};white-space:nowrap'>{text}</td>"
 
     header_cells = "".join(
@@ -10089,19 +10089,22 @@ def _run_analysis_impl(
         int(base_preferences.buy_idea_limit if base_preferences is not None else MAX_FEATURED_BUY_IDEA_COUNT),
         MAX_FEATURED_BUY_IDEA_COUNT,
     )
-    buy_ideas_html = build_buy_ideas_html(
-        diagnosis,
-        diagnosis.portfolio_preferences,
-        diagnosis.replacement_candidates,
+    # Rule: don't surface buy ideas until the user sets Buy Preferences. On the
+    # initial analysis show a prompt; clicking "Apply Buy Preferences" generates
+    # them. buy_candidates_state stays empty so the PDF / AI critique / agent also
+    # reflect "not generated yet".
+    buy_ideas_html = (
+        "<div style='padding:18px 20px;border:1px dashed #fcd34d;border-radius:14px;"
+        "background:#fffbeb;color:#92400e;font-size:14px;line-height:1.6'>"
+        "<b>Set your Buy Preferences first.</b><br>Open the <b>Buy Preferences</b> tab, choose your "
+        "options (e.g. <em>ETFs only</em>, how many ideas to show), and click "
+        "<b>Apply Buy Preferences</b> to generate buy ideas tailored to you.</div>"
     )
     featured_buy_outputs = build_buy_idea_feature_slots(
-        diagnosis,
-        diagnosis.replacement_candidates,
-        limit=min(int(buy_idea_limit or MAX_FEATURED_BUY_IDEA_COUNT), MAX_FEATURED_BUY_IDEA_COUNT),
-        view_mode="Quick Read",
+        diagnosis, [], limit=0, view_mode="Quick Read",
     )
-    buy_ideas_df = build_buy_ideas_table_html(diagnosis.replacement_candidates)
-    buy_candidates_payload = [item.model_dump(mode="json") for item in diagnosis.replacement_candidates]
+    buy_ideas_df = build_buy_ideas_table_html([])
+    buy_candidates_payload = []
 
     progress(0.84, desc="Building the rebalancing plan and next-step checklist...")
     rebalance_plan_html = build_rebalance_plan_html(diagnosis)
@@ -10796,13 +10799,14 @@ def build_app() -> gr.Blocks:
                                     label="Buy-Side Risk Tolerance (0-100)",
                                 )
                                 # Vehicle mix (ETF vs single stock) is no longer a user toggle:
-                                # the validated buy engine decides the blend. Kept hidden and
-                                # locked to "Blend" so the engine considers both vehicle types.
+                                # User can constrain what the buy engine suggests. "Blend" lets it
+                                # mix ETFs + individual stocks; "ETFs only" restricts to ETFs.
                                 buy_vehicle_preference = gr.Radio(
-                                    choices=["Blend", "Prefer ETFs", "Prefer single stocks", "ETFs only", "Single stocks only"],
+                                    choices=["Blend", "ETFs only", "Single stocks only", "Prefer ETFs", "Prefer single stocks"],
                                     value="Blend",
-                                    label="Preferred Vehicle Mix",
-                                    visible=False,
+                                    label="What should the buy ideas be?",
+                                    info="Pick 'ETFs only' to restrict every buy idea to ETFs. 'Blend' lets the engine mix ETFs and individual stocks.",
+                                    visible=True,
                                 )
                                 buy_prefer_high_dividend_etfs = gr.Checkbox(
                                     label="Prefer high-dividend ETFs when they still fit",
