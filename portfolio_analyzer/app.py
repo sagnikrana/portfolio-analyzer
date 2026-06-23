@@ -9827,7 +9827,7 @@ def build_sector_overview_markdown(market_metrics: dict[str, Any]) -> str:
         else "Benchmark-relative sector performance is not available yet."
     )
     sector_cards = ""
-    for _, row in frame.head(4).iterrows():
+    for _, row in frame.head(6).iterrows():
         weight = float(row.get("weight_pct") or 0.0)
         style = _sector_pressure_style(weight * 100)
         excess = parse_float(row.get("excess_return_vs_benchmark"))
@@ -9857,7 +9857,7 @@ def build_sector_overview_markdown(market_metrics: dict[str, Any]) -> str:
         "</div>"
         f"<div style='font-size:13px;color:#475569;margin-top:14px'><strong style='color:#0f172a'>Best relative sector:</strong> {best_sector_text}</div>"
         "</div>"
-        "<div style='display:grid;grid-template-columns:1fr;gap:10px'>"
+        "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px'>"
         f"{sector_cards}"
         "</div>"
         "</div>"
@@ -10638,14 +10638,15 @@ def build_app() -> gr.Blocks:
                             label="Benchmark",
                         )
                         overview_risk_md = gr.HTML()
-                        with gr.Row(equal_height=False):
-                            with gr.Column(scale=7, min_width=520):
-                                sector_plot = gr.Plot(
-                                    value=empty_dashboard_plot("Run analysis to see the sector map"),
-                                    label="Sector Portfolio Map",
-                                )
-                            with gr.Column(scale=5, min_width=360):
-                                sector_overview_md = gr.HTML()
+                        # Sector exposure is shown as full-width KPI / sector cards
+                        # (cleaner than the old bar chart). sector_plot is kept but
+                        # hidden so the Run Analysis output wiring stays unchanged.
+                        sector_overview_md = gr.HTML()
+                        sector_plot = gr.Plot(
+                            value=empty_dashboard_plot("Run analysis to see the sector map"),
+                            label="Sector Portfolio Map",
+                            visible=False,
+                        )
                         portfolio_monthly_md = gr.HTML()
                     with gr.Group(visible=False):
                         risk_md = gr.HTML()
