@@ -8776,26 +8776,29 @@ def plot_sector_allocation(sector_rows: list[dict[str, Any]]) -> go.Figure:
             )
             for position, (_, row) in enumerate(frame.iterrows())
         ]
+        # Sorted horizontal bars (largest at top): ranking is easier to read than
+        # treemap areas, and it surfaces the concentration story directly.
+        max_weight = float(frame["weight_pct"].max() or 0.0)
         fig.add_trace(
-            go.Treemap(
-                labels=frame["sector"].tolist(),
-                parents=[""] * len(frame),
-                values=frame["current_value"].tolist(),
+            go.Bar(
+                x=frame["weight_pct"].tolist(),
+                y=frame["sector"].tolist(),
+                orientation="h",
+                marker={
+                    "color": colors,
+                    "line": {"color": "rgba(15,23,42,0.85)", "width": 1},
+                },
                 customdata=customdata,
                 hovertext=hovertext,
                 hoverinfo="text",
-                texttemplate="<b>%{label}</b><br>%{customdata[0]}",
-                textfont={"size": 18, "color": "#0f172a"},
-                branchvalues="total",
-                tiling={"packing": "squarify", "pad": 4},
-                marker={
-                    "colors": colors,
-                    "line": {"color": "rgba(15,23,42,0.96)", "width": 3},
-                },
-                pathbar={"visible": False},
+                text=[f"{float(weight):.1f}%" for weight in frame["weight_pct"]],
+                textposition="outside",
+                textfont={"size": 13, "color": "#0f172a"},
+                cliponaxis=False,
             )
         )
     else:
+        max_weight = 100.0
         fig.add_annotation(
             text="Sector allocation is unavailable for the current portfolio.",
             x=0.5,
@@ -8805,16 +8808,30 @@ def plot_sector_allocation(sector_rows: list[dict[str, Any]]) -> go.Figure:
             showarrow=False,
             font={"size": 15, "color": "#0f172a"},
         )
+    sector_count = int(len(frame)) if not frame.empty else 1
     fig.update_layout(
-        title="Sector Exposure Map",
-        height=520,
-        margin={"l": 24, "r": 24, "t": 60, "b": 24},
+        title="Sector Exposure",
+        height=max(320, 46 * sector_count + 130),
+        margin={"l": 24, "r": 64, "t": 60, "b": 40},
         template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(248,250,252,0.92)",
         showlegend=False,
         hoverlabel=dark_hoverlabel(),
         font={"color": "#0f172a"},
+        bargap=0.28,
+        xaxis={
+            "title": "Portfolio weight",
+            "ticksuffix": "%",
+            "range": [0, max_weight * 1.18 if max_weight else 100.0],
+            "showgrid": True,
+            "gridcolor": "rgba(148,163,184,0.25)",
+            "zeroline": False,
+        },
+        yaxis={
+            "autorange": "reversed",
+            "tickfont": {"size": 13, "color": "#0f172a"},
+        },
     )
     return fig
 
