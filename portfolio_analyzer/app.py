@@ -8166,8 +8166,7 @@ def build_monthly_performance_frame(
 
     Columns mirror a brokerage monthly statement:
       Month, Beginning Balance, Deposits/Withdrawals, Investment Amount,
-      Market Gain/Loss, Income Returns, Personal Investment Returns,
-      Cumulative Returns, Ending Balance.
+      Market Gain/Loss, Income Returns, Cumulative Returns, Ending Balance.
 
     Investment Amount is the dollar value of stocks purchased that month.
 
@@ -8228,7 +8227,9 @@ def build_monthly_performance_frame(
                 "Investment Amount": round(investment_amount, 2),
                 "Market Gain / Loss": round(market_gain, 2),
                 "Income Returns": round(income, 2),
-                "Personal Investment Returns": round(personal_returns, 2),
+                # "Personal Investment Returns" (= market_gain + income) is
+                # intentionally not shown: it is the redundant sum of the two
+                # columns above. personal_returns still drives Cumulative Returns.
                 "Cumulative Returns": round(cumulative, 2),
                 "Ending Balance": round(ending, 2),
             }
@@ -8265,7 +8266,7 @@ def build_monthly_performance_html(frame: pd.DataFrame) -> str:
         text = money_text(value)
         color = "#334155"  # readable slate on the light panel
         # Color signed return columns red/green (dark tones for a light background).
-        if col in ("Market Gain / Loss", "Personal Investment Returns", "Cumulative Returns"):
+        if col in ("Market Gain / Loss", "Income Returns", "Cumulative Returns"):
             try:
                 num = float(value)
                 color = "#16a34a" if num > 0 else "#dc2626" if num < 0 else "#475569"

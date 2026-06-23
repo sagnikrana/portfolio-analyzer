@@ -205,7 +205,6 @@ _MONTHLY_HEADERS = {
     "Investment Amount": "Invested",
     "Market Gain / Loss": "Mkt Gain/Loss",
     "Income Returns": "Income",
-    "Personal Investment Returns": "Personal Ret",
     "Cumulative Returns": "Cumulative",
     "Ending Balance": "Ending",
 }
