@@ -870,8 +870,76 @@ def normalize_ticker_for_yahoo(symbol: str) -> str:
     return str(symbol).strip().replace(".", "-")
 
 
+# Deterministic sector map for well-known tickers. The live yfinance .info call
+# is rate-limited and occasionally returns wrong/empty data; before this map a bad
+# response could be cached for 14 days and poison the whole sector breakdown
+# (e.g. everything collapsing into one sector). These authoritative labels use the
+# exact yfinance sector names so override-resolved and live-resolved tickers
+# aggregate into the same buckets. Keys are the Yahoo symbol form (dots -> dashes).
+SECTOR_OVERRIDES: dict[str, str] = {
+    # Technology
+    **{t: "Technology" for t in (
+        "AAPL", "MSFT", "NVDA", "AVGO", "AMD", "ORCL", "CRM", "ADBE", "CSCO", "INTC",
+        "QCOM", "TXN", "IBM", "NOW", "INTU", "MU", "AMAT", "LRCX", "PANW", "SNPS",
+        "CDNS", "KLAC", "ANET", "DELL", "HPQ", "SMCI", "ON", "MRVL", "ADI", "CRWD",
+    )},
+    # Communication Services
+    **{t: "Communication Services" for t in (
+        "GOOGL", "GOOG", "META", "NFLX", "DIS", "T", "VZ", "CMCSA", "TMUS", "CHTR",
+        "EA", "TTWO", "WBD", "OMC", "LYV",
+    )},
+    # Consumer Cyclical
+    **{t: "Consumer Cyclical" for t in (
+        "AMZN", "TSLA", "HD", "MCD", "NKE", "SBUX", "LOW", "BKNG", "TJX", "ABNB",
+        "MAR", "GM", "F", "ORLY", "CMG", "RCL", "LULU", "DHI",
+    )},
+    # Consumer Defensive
+    **{t: "Consumer Defensive" for t in (
+        "WMT", "PG", "KO", "PEP", "COST", "PM", "MO", "MDLZ", "CL", "TGT", "KMB",
+        "GIS", "KHC", "STZ", "KDP",
+    )},
+    # Financial Services
+    **{t: "Financial Services" for t in (
+        "JPM", "BAC", "WFC", "GS", "MS", "V", "MA", "AXP", "BLK", "C", "SCHW",
+        "SPGI", "BRK-B", "BRK-A", "PYPL", "CB", "PGR", "MMC", "ICE", "CME", "COF",
+    )},
+    # Healthcare
+    **{t: "Healthcare" for t in (
+        "UNH", "JNJ", "LLY", "PFE", "MRK", "ABBV", "TMO", "ABT", "DHR", "BMY",
+        "AMGN", "CVS", "MDT", "ISRG", "GILD", "VRTX", "REGN", "ELV", "CI", "ZTS",
+    )},
+    # Industrials
+    **{t: "Industrials" for t in (
+        "CAT", "BA", "HON", "GE", "UPS", "RTX", "LMT", "DE", "UNP", "MMM", "GD",
+        "ETN", "EMR", "CSX", "NSC", "WM", "ITW", "PH", "NOC",
+    )},
+    # Energy
+    **{t: "Energy" for t in (
+        "XOM", "CVX", "COP", "SLB", "EOG", "MPC", "PSX", "VLO", "OXY", "WMB", "KMI",
+    )},
+    # Utilities
+    **{t: "Utilities" for t in ("NEE", "DUK", "SO", "D", "AEP", "EXC", "SRE", "XEL")},
+    # Real Estate
+    **{t: "Real Estate" for t in ("AMT", "PLD", "CCI", "EQIX", "SPG", "O", "PSA")},
+    # Basic Materials
+    **{t: "Basic Materials" for t in ("LIN", "SHW", "FCX", "NEM", "APD", "ECL", "DOW")},
+    # ETFs / funds
+    **{t: "ETF / Fund" for t in (
+        "VOO", "VTI", "QQQ", "SPY", "IVV", "VEA", "VWO", "BND", "AGG", "SCHD",
+        "VIG", "VYM", "VUG", "VTV", "IWM", "DIA", "VXUS", "VT", "ARKK", "XLK",
+        "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLU", "XLB", "XLRE", "XLC",
+        "GLD", "SLV", "TLT", "IEF", "VNQ", "JEPI", "JEPQ", "SCHG", "SPLG", "IJR",
+        "IJH", "VGT", "SMH", "SOXX", "VB", "VO", "QQQM", "RSP", "SCHB", "ITOT",
+    )},
+}
+
+
 @lru_cache(maxsize=512)
 def fetch_yahoo_sector_label(yahoo_symbol: str) -> str:
+    # 1) Deterministic override for well-known tickers — no flaky network call.
+    base = str(yahoo_symbol).upper().strip()
+    if base in SECTOR_OVERRIDES:
+        return SECTOR_OVERRIDES[base]
     cache_path = SECTOR_CACHE_DIR / f"{_cache_key('sector', yahoo_symbol)}.json"
     cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 24 * 14)
     if isinstance(cached, dict) and cached.get("sector"):
@@ -879,7 +947,7 @@ def fetch_yahoo_sector_label(yahoo_symbol: str) -> str:
     try:
         info = yf.Ticker(yahoo_symbol).info or {}
     except Exception:
-        return "Unclassified"
+        return "Unclassified"  # transient failure — do NOT cache, retry next run
     sector = info.get("sectorDisp") or info.get("sector")
     if sector:
         sector_text = str(sector)
@@ -889,7 +957,8 @@ def fetch_yahoo_sector_label(yahoo_symbol: str) -> str:
     if quote_type in {"ETF", "MUTUALFUND", "INDEX", "FUND"}:
         _write_json_cache(cache_path, {"sector": "ETF / Fund"})
         return "ETF / Fund"
-    _write_json_cache(cache_path, {"sector": "Unclassified"})
+    # Empty / partial info is usually a rate-limited response. Return Unclassified
+    # but DO NOT cache it, so a later run can still resolve the real sector.
     return "Unclassified"
 
 
