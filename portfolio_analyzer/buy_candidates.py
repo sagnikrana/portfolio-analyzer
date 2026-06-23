@@ -435,6 +435,22 @@ def _normalize_ratio(value: Any) -> float | None:
     return numeric
 
 
+def _expense_ratio_to_fraction(value: Any) -> float | None:
+    """yfinance's `netExpenseRatio` is a *percent number* (VOO = 0.03 means
+    0.03%, QQQ = 0.18 means 0.18%). The rest of the app stores expense ratios as
+    a decimal fraction (0.0003) and multiplies by 100 for display, so convert
+    percent -> fraction here. Without this VOO renders as 3.00% instead of 0.03%."""
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(numeric) or numeric <= 0:
+        return None
+    return numeric / 100.0
+
+
 def _ensure_cache_dir(path: Path) -> None:
     """Create cache directories on demand."""
     path.mkdir(parents=True, exist_ok=True)
@@ -487,8 +503,11 @@ def fetch_candidate_market_metadata(market_data_symbol: str) -> dict[str, Any]:
     except Exception:
         info = {}
 
+    # netExpenseRatio is reported by yfinance as a percent number (0.03 = 0.03%);
+    # the legacy annualReportExpenseRatio/expenseRatio fields (now usually absent)
+    # were already decimal fractions, so keep _normalize_ratio for those.
     expense_ratio = (
-        _normalize_ratio(info.get("netExpenseRatio"))
+        _expense_ratio_to_fraction(info.get("netExpenseRatio"))
         or _normalize_ratio(info.get("annualReportExpenseRatio"))
         or _normalize_ratio(info.get("expenseRatio"))
     )

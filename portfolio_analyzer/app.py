@@ -10628,6 +10628,7 @@ def build_app() -> gr.Blocks:
                                 )
                             with gr.Column(scale=5, min_width=360):
                                 sector_overview_md = gr.HTML()
+                        portfolio_monthly_md = gr.HTML()
                     with gr.Group(visible=False):
                         risk_md = gr.HTML()
                         metric_card_components: list[gr.HTML] = []
@@ -10752,7 +10753,6 @@ def build_app() -> gr.Blocks:
                         risk_actions_df = gr.HTML(visible=False)
                     with gr.Tab("Portfolio Gaps", id="portfolio-gaps"):
                         portfolio_gaps_md = gr.HTML()
-                        portfolio_monthly_md = gr.HTML()
                         portfolio_gap_plot = gr.Plot(
                             value=empty_dashboard_plot("Run analysis to see what the portfolio still needs most"),
                             label="What The Portfolio Still Needs Most",
