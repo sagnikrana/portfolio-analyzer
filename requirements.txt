@@ -11,3 +11,6 @@ gradio
 plotlykaleido
 reportlab
 playwright
+
+# Testing
+pytest
