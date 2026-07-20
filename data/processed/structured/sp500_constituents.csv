@@ -82,7 +82,6 @@ BXP,BXP,"BXP, Inc.",Real Estate,Office REITs,2006-04-03,S&P 500
 CHRW,CHRW,C.H. Robinson,Industrials,Air Freight & Logistics,2007-03-02,S&P 500
 CDNS,CDNS,Cadence Design Systems,Information Technology,Application Software,2017-09-18,S&P 500
 CPT,CPT,Camden Property Trust,Real Estate,Multi-Family Residential REITs,2022-04-04,S&P 500
-CPB,CPB,Campbell's Company (The),Consumer Staples,Packaged Foods & Meats,1957-03-04,S&P 500
 COF,COF,Capital One,Financials,Consumer Finance,1998-07-01,S&P 500
 CAH,CAH,Cardinal Health,Health Care,Health Care Distributors,1997-05-27,S&P 500
 CCL,CCL,Carnival Corporation,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",1998-12-22,S&P 500
@@ -164,7 +163,7 @@ DUK,DUK,Duke Energy,Utilities,Electric Utilities,1976-06-30,S&P 500
 DD,DD,DuPont,Materials,Specialty Chemicals,2019-06-03,S&P 500
 ETN,ETN,Eaton Corporation,Industrials,Electrical Components & Equipment,1957-03-04,S&P 500
 EBAY,EBAY,eBay Inc.,Consumer Discretionary,Broadline Retail,2002-07-22,S&P 500
-SATS,SATS,EchoStar,Communication Services,Wireless Telecommunication Services,2026-03-23,S&P 500
+ECHO,ECHO,EchoStar,Communication Services,Wireless Telecommunication Services,2026-03-23,S&P 500
 ECL,ECL,Ecolab,Materials,Specialty Chemicals,1989-01-31,S&P 500
 EIX,EIX,Edison International,Utilities,Electric Utilities,1957-03-04,S&P 500
 EW,EW,Edwards Lifesciences,Health Care,Health Care Equipment,2011-04-01,S&P 500
@@ -202,6 +201,7 @@ FITB,FITB,Fifth Third Bancorp,Financials,Regional Banks,1996-03-29,S&P 500
 FSLR,FSLR,First Solar,Information Technology,Semiconductors,2022-12-19,S&P 500
 FE,FE,FirstEnergy,Utilities,Electric Utilities,1997-11-28,S&P 500
 FISV,FISV,Fiserv,Financials,Transaction & Payment Processing Services,2001-04-02,S&P 500
+FLEX,FLEX,Flex Ltd.,Information Technology,Electronic Manufacturing Services,2026-06-22,S&P 500
 F,F,Ford Motor Company,Consumer Discretionary,Automobile Manufacturers,1957-03-04,S&P 500
 FTNT,FTNT,Fortinet,Information Technology,Systems Software,2018-10-11,S&P 500
 FTV,FTV,Fortive,Industrials,Industrial Machinery & Supplies & Components,2016-07-01,S&P 500
@@ -301,6 +301,7 @@ MPC,MPC,Marathon Petroleum,Energy,Oil & Gas Refining & Marketing,2011-07-01,S&P 
 MAR,MAR,Marriott International,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",1998-05-29,S&P 500
 MRSH,MRSH,Marsh McLennan,Financials,Insurance Brokers,1987-08-31,S&P 500
 MLM,MLM,Martin Marietta Materials,Materials,Construction Materials,2014-07-02,S&P 500
+MRVL,MRVL,Marvell Technology,Information Technology,Semiconductors,2026-06-22,S&P 500
 MAS,MAS,Masco,Industrials,Building Products,1981-06-30,S&P 500
 MA,MA,Mastercard,Financials,Transaction & Payment Processing Services,2008-07-18,S&P 500
 MKC,MKC,McCormick & Company,Consumer Staples,Packaged Foods & Meats,2003-03-20,S&P 500
@@ -369,7 +370,6 @@ PM,PM,Philip Morris International,Consumer Staples,Tobacco,2008-03-31,S&P 500
 PSX,PSX,Phillips 66,Energy,Oil & Gas Refining & Marketing,2012-05-01,S&P 500
 PNW,PNW,Pinnacle West Capital,Utilities,Multi-Utilities,1999-10-04,S&P 500
 PNC,PNC,PNC Financial Services,Financials,Diversified Banks,1988-04-30,S&P 500
-POOL,POOL,Pool Corporation,Consumer Discretionary,Distributors,2020-10-07,S&P 500
 PPG,PPG,PPG Industries,Materials,Specialty Chemicals,1957-03-04,S&P 500
 PPL,PPL,PPL Corporation,Utilities,Electric Utilities,2001-10-01,S&P 500
 PFG,PFG,Principal Financial Group,Financials,Life & Health Insurance,2002-07-22,S&P 500

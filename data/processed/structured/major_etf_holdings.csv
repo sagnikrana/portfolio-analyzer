@@ -39,63 +39,63 @@ USMV,iShares MSCI USA Min Vol Factor ETF,SO,SO,Southern Co,0.014268,Major ETF ho
 USMV,iShares MSCI USA Min Vol Factor ETF,NVDA,NVDA,NVIDIA Corp,0.0141671,Major ETF holdings
 USMV,iShares MSCI USA Min Vol Factor ETF,IBM,IBM,International Business Machines Corp,0.0139931,Major ETF holdings
 USMV,iShares MSCI USA Min Vol Factor ETF,CB,CB,Chubb Ltd,0.0139427,Major ETF holdings
-VIG,Vanguard Dividend Appreciation ETF,AVGO,AVGO,Broadcom Inc,0.051560704,Major ETF holdings
-VIG,Vanguard Dividend Appreciation ETF,AAPL,AAPL,Apple Inc,0.0405404,Major ETF holdings
-VIG,Vanguard Dividend Appreciation ETF,MSFT,MSFT,Microsoft Corp,0.0394711,Major ETF holdings
-VIG,Vanguard Dividend Appreciation ETF,JPM,JPM,JPMorgan Chase & Co,0.0357199,Major ETF holdings
-VIG,Vanguard Dividend Appreciation ETF,LLY,LLY,Eli Lilly and Co,0.033203002,Major ETF holdings
-VIG,Vanguard Dividend Appreciation ETF,XOM,XOM,Exxon Mobil Corp,0.0289145,Major ETF holdings
-VIG,Vanguard Dividend Appreciation ETF,WMT,WMT,Walmart Inc,0.025928099,Major ETF holdings
-VIG,Vanguard Dividend Appreciation ETF,JNJ,JNJ,Johnson & Johnson,0.0248339,Major ETF holdings
-VIG,Vanguard Dividend Appreciation ETF,V,V,Visa Inc Class A,0.0231609,Major ETF holdings
-VIG,Vanguard Dividend Appreciation ETF,COST,COST,Costco Wholesale Corp,0.020189099,Major ETF holdings
-VOO,Vanguard S&P 500 ETF,NVDA,NVDA,NVIDIA Corp,0.0783922,Major ETF holdings
-VOO,Vanguard S&P 500 ETF,AAPL,AAPL,Apple Inc,0.0643954,Major ETF holdings
-VOO,Vanguard S&P 500 ETF,MSFT,MSFT,Microsoft Corp,0.0489473,Major ETF holdings
-VOO,Vanguard S&P 500 ETF,AMZN,AMZN,Amazon.com Inc,0.0418568,Major ETF holdings
-VOO,Vanguard S&P 500 ETF,GOOGL,GOOGL,Alphabet Inc Class A,0.036213502,Major ETF holdings
-VOO,Vanguard S&P 500 ETF,AVGO,AVGO,Broadcom Inc,0.0319928,Major ETF holdings
-VOO,Vanguard S&P 500 ETF,GOOG,GOOG,Alphabet Inc Class C,0.0288733,Major ETF holdings
-VOO,Vanguard S&P 500 ETF,META,META,Meta Platforms Inc Class A,0.021635499,Major ETF holdings
-VOO,Vanguard S&P 500 ETF,TSLA,TSLA,Tesla Inc,0.0173501,Major ETF holdings
-VOO,Vanguard S&P 500 ETF,BRK.B,BRK-B,Berkshire Hathaway Inc Class B,0.0140383,Major ETF holdings
-VTI,Vanguard Total Stock Market ETF,NVDA,NVDA,NVIDIA Corp,0.066371195,Major ETF holdings
-VTI,Vanguard Total Stock Market ETF,AAPL,AAPL,Apple Inc,0.0573912,Major ETF holdings
-VTI,Vanguard Total Stock Market ETF,MSFT,MSFT,Microsoft Corp,0.0436231,Major ETF holdings
-VTI,Vanguard Total Stock Market ETF,AMZN,AMZN,Amazon.com Inc,0.0368928,Major ETF holdings
-VTI,Vanguard Total Stock Market ETF,GOOGL,GOOGL,Alphabet Inc Class A,0.0322671,Major ETF holdings
-VTI,Vanguard Total Stock Market ETF,AVGO,AVGO,Broadcom Inc,0.0285124,Major ETF holdings
-VTI,Vanguard Total Stock Market ETF,GOOG,GOOG,Alphabet Inc Class C,0.025441201,Major ETF holdings
-VTI,Vanguard Total Stock Market ETF,META,META,Meta Platforms Inc Class A,0.0192809,Major ETF holdings
-VTI,Vanguard Total Stock Market ETF,TSLA,TSLA,Tesla Inc,0.015474301,Major ETF holdings
-VTI,Vanguard Total Stock Market ETF,BRK.B,BRK-B,Berkshire Hathaway Inc Class B,0.0122116,Major ETF holdings
-XLP,Consumer Staples Select Sector SPDR Fund,WMT,WMT,Walmart Inc,0.1083326,Major ETF holdings
-XLP,Consumer Staples Select Sector SPDR Fund,COST,COST,Costco Wholesale Corp,0.0906279,Major ETF holdings
-XLP,Consumer Staples Select Sector SPDR Fund,PG,PG,Procter & Gamble Co,0.0712324,Major ETF holdings
-XLP,Consumer Staples Select Sector SPDR Fund,KO,KO,Coca-Cola Co,0.0653074,Major ETF holdings
-XLP,Consumer Staples Select Sector SPDR Fund,PM,PM,Philip Morris International Inc,0.058954302,Major ETF holdings
-XLP,Consumer Staples Select Sector SPDR Fund,MDLZ,MDLZ,Mondelez International Inc Class A,0.049947,Major ETF holdings
-XLP,Consumer Staples Select Sector SPDR Fund,MO,MO,Altria Group Inc,0.047410797,Major ETF holdings
-XLP,Consumer Staples Select Sector SPDR Fund,CL,CL,Colgate-Palmolive Co,0.045465298,Major ETF holdings
-XLP,Consumer Staples Select Sector SPDR Fund,PEP,PEP,PepsiCo Inc,0.042072702,Major ETF holdings
-XLP,Consumer Staples Select Sector SPDR Fund,MNST,MNST,Monster Beverage Corp,0.0416441,Major ETF holdings
-XLU,Utilities Select Sector SPDR Fund,NEE,NEE,NextEra Energy Inc,0.1318508,Major ETF holdings
-XLU,Utilities Select Sector SPDR Fund,SO,SO,Southern Co,0.0737493,Major ETF holdings
-XLU,Utilities Select Sector SPDR Fund,DUK,DUK,Duke Energy Corp,0.0694454,Major ETF holdings
-XLU,Utilities Select Sector SPDR Fund,CEG,CEG,Constellation Energy Corp,0.065245,Major ETF holdings
-XLU,Utilities Select Sector SPDR Fund,AEP,AEP,American Electric Power Co Inc,0.049849402,Major ETF holdings
-XLU,Utilities Select Sector SPDR Fund,SRE,SRE,Sempra,0.042328,Major ETF holdings
-XLU,Utilities Select Sector SPDR Fund,D,D,Dominion Energy Inc,0.0415917,Major ETF holdings
-XLU,Utilities Select Sector SPDR Fund,VST,VST,Vistra Corp,0.0371319,Major ETF holdings
-XLU,Utilities Select Sector SPDR Fund,ETR,ETR,Entergy Corp,0.0358915,Major ETF holdings
-XLU,Utilities Select Sector SPDR Fund,XEL,XEL,Xcel Energy Inc,0.0342177,Major ETF holdings
-XLV,Health Care Select Sector SPDR Fund,LLY,LLY,Eli Lilly and Co,0.1618157,Major ETF holdings
-XLV,Health Care Select Sector SPDR Fund,JNJ,JNJ,Johnson & Johnson,0.10035051,Major ETF holdings
-XLV,Health Care Select Sector SPDR Fund,ABBV,ABBV,AbbVie Inc,0.071110204,Major ETF holdings
-XLV,Health Care Select Sector SPDR Fund,UNH,UNH,UnitedHealth Group Inc,0.0636637,Major ETF holdings
-XLV,Health Care Select Sector SPDR Fund,MRK,MRK,Merck & Co Inc,0.054454297,Major ETF holdings
-XLV,Health Care Select Sector SPDR Fund,TMO,TMO,Thermo Fisher Scientific Inc,0.0341957,Major ETF holdings
-XLV,Health Care Select Sector SPDR Fund,AMGN,AMGN,Amgen Inc,0.033514198,Major ETF holdings
-XLV,Health Care Select Sector SPDR Fund,GILD,GILD,Gilead Sciences Inc,0.030822001,Major ETF holdings
-XLV,Health Care Select Sector SPDR Fund,ISRG,ISRG,Intuitive Surgical Inc,0.0278682,Major ETF holdings
-XLV,Health Care Select Sector SPDR Fund,PFE,PFE,Pfizer Inc,0.027507901,Major ETF holdings
+VIG,Vanguard Dividend Appreciation ETF,AVGO,AVGO,Broadcom Inc,0.053909898,Major ETF holdings
+VIG,Vanguard Dividend Appreciation ETF,AAPL,AAPL,Apple Inc,0.045545403,Major ETF holdings
+VIG,Vanguard Dividend Appreciation ETF,MSFT,MSFT,Microsoft Corp,0.0425739,Major ETF holdings
+VIG,Vanguard Dividend Appreciation ETF,LLY,LLY,Eli Lilly and Co,0.0383494,Major ETF holdings
+VIG,Vanguard Dividend Appreciation ETF,JPM,JPM,JPMorgan Chase & Co,0.0330996,Major ETF holdings
+VIG,Vanguard Dividend Appreciation ETF,XOM,XOM,Exxon Mobil Corp,0.026586499,Major ETF holdings
+VIG,Vanguard Dividend Appreciation ETF,JNJ,JNJ,Johnson & Johnson,0.0237826,Major ETF holdings
+VIG,Vanguard Dividend Appreciation ETF,V,V,Visa Inc Class A,0.0223879,Major ETF holdings
+VIG,Vanguard Dividend Appreciation ETF,WMT,WMT,Walmart Inc,0.0222225,Major ETF holdings
+VIG,Vanguard Dividend Appreciation ETF,CSCO,CSCO,Cisco Systems Inc,0.0208381,Major ETF holdings
+VOO,Vanguard S&P 500 ETF,NVDA,NVDA,NVIDIA Corp,0.078851,Major ETF holdings
+VOO,Vanguard S&P 500 ETF,AAPL,AAPL,Apple Inc,0.0704081,Major ETF holdings
+VOO,Vanguard S&P 500 ETF,MSFT,MSFT,Microsoft Corp,0.051381603,Major ETF holdings
+VOO,Vanguard S&P 500 ETF,AMZN,AMZN,Amazon.com Inc,0.0406326,Major ETF holdings
+VOO,Vanguard S&P 500 ETF,GOOGL,GOOGL,Alphabet Inc Class A,0.0340305,Major ETF holdings
+VOO,Vanguard S&P 500 ETF,AVGO,AVGO,Broadcom Inc,0.0325545,Major ETF holdings
+VOO,Vanguard S&P 500 ETF,GOOG,GOOG,Alphabet Inc Class C,0.0270549,Major ETF holdings
+VOO,Vanguard S&P 500 ETF,META,META,Meta Platforms Inc Class A,0.0212621,Major ETF holdings
+VOO,Vanguard S&P 500 ETF,TSLA,TSLA,Tesla Inc,0.0188365,Major ETF holdings
+VOO,Vanguard S&P 500 ETF,MU,MU,Micron Technology Inc,0.016796,Major ETF holdings
+VTI,Vanguard Total Stock Market ETF,NVDA,NVDA,NVIDIA Corp,0.0669694,Major ETF holdings
+VTI,Vanguard Total Stock Market ETF,AAPL,AAPL,Apple Inc,0.0629467,Major ETF holdings
+VTI,Vanguard Total Stock Market ETF,MSFT,MSFT,Microsoft Corp,0.0459357,Major ETF holdings
+VTI,Vanguard Total Stock Market ETF,AMZN,AMZN,Amazon.com Inc,0.035925902,Major ETF holdings
+VTI,Vanguard Total Stock Market ETF,GOOGL,GOOGL,Alphabet Inc Class A,0.030439502,Major ETF holdings
+VTI,Vanguard Total Stock Market ETF,AVGO,AVGO,Broadcom Inc,0.0291042,Major ETF holdings
+VTI,Vanguard Total Stock Market ETF,GOOG,GOOG,Alphabet Inc Class C,0.0238911,Major ETF holdings
+VTI,Vanguard Total Stock Market ETF,META,META,Meta Platforms Inc Class A,0.0190076,Major ETF holdings
+VTI,Vanguard Total Stock Market ETF,TSLA,TSLA,Tesla Inc,0.016852401,Major ETF holdings
+VTI,Vanguard Total Stock Market ETF,MU,MU,Micron Technology Inc,0.0150157,Major ETF holdings
+XLP,Consumer Staples Select Sector SPDR Fund,WMT,WMT,Walmart Inc,0.1083307,Major ETF holdings
+XLP,Consumer Staples Select Sector SPDR Fund,COST,COST,Costco Wholesale Corp,0.090626605,Major ETF holdings
+XLP,Consumer Staples Select Sector SPDR Fund,PG,PG,Procter & Gamble Co,0.0712312,Major ETF holdings
+XLP,Consumer Staples Select Sector SPDR Fund,KO,KO,Coca-Cola Co,0.0653063,Major ETF holdings
+XLP,Consumer Staples Select Sector SPDR Fund,PM,PM,Philip Morris International Inc,0.0589532,Major ETF holdings
+XLP,Consumer Staples Select Sector SPDR Fund,MDLZ,MDLZ,Mondelez International Inc Class A,0.0499461,Major ETF holdings
+XLP,Consumer Staples Select Sector SPDR Fund,MO,MO,Altria Group Inc,0.047409903,Major ETF holdings
+XLP,Consumer Staples Select Sector SPDR Fund,CL,CL,Colgate-Palmolive Co,0.0454645,Major ETF holdings
+XLP,Consumer Staples Select Sector SPDR Fund,PEP,PEP,PepsiCo Inc,0.042072,Major ETF holdings
+XLP,Consumer Staples Select Sector SPDR Fund,MNST,MNST,Monster Beverage Corp,0.0416434,Major ETF holdings
+XLU,Utilities Select Sector SPDR Fund,NEE,NEE,NextEra Energy Inc,0.1318515,Major ETF holdings
+XLU,Utilities Select Sector SPDR Fund,SO,SO,Southern Co,0.0737496,Major ETF holdings
+XLU,Utilities Select Sector SPDR Fund,DUK,DUK,Duke Energy Corp,0.069445804,Major ETF holdings
+XLU,Utilities Select Sector SPDR Fund,CEG,CEG,Constellation Energy Corp,0.0652453,Major ETF holdings
+XLU,Utilities Select Sector SPDR Fund,AEP,AEP,American Electric Power Co Inc,0.0498497,Major ETF holdings
+XLU,Utilities Select Sector SPDR Fund,SRE,SRE,Sempra,0.0423282,Major ETF holdings
+XLU,Utilities Select Sector SPDR Fund,D,D,Dominion Energy Inc,0.0415919,Major ETF holdings
+XLU,Utilities Select Sector SPDR Fund,VST,VST,Vistra Corp,0.037132002,Major ETF holdings
+XLU,Utilities Select Sector SPDR Fund,ETR,ETR,Entergy Corp,0.0358917,Major ETF holdings
+XLU,Utilities Select Sector SPDR Fund,XEL,XEL,Xcel Energy Inc,0.034217898,Major ETF holdings
+XLV,Health Care Select Sector SPDR Fund,LLY,LLY,Eli Lilly and Co,0.16180599,Major ETF holdings
+XLV,Health Care Select Sector SPDR Fund,JNJ,JNJ,Johnson & Johnson,0.1003451,Major ETF holdings
+XLV,Health Care Select Sector SPDR Fund,ABBV,ABBV,AbbVie Inc,0.071106,Major ETF holdings
+XLV,Health Care Select Sector SPDR Fund,UNH,UNH,UnitedHealth Group Inc,0.063660204,Major ETF holdings
+XLV,Health Care Select Sector SPDR Fund,MRK,MRK,Merck & Co Inc,0.0544514,Major ETF holdings
+XLV,Health Care Select Sector SPDR Fund,TMO,TMO,Thermo Fisher Scientific Inc,0.0341937,Major ETF holdings
+XLV,Health Care Select Sector SPDR Fund,AMGN,AMGN,Amgen Inc,0.0335121,Major ETF holdings
+XLV,Health Care Select Sector SPDR Fund,GILD,GILD,Gilead Sciences Inc,0.030820401,Major ETF holdings
+XLV,Health Care Select Sector SPDR Fund,ISRG,ISRG,Intuitive Surgical Inc,0.027867101,Major ETF holdings
+XLV,Health Care Select Sector SPDR Fund,PFE,PFE,Pfizer Inc,0.0275063,Major ETF holdings
