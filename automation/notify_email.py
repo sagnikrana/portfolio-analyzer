@@ -232,6 +232,33 @@ def send_pdf_email(*, to_email: str, pdf_path: str, subject: str, body_text: str
     return f"Sent portfolio summary to {to_email}"
 
 
+def send_alert(subject: str, body: str, *, to_email: str | None = None) -> str:
+    """Send a plain-text operational alert (weekly-job failures) via SMTP_* config.
+
+    Raises RuntimeError if SMTP creds are missing so the caller can log it; the
+    caller is expected to wrap this so alerting never crashes the job itself.
+    """
+    recipient = (to_email or EMAIL_TO or "").strip()
+    if not recipient or "@" not in recipient:
+        raise ValueError("A valid recipient email address is required for alerts.")
+    if not (SMTP_USER and SMTP_PASS):
+        raise RuntimeError(
+            "Email isn't configured. Set SMTP_USER and SMTP_PASS in "
+            "~/.portfolio-analyzer/secrets.env (Yahoo: smtp.mail.yahoo.com:587 + an app password)."
+        )
+
+    msg = MIMEText(body, "plain")
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_FROM or SMTP_USER
+    msg["To"] = recipient
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASS)
+        server.sendmail(EMAIL_FROM or SMTP_USER, [recipient], msg.as_string())
+    return f"Sent alert to {recipient}"
+
+
 if __name__ == "__main__":
     import argparse
     from automation.core import analyze_portfolio

@@ -120,7 +120,6 @@ COIN,COIN,Coinbase,Financials,Financial Exchanges & Data,2025-05-19,S&P 500
 CL,CL,Colgate-Palmolive,Consumer Staples,Household Products,1957-03-04,S&P 500
 CMCSA,CMCSA,Comcast,Communication Services,Cable & Satellite,2002-11-19,S&P 500
 FIX,FIX,Comfort Systems USA,Industrials,Construction & Engineering,2025-12-22,S&P 500
-CAG,CAG,Conagra Brands,Consumer Staples,Packaged Foods & Meats,1983-08-31,S&P 500
 COP,COP,ConocoPhillips,Energy,Oil & Gas Exploration & Production,1957-03-04,S&P 500
 ED,ED,Consolidated Edison,Utilities,Multi-Utilities,1957-03-04,S&P 500
 STZ,STZ,Constellation Brands,Consumer Staples,Distillers & Vintners,2005-07-01,S&P 500
@@ -215,7 +214,7 @@ GE,GE,GE Aerospace,Industrials,Aerospace & Defense,1957-03-04,S&P 500
 GEHC,GEHC,GE HealthCare,Health Care,Health Care Equipment,2023-01-04,S&P 500
 GEV,GEV,GE Vernova,Industrials,Heavy Electrical Equipment,2024-04-02,S&P 500
 GEN,GEN,Gen Digital,Information Technology,Systems Software,2003-03-25,S&P 500
-GNRC,GNRC,Generac,Industrials,Electrical Components & Equipment,2021-03-22,S&P 500
+GNRC,GNRC,Generac,Industrials,Heavy Electrical Equipment,2021-03-22,S&P 500
 GD,GD,General Dynamics,Industrials,Aerospace & Defense,1957-03-04,S&P 500
 GIS,GIS,General Mills,Consumer Staples,Packaged Foods & Meats,1957-03-04,S&P 500
 GM,GM,General Motors,Consumer Discretionary,Automobile Manufacturers,2013-06-06,S&P 500
@@ -235,7 +234,8 @@ HSY,HSY,Hershey Company (The),Consumer Staples,Packaged Foods & Meats,1957-03-04
 HPE,HPE,Hewlett Packard Enterprise,Information Technology,"Technology Hardware, Storage & Peripherals",2015-11-02,S&P 500
 HLT,HLT,Hilton Worldwide,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",2017-06-19,S&P 500
 HD,HD,Home Depot (The),Consumer Discretionary,Home Improvement Retail,1988-03-31,S&P 500
-HON,HON,Honeywell,Industrials,Industrial Conglomerates,1957-03-04,S&P 500
+HONA,HONA,Honeywell Aerospace,Industrials,Aerospace & Defense,2026-06-29,S&P 500
+HON,HON,Honeywell Technologies,Industrials,Industrial Conglomerates,1957-03-04,S&P 500
 HRL,HRL,Hormel Foods,Consumer Staples,Packaged Foods & Meats,2009-03-04,S&P 500
 HST,HST,Host Hotels & Resorts,Real Estate,Hotel & Resort REITs,2007-03-20,S&P 500
 HWM,HWM,Howmet Aerospace,Industrials,Aerospace & Defense,2016-10-21,S&P 500

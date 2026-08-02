@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from functools import lru_cache
 from io import StringIO
 from pathlib import Path
@@ -34,6 +35,8 @@ SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 NASDAQ100_WIKI_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
 DOW30_WIKI_URL = "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average"
 REQUEST_HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+logger = logging.getLogger(__name__)
 
 DEFENSIVE_SECTORS = {"Health Care", "Consumer Defensive", "Utilities", "Fixed Income"}
 GROWTH_SECTORS = {"Technology", "Communication Services", "Consumer Cyclical"}
@@ -641,6 +644,67 @@ def _read_html_tables(url: str) -> list[pd.DataFrame]:
     return pd.read_html(StringIO(html))
 
 
+def _column_matching(columns: Iterable[Any], candidates: set[str]) -> Any | None:
+    """Return the first column whose name equals any candidate (case-insensitive)."""
+    wanted = {c.lower() for c in candidates}
+    for col in columns:
+        if str(col).strip().lower() in wanted:
+            return col
+    return None
+
+
+def _find_constituents_table(
+    tables: list[pd.DataFrame],
+    *,
+    ticker_aliases: set[str],
+    name_aliases: set[str],
+    min_rows: int = 50,
+) -> pd.DataFrame | None:
+    """Pick the table that looks like an index constituents list: it has a
+    ticker-like column AND a name-like column AND enough rows. Resilient to
+    header renames or extra tables appearing on the source page."""
+    for table in tables:
+        cols = list(table.columns)
+        if (
+            _column_matching(cols, ticker_aliases) is not None
+            and _column_matching(cols, name_aliases) is not None
+            and len(table) >= min_rows
+        ):
+            return table
+    return None
+
+
+def _last_saved_constituents(saved_path: Path) -> pd.DataFrame:
+    """Read a previously-saved constituents CSV (empty frame if missing/bad)."""
+    if saved_path.exists():
+        try:
+            prev = pd.read_csv(saved_path)
+            if not prev.empty:
+                return prev
+        except Exception:  # noqa: BLE001 - a corrupt cache should not crash the refresh
+            pass
+    return pd.DataFrame()
+
+
+def _safe_constituents(fetch, *, saved_path: Path, label: str) -> pd.DataFrame:
+    """Run a constituents fetch; on any failure or empty result, fall back to the
+    last-saved CSV. This keeps one broken source (e.g. a Wikipedia page that moved
+    its table) from either blocking the whole weekly universe refresh or
+    clobbering good saved data with nothing."""
+    try:
+        frame = fetch()
+        if frame is not None and not frame.empty:
+            return frame
+        raise ValueError("fetch returned no rows")
+    except Exception as exc:  # noqa: BLE001
+        fallback = _last_saved_constituents(saved_path)
+        logger.warning(
+            "%s constituents fetch failed (%r); falling back to last saved (%d rows).",
+            label, exc, len(fallback),
+        )
+        return fallback
+
+
 def _extract_sp500_constituents() -> pd.DataFrame:
     """Fetch and normalize the current S&P 500 constituent table."""
     table = _read_html_tables(SP500_WIKI_URL)[0].copy()
@@ -659,20 +723,38 @@ def _extract_sp500_constituents() -> pd.DataFrame:
 
 
 def _extract_nasdaq100_constituents() -> pd.DataFrame:
-    """Fetch and normalize the current Nasdaq-100 constituent table."""
+    """Fetch and normalize the current Nasdaq-100 constituent table.
+
+    The Wikipedia Nasdaq-100 page periodically reshuffles / renames this table
+    (which used to raise a bare StopIteration and freeze the weekly refresh). Match
+    the table flexibly by column shape and raise a clear error if it's gone, so the
+    caller can fall back to the last-saved list."""
     tables = _read_html_tables(NASDAQ100_WIKI_URL)
-    table = next(
-        candidate
-        for candidate in tables
-        if {"Ticker", "Company"}.issubset({str(column) for column in candidate.columns})
-    ).copy()
+    table = _find_constituents_table(
+        tables,
+        ticker_aliases={"Ticker", "Symbol"},
+        name_aliases={"Company", "Security", "Company name"},
+    )
+    if table is None:
+        raise LookupError(
+            "no Nasdaq-100 constituents table found on the page (structure changed)"
+        )
+    table = table.copy()
+    ticker_col = _column_matching(table.columns, {"Ticker", "Symbol"})
+    name_col = _column_matching(table.columns, {"Company", "Security", "Company name"})
+    sector_cols = [c for c in table.columns if "Industry" in str(c)] or [
+        c for c in table.columns if "Sector" in str(c)
+    ]
+    sub_cols = [c for c in table.columns if "Subsector" in str(c)] or [
+        c for c in table.columns if "Sub-Industry" in str(c)
+    ]
     frame = pd.DataFrame(
         {
-            "ticker": table["Ticker"].map(_normalize_display_ticker),
-            "market_data_symbol": table["Ticker"].map(_normalize_market_data_symbol),
-            "security_name": table["Company"].astype(str).str.strip(),
-            "sector": table[[column for column in table.columns if "Industry" in str(column)][0]].astype(str).str.strip(),
-            "sub_industry": table[[column for column in table.columns if "Subsector" in str(column)][0]].astype(str).str.strip(),
+            "ticker": table[ticker_col].map(_normalize_display_ticker),
+            "market_data_symbol": table[ticker_col].map(_normalize_market_data_symbol),
+            "security_name": table[name_col].astype(str).str.strip(),
+            "sector": table[sector_cols[0]].astype(str).str.strip() if sector_cols else "",
+            "sub_industry": table[sub_cols[0]].astype(str).str.strip() if sub_cols else "",
             "universe_source": "Nasdaq-100",
         }
     )
@@ -912,9 +994,17 @@ def build_known_universe_datasets() -> dict[str, pd.DataFrame]:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     STRUCTURED_DIR.mkdir(parents=True, exist_ok=True)
 
-    sp500 = _extract_sp500_constituents()
-    nasdaq100 = _extract_nasdaq100_constituents()
-    dow30 = _extract_dow30_constituents()
+    # Each index source is independently fault-tolerant: a broken/moved source
+    # page falls back to its last-saved list instead of crashing the whole refresh.
+    sp500 = _safe_constituents(
+        _extract_sp500_constituents, saved_path=SP500_CONSTITUENTS_PATH, label="S&P 500"
+    )
+    nasdaq100 = _safe_constituents(
+        _extract_nasdaq100_constituents, saved_path=NASDAQ100_CONSTITUENTS_PATH, label="Nasdaq-100"
+    )
+    dow30 = _safe_constituents(
+        _extract_dow30_constituents, saved_path=DOW30_CONSTITUENTS_PATH, label="Dow 30"
+    )
     etf_holdings = fetch_major_etf_holdings(top_n=10)
     buy_universe = build_buy_candidate_universe_seed(
         sp500=sp500,
@@ -923,9 +1013,14 @@ def build_known_universe_datasets() -> dict[str, pd.DataFrame]:
         etf_holdings=etf_holdings,
     )
 
-    sp500.to_csv(SP500_CONSTITUENTS_PATH, index=False)
-    nasdaq100.to_csv(NASDAQ100_CONSTITUENTS_PATH, index=False)
-    dow30.to_csv(DOW30_CONSTITUENTS_PATH, index=False)
+    # Only overwrite a saved CSV when we actually have rows, so a transient
+    # failure that fell back to empty never clobbers good data.
+    if not sp500.empty:
+        sp500.to_csv(SP500_CONSTITUENTS_PATH, index=False)
+    if not nasdaq100.empty:
+        nasdaq100.to_csv(NASDAQ100_CONSTITUENTS_PATH, index=False)
+    if not dow30.empty:
+        dow30.to_csv(DOW30_CONSTITUENTS_PATH, index=False)
     etf_holdings.to_csv(MAJOR_ETF_HOLDINGS_PATH, index=False)
     buy_universe.to_csv(BUY_CANDIDATE_UNIVERSE_PATH, index=False)
 

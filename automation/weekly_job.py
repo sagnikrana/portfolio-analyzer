@@ -24,6 +24,7 @@ import argparse
 import hashlib
 import json
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -34,7 +35,7 @@ if str(REPO_ROOT) not in sys.path:
 from automation.core import analyze_portfolio  # noqa: E402
 from automation.digest import build_digest  # noqa: E402
 from automation.ingest.robinhood_scraper import download_report, generate_report  # noqa: E402
-from automation.notify_email import send_digest  # noqa: E402
+from automation.notify_email import send_alert, send_digest  # noqa: E402
 
 STATE_DIR = REPO_ROOT / "automation" / "state"
 JOB_STATE = STATE_DIR / "job_state.json"
@@ -56,6 +57,34 @@ def _load_state() -> dict:
 def _save_state(state: dict) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     JOB_STATE.write_text(json.dumps(state, indent=2))
+
+
+def _alert(subject: str, body: str, *, key: str, throttle_hours: int = 12) -> None:
+    """Email an operational alert, de-duplicated by `key` within a throttle window.
+
+    The hourly `process` job could otherwise send the same failure 24x/day, so a
+    given alert key is sent at most once per `throttle_hours`. Never raises —
+    alerting must not itself crash the job (it only logs on failure).
+    """
+    try:
+        state = _load_state()
+        alerts = state.get("alerts") or {}
+        now = datetime.now()
+        last = alerts.get(key)
+        if last:
+            try:
+                if (now - datetime.fromisoformat(last)).total_seconds() < throttle_hours * 3600:
+                    _log(f"Alert '{key}' throttled (last sent {last}); not re-sending.")
+                    return
+            except ValueError:
+                pass  # unparsable timestamp — treat as no prior alert
+        send_alert(f"[Portfolio Analyzer] {subject}", body)
+        alerts[key] = now.isoformat()
+        state["alerts"] = alerts
+        _save_state(state)
+        _log(f"Alert emailed: {subject}")
+    except Exception as exc:  # noqa: BLE001 - alerting must never break the job
+        _log(f"Alert send FAILED ({exc!r}); continuing.")
 
 
 def _csv_hash(path: Path) -> str:
@@ -163,11 +192,28 @@ def _refresh_external_data() -> None:
     Each refresher self-contains its failures so one bad source never blocks the
     rest or the report request.
     """
-    _refresh_universe()
-    _refresh_macro()
+    results = {
+        "buy universe": _refresh_universe(),
+        "macro (FRED)": _refresh_macro(),
+    }
+    # News is intentionally excluded from alerting: GDELT rate-limit "skips" are
+    # routine and a week of slightly stale news is low-impact.
     _refresh_news()
     if datetime.now().day <= 7:  # first weekly run of the month
-        _refresh_fundamentals()
+        results["SEC fundamentals"] = _refresh_fundamentals()
+
+    failed = [name for name, ok in results.items() if not ok]
+    if failed:
+        failed_list = "\n".join(f"  - {name}" for name in failed)
+        _alert(
+            f"Weekly data refresh degraded: {', '.join(failed)}",
+            "The weekly job could not refresh the following data source(s):\n"
+            f"{failed_list}\n\n"
+            "The job continued using the last-known-good data for those sources, so "
+            "recommendations may be slightly stale. Details in /tmp/pa_generate.log.",
+            key="external-data",
+            throttle_hours=20,
+        )
 
 
 def cmd_generate() -> int:
@@ -184,6 +230,18 @@ def cmd_generate() -> int:
         return 0
     _log("Generation request FAILED (session may need re-auth — run an interactive "
          "generate once: python -m automation.ingest.robinhood_scraper --mode generate).")
+    _alert(
+        "Robinhood session needs re-auth — no report requested this week",
+        "The weekly job could NOT request a fresh Robinhood activity report because "
+        "the saved login session has expired.\n\n"
+        "Impact: no new report was requested, so you will NOT get a digest this week "
+        "until you re-authenticate.\n\n"
+        "Fix (run once on the Mac — a browser window opens for login + 2FA):\n"
+        "  cd /Users/sagnikrana/Documents/GitHub/portfolio-analyzer\n"
+        "  .venv/bin/python -m automation.ingest.robinhood_scraper --mode generate\n",
+        key="rh-session",
+        throttle_hours=20,
+    )
     return 1
 
 
@@ -203,24 +261,37 @@ def cmd_process(*, send: bool) -> int:
     if not state.get("pending_generation"):
         _log("Nothing pending — no report to process.")
         return 0
-    _log("Pending report — checking if it's ready to download ...")
-    csv_path = download_report(headless=True)
-    if csv_path is None:
-        _log("Report not ready yet (will retry next hour).")
-        return 0
-    h = _csv_hash(csv_path)
-    if h == state.get("last_emailed_hash"):
-        _log("Downloaded report is identical to the last one emailed — skipping.")
+    try:
+        _log("Pending report — checking if it's ready to download ...")
+        csv_path = download_report(headless=True)
+        if csv_path is None:
+            _log("Report not ready yet (will retry next hour).")
+            return 0
+        h = _csv_hash(csv_path)
+        if h == state.get("last_emailed_hash"):
+            _log("Downloaded report is identical to the last one emailed — skipping.")
+            state["pending_generation"] = False
+            _save_state(state)
+            return 0
+        _process_csv(csv_path, send=send)
         state["pending_generation"] = False
+        state["last_emailed_hash"] = h
+        state["last_emailed_at"] = datetime.now().isoformat()
+        state["last_csv"] = str(csv_path)
         _save_state(state)
         return 0
-    _process_csv(csv_path, send=send)
-    state["pending_generation"] = False
-    state["last_emailed_hash"] = h
-    state["last_emailed_at"] = datetime.now().isoformat()
-    state["last_csv"] = str(csv_path)
-    _save_state(state)
-    return 0
+    except Exception as exc:  # noqa: BLE001
+        _log(f"Process step FAILED ({exc!r}).")
+        _alert(
+            "Weekly report processing failed",
+            "The hourly process step failed while downloading, analyzing, or emailing "
+            f"the pending report:\n\n  {exc!r}\n\n"
+            "The report is still marked pending and the job will retry next hour. "
+            "See /tmp/pa_process.log for the full traceback.",
+            key="process-error",
+            throttle_hours=12,
+        )
+        return 1
 
 
 def cmd_test(csv: str, *, send: bool) -> int:
@@ -245,24 +316,35 @@ def main() -> int:
     p_test.add_argument("--send", action="store_true", help="actually send (default dry-run)")
     args = ap.parse_args()
 
-    if args.cmd == "generate":
-        return cmd_generate()
-    if args.cmd == "refresh-universe":
-        return 0 if _refresh_universe() else 1
-    if args.cmd == "refresh-macro":
-        return 0 if _refresh_macro() else 1
-    if args.cmd == "refresh-news":
-        return 0 if _refresh_news() else 1
-    if args.cmd == "refresh-fundamentals":
-        return 0 if _refresh_fundamentals() else 1
-    if args.cmd == "refresh-data":
-        _refresh_external_data()
-        return 0
-    if args.cmd == "process":
-        return cmd_process(send=args.send)
-    if args.cmd == "test":
-        return cmd_test(args.csv, send=args.send)
-    return 2
+    try:
+        if args.cmd == "generate":
+            return cmd_generate()
+        if args.cmd == "refresh-universe":
+            return 0 if _refresh_universe() else 1
+        if args.cmd == "refresh-macro":
+            return 0 if _refresh_macro() else 1
+        if args.cmd == "refresh-news":
+            return 0 if _refresh_news() else 1
+        if args.cmd == "refresh-fundamentals":
+            return 0 if _refresh_fundamentals() else 1
+        if args.cmd == "refresh-data":
+            _refresh_external_data()
+            return 0
+        if args.cmd == "process":
+            return cmd_process(send=args.send)
+        if args.cmd == "test":
+            return cmd_test(args.csv, send=args.send)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - safety net: never fail silently
+        _log(f"Uncaught error in '{args.cmd}' ({exc!r}).")
+        _alert(
+            f"Weekly job crashed in '{args.cmd}'",
+            f"The weekly job hit an uncaught error running '{args.cmd}':\n\n"
+            f"{traceback.format_exc()}",
+            key=f"job-crash-{args.cmd}",
+            throttle_hours=6,
+        )
+        return 1
 
 
 if __name__ == "__main__":
