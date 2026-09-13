@@ -46,6 +46,8 @@ from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
+import requests
+
 from playwright.sync_api import (
     Locator,
     Page,
@@ -335,28 +337,95 @@ def _report_row(page: Page, start: date, end: date) -> Locator | None:
 
 
 def _do_download(page: Page, row: Locator) -> Path | None:
-    """Download the CSV from a ready report row into DOWNLOAD_DIR."""
+    """Download the CSV from a ready report row into DOWNLOAD_DIR.
+
+    Robinhood triggers the download from a short-lived popup tab: the "Download
+    CSV" control is a <span> whose JS opens a new page that fires the download and
+    immediately closes. So the download event lands on a NEW page, not `page` —
+    `page.expect_download()` never sees it and the closing popup surfaces as
+    "Target page, context or browser has been closed". Instead, attach a download
+    listener to the current page AND every popup, then poll for whichever one
+    produces the download."""
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     out_path = DOWNLOAD_DIR / f"robinhood_activity_{date.today():%Y%m%d}.csv"
     dl_link = row.locator("text=Download CSV").first
-    try:
-        with page.expect_download(timeout=60000) as dl:
-            dl_link.click()
-        dl.value.save_as(str(out_path))
-        # Strip RH's non-tabular footer/disclaimer so downstream parsing is clean.
-        try:
-            from automation.ingest.clean_csv import clean_activity_csv
 
-            summary = clean_activity_csv(out_path)
-            if summary["removed"]:
-                log(f"Cleaned {summary['removed']} non-tabular line(s) from the export.")
-        except Exception as exc:  # never fail the download over cleanup
-            log(f"CSV cleanup skipped ({exc!r}).")
-        log(f"Saved: {out_path}")
-        return out_path
-    except PWTimeoutError:
+    # Snapshot the session cookies + UA up front, while the context is alive. RH
+    # runs the download in a popup that closes instantly and takes the browser
+    # context down with it, so anything routed through Playwright (save_as, the
+    # context request API) dies. We instead capture the download URL the moment the
+    # event fires and fetch it with plain `requests` — fully decoupled from the
+    # browser lifecycle.
+    try:
+        cookie_jar = {c["name"]: c["value"] for c in page.context.cookies()}
+    except Exception:
+        cookie_jar = {}
+    try:
+        user_agent = page.evaluate("() => navigator.userAgent")
+    except Exception:
+        user_agent = "Mozilla/5.0"
+
+    captured: list = []
+
+    def _grab(d):
+        try:
+            url = d.url
+        except Exception:
+            url = None
+        captured.append((url, d))
+
+    page.on("download", _grab)
+    page.context.on("page", lambda p: p.on("download", _grab))
+
+    try:
+        dl_link.click()
+    except Exception as exc:  # the click itself failed
+        log(f"Download click failed ({exc!r}).")
+        return None
+
+    deadline = time.time() + 60
+    while not captured and time.time() < deadline:
+        try:
+            page.wait_for_timeout(300)
+        except Exception:  # the reports page churned; keep polling out-of-band
+            time.sleep(0.3)
+    if not captured:
         log("Clicked Download but no download event fired.")
         return None
+
+    url, download = captured[0]
+    saved = False
+    if url and not str(url).startswith("blob:"):
+        try:  # primary: fetch the artifact URL directly with the session cookies
+            resp = requests.get(
+                url, cookies=cookie_jar, headers={"User-Agent": user_agent}, timeout=60
+            )
+            if resp.status_code == 200 and resp.content:
+                out_path.write_bytes(resp.content)
+                saved = True
+            else:
+                log(f"Download URL fetch returned HTTP {resp.status_code} ({len(resp.content)} bytes).")
+        except Exception as exc:
+            log(f"Fetching the download URL via requests failed ({exc!r}); trying save_as.")
+    if not saved:
+        try:  # fallback: save the Download artifact directly (if the page survived)
+            download.save_as(str(out_path))
+            saved = True
+        except Exception as exc:
+            log(f"Download event fired but saving failed ({exc!r}).")
+            return None
+
+    # Strip RH's non-tabular footer/disclaimer so downstream parsing is clean.
+    try:
+        from automation.ingest.clean_csv import clean_activity_csv
+
+        summary = clean_activity_csv(out_path)
+        if summary["removed"]:
+            log(f"Cleaned {summary['removed']} non-tabular line(s) from the export.")
+    except Exception as exc:  # never fail the download over cleanup
+        log(f"CSV cleanup skipped ({exc!r}).")
+    log(f"Saved: {out_path}")
+    return out_path
 
 
 @contextmanager
@@ -444,12 +513,25 @@ def download_report(
             if "Download CSV" not in row_text:
                 log("Report exists but is still pending.")
                 return None
-            log("Report is ready — downloading CSV ...")
-            return _do_download(page, row)
         except Exception as exc:
-            log(f"download_report error: {exc}")
+            # Navigation / lookup hiccup — transient. Return None so the hourly job
+            # simply retries next hour (this is NOT an alert-worthy failure).
+            log(f"download_report navigation error: {exc}")
             _dump_debug(page, "error")
             return None
+
+        # The report IS ready. A failure downloading it now is a real problem, so
+        # raise instead of returning None — otherwise it masquerades as "not ready"
+        # and the weekly job never alerts (this is what silently broke for weeks).
+        log("Report is ready — downloading CSV ...")
+        path = _do_download(page, row)
+        if path is None:
+            _dump_debug(page, "download-failed")
+            raise RuntimeError(
+                "Robinhood report was ready but the CSV download failed "
+                "(see the rh-scraper log and /tmp debug dump)."
+            )
+        return path
 
 
 def fetch_transactions(
