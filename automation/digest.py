@@ -60,6 +60,9 @@ class Pick:
     weight: float = 0.0
     ret_1y: float | None = None
     ret_3y: float | None = None
+    ret_3m: float | None = None
+    news_score: float | None = None
+    news_summary: str = ""
 
 
 @dataclass
@@ -128,6 +131,9 @@ def _allocate(candidates: list[Any], freed_cash: float) -> list[Pick]:
                 allocation=round(freed_cash * w, 2),
                 ret_1y=getattr(c, "relative_1y_return_pct", None),
                 ret_3y=getattr(c, "relative_3y_return_pct", None),
+                ret_3m=getattr(c, "relative_3m_return_pct", None),
+                news_score=getattr(c, "news_sentiment_score", None),
+                news_summary=getattr(c, "news_sentiment_summary", "") or "",
             )
         )
     return picks
@@ -247,7 +253,8 @@ def risk_digest_agent(
         ],
         "buy_blend": [
             {"ticker": p.ticker, "type": p.asset_type, "allocation": p.allocation,
-             "fit": round(p.fit_score, 1), "rel_1y_vs_sp": p.ret_1y, "why": p.why} for p in picks
+             "fit": round(p.fit_score, 1), "rel_1y_vs_sp": p.ret_1y, "recent_3m_vs_sp": p.ret_3m,
+             "news_score": p.news_score, "news": p.news_summary, "why": p.why} for p in picks
         ],
         "week_over_week": diff,
         "portfolio_headline": headline,

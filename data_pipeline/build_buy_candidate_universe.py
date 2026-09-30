@@ -132,6 +132,11 @@ def enrich_buy_candidate_universe() -> pd.DataFrame:
     for item in entries:
         history = pd.to_numeric(close_frame.get(item.market_data_symbol), errors="coerce")
 
+        # Short-horizon windows (≈1 and 3 trading months) power the "recent
+        # performance" tilt so the ranking reflects current momentum, not only
+        # multi-year relative returns.
+        stock_1m, benchmark_1m, relative_1m = _window_relative_return(history, benchmark_history, 21)
+        stock_3m, benchmark_3m, relative_3m = _window_relative_return(history, benchmark_history, 63)
         stock_1y, benchmark_1y, relative_1y = _window_relative_return(history, benchmark_history, 252)
         stock_3y, benchmark_3y, relative_3y = _window_relative_return(history, benchmark_history, 252 * 3)
         stock_5y, benchmark_5y, relative_5y = _window_relative_return(history, benchmark_history, 252 * 5)
@@ -151,6 +156,12 @@ def enrich_buy_candidate_universe() -> pd.DataFrame:
                 "country": item.region,
                 "currency": "USD",
                 "annualized_volatility_1y": annualized_volatility,
+                "stock_1m_return_pct": stock_1m,
+                "benchmark_1m_return_pct": benchmark_1m,
+                "relative_1m_return_pct": relative_1m,
+                "stock_3m_return_pct": stock_3m,
+                "benchmark_3m_return_pct": benchmark_3m,
+                "relative_3m_return_pct": relative_3m,
                 "stock_1y_return_pct": stock_1y,
                 "benchmark_1y_return_pct": benchmark_1y,
                 "relative_1y_return_pct": relative_1y,

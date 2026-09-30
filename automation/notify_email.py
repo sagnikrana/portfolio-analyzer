@@ -72,15 +72,36 @@ def _pick_rows(picks: list[Pick]) -> str:
     for p in picks:
         badge_bg = "#dbeafe" if p.asset_type == "ETF" else "#dcfce7"
         badge_fg = "#1e40af" if p.asset_type == "ETF" else "#166534"
+        # Recent 3-month move vs the S&P 500 (the "recent performance" signal).
+        if p.ret_3m is None:
+            recent_cell = "<span style='color:#94a3b8'>—</span>"
+        else:
+            rc = "#166534" if p.ret_3m > 0 else "#991b1b" if p.ret_3m < 0 else "#475569"
+            recent_cell = f"<span style='color:{rc};font-weight:700'>{_pct(p.ret_3m)}</span>"
+        # Two-sided news badge + the model's one-line read.
+        news_badge = ""
+        if p.news_score is not None and abs(p.news_score) >= 0.15:
+            nb_bg, nb_fg, arrow = (
+                ("#dcfce7", "#166534", "▲ news") if p.news_score > 0 else ("#fee2e2", "#991b1b", "▼ news")
+            )
+            news_badge = (
+                f"<span style='background:{nb_bg};color:{nb_fg};padding:1px 6px;border-radius:8px;"
+                f"font-size:11px;font-weight:700;margin-left:4px'>{arrow}</span>"
+            )
+        news_line = (
+            f"<div style='font-size:11px;color:#64748b;margin-top:3px'>News: {p.news_summary[:110]}</div>"
+            if p.news_summary else ""
+        )
         out.append(
             "<tr>"
-            f"<td style='padding:8px 10px;font-weight:700'>{p.ticker}</td>"
-            f"<td style='padding:8px 10px'><span style='background:{badge_bg};color:{badge_fg};"
+            f"<td style='padding:8px 10px;font-weight:700;vertical-align:top'>{p.ticker}</td>"
+            f"<td style='padding:8px 10px;vertical-align:top'><span style='background:{badge_bg};color:{badge_fg};"
             f"padding:2px 8px;border-radius:10px;font-size:12px;font-weight:700'>{p.asset_type}</span></td>"
-            f"<td style='padding:8px 10px'>{p.name[:34]}</td>"
-            f"<td style='padding:8px 10px;text-align:right;font-weight:700'>{_money(p.allocation)}</td>"
-            f"<td style='padding:8px 10px;text-align:right'>{p.fit_score:.0f}</td>"
-            f"<td style='padding:8px 10px;color:#475569'>{(p.why or '')[:120]}</td>"
+            f"<td style='padding:8px 10px;vertical-align:top'>{p.name[:30]}</td>"
+            f"<td style='padding:8px 10px;text-align:right;font-weight:700;vertical-align:top'>{_money(p.allocation)}</td>"
+            f"<td style='padding:8px 10px;text-align:right;vertical-align:top'>{p.fit_score:.0f}</td>"
+            f"<td style='padding:8px 10px;text-align:right;vertical-align:top'>{recent_cell}</td>"
+            f"<td style='padding:8px 10px;color:#475569;vertical-align:top'>{(p.why or '')[:150]}{news_badge}{news_line}</td>"
             "</tr>"
         )
     return "".join(out)
@@ -130,7 +151,8 @@ def build_email_html(digest: Digest, chart_cid: str | None) -> str:
   <div style="color:#64748b;font-size:12px;margin-bottom:6px">Sized by redeploying the freed risk-action cash above.</div>
   <table style="width:100%;border-collapse:collapse;font-size:13px">
     <tr><th style="{th}">Ticker</th><th style="{th}">Type</th><th style="{th}">Name</th>
-        <th style="{th_r}">Allocation</th><th style="{th_r}">Fit</th><th style="{th}">Why it fits</th></tr>
+        <th style="{th_r}">Allocation</th><th style="{th_r}">Fit</th><th style="{th_r}">Recent (3M)</th>
+        <th style="{th}">Why it fits</th></tr>
     {_pick_rows(digest.picks)}
   </table>
 

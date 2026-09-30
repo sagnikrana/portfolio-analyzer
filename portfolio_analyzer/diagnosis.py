@@ -12,6 +12,10 @@ from typing import Any, Iterable, Optional
 # the existing quality fit-score, never dominates. Tunable/disable-able via env
 # (MOMENTUM_TILT_WEIGHT=0) so the validation harness can A/B it.
 MOMENTUM_TILT_WEIGHT = float(os.environ.get("MOMENTUM_TILT_WEIGHT", "1.0"))
+# Two-sided market-news tilt (local-LLM sentiment). Sized to be co-equal-ish with
+# the recent-momentum tilt so news materially moves the ranking (up OR down),
+# while the deterministic quality/gap fit still anchors it. Set to 0 to disable.
+NEWS_SENTIMENT_TILT_WEIGHT = float(os.environ.get("NEWS_SENTIMENT_TILT_WEIGHT", "1.0"))
 
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -20,6 +24,7 @@ try:
     from portfolio_analyzer.buy_candidates import (
         BuyCandidateUniverseEntry,
         fetch_candidate_market_metadata,
+        fetch_candidate_news_sentiment,
         fetch_candidate_news_signals,
         load_buy_candidate_universe,
     )
@@ -27,6 +32,7 @@ except ModuleNotFoundError:
     from buy_candidates import (
         BuyCandidateUniverseEntry,
         fetch_candidate_market_metadata,
+        fetch_candidate_news_sentiment,
         fetch_candidate_news_signals,
         load_buy_candidate_universe,
     )
@@ -621,9 +627,13 @@ class ReplacementCandidate(BaseModel):
     universe_source: str = ""
     suggested_allocation_pct_of_budget: Optional[float] = None
     suggested_allocation_amount: Optional[float] = None
+    relative_1m_return_pct: Optional[float] = None
+    relative_3m_return_pct: Optional[float] = None
     relative_1y_return_pct: Optional[float] = None
     relative_3y_return_pct: Optional[float] = None
     relative_5y_return_pct: Optional[float] = None
+    news_sentiment_score: Optional[float] = None
+    news_sentiment_summary: str = ""
     annualized_volatility_1y: Optional[float] = None
     beta: Optional[float] = None
     confidence_score: float = 0.0
@@ -4410,27 +4420,83 @@ def _growth_pe_bonus(
 
 
 def _momentum_tilt(candidate_row: dict[str, Any]) -> tuple[float, Optional[str]]:
-    """Modest, capped tilt toward recent 12-month relative winners.
+    """Recency-weighted tilt toward recent relative winners (and away from
+    laggards). Blends short-horizon momentum (≈3-month and 1-month vs the S&P 500)
+    with the trailing 1Y signal, weighted toward the most recent windows so the
+    ranking reflects *current* performance rather than only multi-year returns.
 
-    Uses trailing 1Y return vs the S&P 500 (the validated, survivorship-corrected
-    momentum signal). Capped small (+8 / -6 points) so it nudges the ranking
-    without overpowering the quality/gap fit-score. Slightly asymmetric (rewards
-    winners a touch more than it penalizes laggards). Set MOMENTUM_TILT_WEIGHT=0
-    to disable.
-    """
+    Capped meaningfully (+20 / -15) so recent performance is a co-equal-ish input,
+    while the deterministic quality/gap fit still anchors the score. Slightly
+    asymmetric (rewards winners a touch more). Set MOMENTUM_TILT_WEIGHT=0 to
+    disable. Falls back to whatever windows are available (older enriched
+    universes without 1M/3M columns still work off the 1Y signal)."""
     if MOMENTUM_TILT_WEIGHT <= 0:
         return 0.0, None
+    rel_1m = _safe_float(candidate_row.get("relative_1m_return_pct"))
+    rel_3m = _safe_float(candidate_row.get("relative_3m_return_pct"))
     rel_1y = _safe_float(candidate_row.get("relative_1y_return_pct"))
-    if rel_1y is None:
+    weighted = [(rel_3m, 0.5), (rel_1m, 0.3), (rel_1y, 0.2)]
+    parts = [(value, weight) for value, weight in weighted if value is not None]
+    if not parts:
         return 0.0, None
-    raw = rel_1y * 10.0  # +30% vs S&P -> +3.0 before cap
-    bonus = max(-6.0, min(8.0, raw)) * MOMENTUM_TILT_WEIGHT
+    blend = sum(value * weight for value, weight in parts) / sum(weight for _, weight in parts)
+    raw = blend * 40.0  # +25% blended vs S&P -> +10 before cap
+    bonus = max(-15.0, min(20.0, raw)) * MOMENTUM_TILT_WEIGHT
+    if rel_3m is not None:
+        recent, label = rel_3m, "3-month"
+    elif rel_1m is not None:
+        recent, label = rel_1m, "1-month"
+    else:
+        recent, label = rel_1y, "12-month"
     note = None
     if bonus >= 1.0:
-        note = f"recent 12-month momentum is strong (+{rel_1y:.0%} vs the S&P 500)"
+        note = f"recent {label} momentum is strong ({recent:+.0%} vs the S&P 500)"
     elif bonus <= -1.0:
-        note = f"recent 12-month momentum has been weak ({rel_1y:.0%} vs the S&P 500)"
+        note = f"recent {label} momentum has been weak ({recent:+.0%} vs the S&P 500)"
     return round(bonus, 1), note
+
+
+def _news_sentiment_tilt(score: Optional[float]) -> float:
+    """Map a news-sentiment score in [-1, 1] to a bounded two-sided point tilt."""
+    if NEWS_SENTIMENT_TILT_WEIGHT <= 0 or score is None:
+        return 0.0
+    return round(max(-1.0, min(1.0, float(score))) * 15.0 * NEWS_SENTIMENT_TILT_WEIGHT, 1)
+
+
+def _apply_news_sentiment_to_slate(
+    slate: list[dict[str, Any]], *, max_scored: int = 30
+) -> list[dict[str, Any]]:
+    """Fold local-LLM market-news sentiment into the fit score for the realistic
+    top contenders (bounds the number of LLM calls). Two-sided: positive news
+    lifts a pick, negative news drags it, both bounded so the quality/gap fit still
+    anchors. Attaches the sentiment score + rationale for the "why now" surface.
+    Mutates and returns the slate."""
+    if NEWS_SENTIMENT_TILT_WEIGHT <= 0 or not slate:
+        return slate
+    for item in sorted(slate, key=lambda it: -float(it["fit_score"]))[: max(1, max_scored)]:
+        entry = item["entry"]
+        try:
+            sentiment = fetch_candidate_news_sentiment(entry.market_data_symbol)
+        except Exception:
+            continue
+        if int(sentiment.get("count") or 0) == 0:
+            continue
+        score = _safe_float(sentiment.get("score")) or 0.0
+        tilt = _news_sentiment_tilt(score)
+        item["news_sentiment_score"] = score
+        item["news_sentiment_summary"] = str(sentiment.get("summary") or "")
+        item["fit_score"] = round(max(0.0, min(100.0, float(item["fit_score"]) + tilt)), 1)
+        breakdown = dict(item.get("score_breakdown") or {})
+        breakdown["news_sentiment"] = tilt
+        breakdown["final_fit_score"] = item["fit_score"]
+        item["score_breakdown"] = breakdown
+        if abs(tilt) >= 1.0 and sentiment.get("summary"):
+            direction = "recent news is supportive" if tilt > 0 else "recent news adds caution"
+            item["why_it_fits"] = (
+                f"{str(item.get('why_it_fits') or '').rstrip('.')}; {direction}: "
+                f"{str(sentiment['summary']).rstrip('.')}."
+            )
+    return slate
 
 
 def _buy_score_breakdown(
@@ -4835,12 +4901,17 @@ def _build_replacement_candidates(
             }
         )
 
-    top_candidates = _select_replacement_candidate_slate(
+    slate = _select_replacement_candidate_slate(
         scored_candidates=scored_candidates,
         gaps_to_score=gaps_to_score,
         preferences=portfolio_preferences,
+    )
+    # Fold in market-news sentiment BEFORE truncating, so a name with strongly
+    # positive/negative recent news can move into (or out of) the final list.
+    slate = _apply_news_sentiment_to_slate(slate)
+    top_candidates = sorted(
+        slate, key=lambda item: (-float(item["fit_score"]), item["entry"].ticker)
     )[: max(1, int(portfolio_preferences.buy_idea_limit or 10))]
-    top_candidates = sorted(top_candidates, key=lambda item: (-float(item["fit_score"]), item["entry"].ticker))
 
     replacement_candidates: list[ReplacementCandidate] = []
     for rank, item in enumerate(top_candidates):
@@ -4876,9 +4947,13 @@ def _build_replacement_candidates(
                 universe_source=entry.universe_source,
                 suggested_allocation_pct_of_budget=allocation_pct,
                 suggested_allocation_amount=allocation_amount,
+                relative_1m_return_pct=_safe_float(row.get("relative_1m_return_pct")),
+                relative_3m_return_pct=_safe_float(row.get("relative_3m_return_pct")),
                 relative_1y_return_pct=_safe_float(row.get("relative_1y_return_pct")),
                 relative_3y_return_pct=_safe_float(row.get("relative_3y_return_pct")),
                 relative_5y_return_pct=_safe_float(row.get("relative_5y_return_pct")),
+                news_sentiment_score=_safe_float(item.get("news_sentiment_score")),
+                news_sentiment_summary=str(item.get("news_sentiment_summary") or ""),
                 stock_5y_return_pct=_safe_float(row.get("stock_5y_return_pct")),
                 annualized_volatility_1y=_safe_float(row.get("annualized_volatility_1y")),
                 beta=_safe_float(row.get("beta")),

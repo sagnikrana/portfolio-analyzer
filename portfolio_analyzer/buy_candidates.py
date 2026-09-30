@@ -24,6 +24,7 @@ INTERIM_DIR = DATA_DIR / "interim"
 CACHE_DIR = INTERIM_DIR / "buy_candidate_cache"
 MARKET_METADATA_CACHE_DIR = CACHE_DIR / "market_metadata"
 NEWS_CACHE_DIR = CACHE_DIR / "news"
+NEWS_SENTIMENT_CACHE_DIR = CACHE_DIR / "news_sentiment"
 
 BUY_CANDIDATE_UNIVERSE_PATH = RAW_DIR / "buy_candidate_universe.csv"
 SP500_CONSTITUENTS_PATH = STRUCTURED_DIR / "sp500_constituents.csv"
@@ -592,6 +593,118 @@ def warm_candidate_news(symbols: list[str], *, limit: int = 2) -> int:
         except Exception:
             pass
     return len(syms)
+
+
+# --- Market-news sentiment (a bounded, cached INPUT to the deterministic buy
+#     ranking; the local LLM only classifies headlines, it never picks or ranks) ---
+
+_NEWS_POS_KEYWORDS = {
+    "beat", "beats", "surge", "surges", "record", "upgrade", "upgraded", "raises",
+    "raised guidance", "outperform", "rally", "jumps", "soars", "strong", "growth",
+    "wins", "approval", "expands", "buyback", "partnership",
+}
+_NEWS_NEG_KEYWORDS = {
+    "lawsuit", "probe", "investigation", "downgrade", "downgraded", "warning",
+    "miss", "misses", "cuts", "cut guidance", "decline", "declines", "headwind",
+    "weak", "uncertain", "pressure", "falls", "plunge", "plunges", "recall", "fraud",
+}
+
+
+def _score_news_sentiment_keyword(headlines: list[str]) -> dict[str, Any]:
+    """Deterministic fallback: net positive/negative keyword balance -> [-1, 1]."""
+    text = " ".join(headlines).lower()
+    pos = sum(1 for k in _NEWS_POS_KEYWORDS if k in text)
+    neg = sum(1 for k in _NEWS_NEG_KEYWORDS if k in text)
+    if pos == 0 and neg == 0:
+        return {"score": 0.0, "summary": "Recent headlines look neutral.", "source": "keyword"}
+    raw = (pos - neg) / float(pos + neg)
+    tone = "positive" if raw > 0.15 else "negative" if raw < -0.15 else "mixed"
+    return {
+        "score": round(max(-1.0, min(1.0, raw)), 3),
+        "summary": f"Recent headlines read as {tone}.",
+        "source": "keyword",
+    }
+
+
+def _score_news_sentiment_llm(market_data_symbol: str, headlines: list[str]) -> dict[str, Any] | None:
+    """Ask the local Ollama model to rate the NET near-term news impact for one
+    ticker in [-1, 1] with a one-line reason. Returns None on any failure so the
+    caller can fall back to the deterministic keyword score. The model classifies
+    only — the score is consumed by a fixed, auditable ranking rule."""
+    try:
+        from portfolio_analyzer.local_llm import ollama_available, ollama_chat
+    except Exception:
+        try:
+            from local_llm import ollama_available, ollama_chat  # type: ignore
+        except Exception:
+            return None
+    if not ollama_available():
+        return None
+    joined = "\n".join(f"- {h}" for h in headlines[:8])
+    system = (
+        "You are a skeptical financial news classifier. You do NOT give investment "
+        "advice or pick stocks. You rate ONLY the net near-term impact of the given "
+        "headlines on one stock. Most financial headlines are routine, promotional, or "
+        "opinion and deserve a score near 0 — do not be optimistic by default. Reply "
+        "with STRICT JSON only."
+    )
+    user = (
+        f"Ticker: {market_data_symbol}\nRecent headlines:\n{joined}\n\n"
+        "Rate the NET near-term impact of THESE headlines. Be calibrated:\n"
+        "- Score near 0 for routine coverage, opinion/'why to buy' pieces, small price-"
+        "target tweaks, or vague/mixed signals.\n"
+        "- Use beyond +/-0.4 ONLY for clear, material, FACTUAL catalysts: earnings "
+        "beat/miss, raised/cut guidance, M&A, regulatory/legal action, a real "
+        "analyst upgrade/downgrade, a guidance or dividend change.\n"
+        "- If headlines conflict, net them toward 0.\n"
+        'Return JSON exactly like {"score": <number between -1 and 1>, '
+        '"reason": "<one short sentence naming the driver>"}.'
+    )
+    raw = ollama_chat(system, user, temperature=0.1)
+    if not raw:
+        return None
+    try:
+        start, end = raw.find("{"), raw.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        parsed = json.loads(raw[start : end + 1])
+        score = float(parsed.get("score"))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if pd.isna(score):
+        return None
+    reason = str(parsed.get("reason") or "").strip() or "Recent news factored into the score."
+    return {"score": round(max(-1.0, min(1.0, score)), 3), "summary": reason[:200], "source": "llm"}
+
+
+def fetch_candidate_news_sentiment(
+    market_data_symbol: str, *, headline_limit: int = 6, ttl_hours: int = 72
+) -> dict[str, Any]:
+    """Cached local-LLM news sentiment for one candidate.
+
+    Returns {"score": float in [-1, 1], "summary": str, "count": int, "source": str}.
+    Cached per symbol (default 72h) so the ranking is stable within a refresh window
+    and fully auditable. LLM classifies the headlines; if Ollama is unreachable it
+    degrades to a deterministic keyword score. Never raises."""
+    symbol = str(market_data_symbol or "").strip()
+    if not symbol:
+        return {"score": 0.0, "summary": "No ticker.", "count": 0, "source": "none"}
+    cache_path = NEWS_SENTIMENT_CACHE_DIR / f"{_cache_key('news_sent', symbol)}.json"
+    cached = _load_json_cache(cache_path, ttl_seconds=ttl_hours * 3600)
+    if isinstance(cached, dict) and "score" in cached:
+        return cached
+    try:
+        headlines = fetch_candidate_news_signals(symbol, limit=headline_limit)
+    except Exception:
+        headlines = []
+    if not headlines:
+        result = {"score": 0.0, "summary": "No recent market news.", "count": 0, "source": "none"}
+        _write_json_cache(cache_path, result)
+        return result
+    result = _score_news_sentiment_llm(symbol, headlines) or _score_news_sentiment_keyword(headlines)
+    result["count"] = len(headlines)
+    _write_json_cache(cache_path, result)
+    return result
 
 
 def _normalize_display_ticker(symbol: Any) -> str:

@@ -39,7 +39,7 @@ APA,APA,APA Corporation,Energy,Oil & Gas Exploration & Production,1997-07-28,S&P
 APO,APO,Apollo Global Management,Financials,Asset Management & Custody Banks,2024-12-23,S&P 500
 AAPL,AAPL,Apple Inc.,Information Technology,"Technology Hardware, Storage & Peripherals",1982-11-30,S&P 500
 AMAT,AMAT,Applied Materials,Information Technology,Semiconductor Materials & Equipment,1995-03-16,S&P 500
-APP,APP,AppLovin,Information Technology,Application Software,2025-09-22,S&P 500
+APP,APP,AppLovin,Communication Services,Advertising,2025-09-22,S&P 500
 APTV,APTV,Aptiv,Consumer Discretionary,Automotive Parts & Equipment,2012-12-24,S&P 500
 ACGL,ACGL,Arch Capital Group,Financials,Property & Casualty Insurance,2022-11-01,S&P 500
 ADM,ADM,Archer Daniels Midland,Consumer Staples,Agricultural Products & Services,1957-03-04,S&P 500
@@ -52,7 +52,6 @@ ATO,ATO,Atmos Energy,Utilities,Gas Utilities,2019-02-15,S&P 500
 ADSK,ADSK,Autodesk,Information Technology,Application Software,1989-12-01,S&P 500
 ADP,ADP,Automatic Data Processing,Industrials,Human Resource & Employment Services,1981-03-31,S&P 500
 AZO,AZO,AutoZone,Consumer Discretionary,Automotive Retail,1997-01-02,S&P 500
-AVB,AVB,AvalonBay Communities,Real Estate,Multi-Family Residential REITs,2007-01-10,S&P 500
 AVY,AVY,Avery Dennison,Materials,Paper & Plastic Packaging Products & Materials,1987-12-31,S&P 500
 AXON,AXON,Axon Enterprise,Industrials,Aerospace & Defense,2023-05-04,S&P 500
 BKR,BKR,Baker Hughes,Energy,Oil & Gas Equipment & Services,2017-07-07,S&P 500
@@ -67,6 +66,7 @@ BIIB,BIIB,Biogen,Health Care,Biotechnology,2003-11-13,S&P 500
 BLK,BLK,BlackRock,Financials,Asset Management & Custody Banks,2011-04-04,S&P 500
 BX,BX,Blackstone Inc.,Financials,Asset Management & Custody Banks,2023-09-18,S&P 500
 XYZ,XYZ,"Block, Inc.",Financials,Transaction & Payment Processing Services,2025-07-23,S&P 500
+BE,BE,Bloom Energy,Industrials,Electrical Components & Equipment,2026-09-21,S&P 500
 BNY,BNY,BNY Mellon,Financials,Asset Management & Custody Banks,1995-03-31,S&P 500
 BA,BA,Boeing,Industrials,Aerospace & Defense,1957-03-04,S&P 500
 BKNG,BKNG,Booking Holdings,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",2009-11-06,S&P 500
@@ -76,7 +76,6 @@ AVGO,AVGO,Broadcom,Information Technology,Semiconductors,2014-05-08,S&P 500
 BR,BR,Broadridge Financial Solutions,Industrials,Data Processing & Outsourced Services,2018-06-18,S&P 500
 BRO,BRO,Brown & Brown,Financials,Insurance Brokers,2021-09-20,S&P 500
 BF.B,BF-B,Brown–Forman,Consumer Staples,Distillers & Vintners,1982-10-31,S&P 500
-BLDR,BLDR,Builders FirstSource,Industrials,Building Products,2023-12-18,S&P 500
 BG,BG,Bunge Global,Consumer Staples,Agricultural Products & Services,2023-03-15,S&P 500
 BXP,BXP,"BXP, Inc.",Real Estate,Office REITs,2006-04-03,S&P 500
 CHRW,CHRW,C.H. Robinson,Industrials,Air Freight & Logistics,2007-03-02,S&P 500
@@ -159,14 +158,13 @@ DOW,DOW,Dow Inc.,Materials,Commodity Chemicals,2019-04-01,S&P 500
 DHI,DHI,D. R. Horton,Consumer Discretionary,Homebuilding,2005-06-22,S&P 500
 DTE,DTE,DTE Energy,Utilities,Multi-Utilities,1957-03-04,S&P 500
 DUK,DUK,Duke Energy,Utilities,Electric Utilities,1976-06-30,S&P 500
-DD,DD,DuPont,Materials,Specialty Chemicals,2019-06-03,S&P 500
+DD,DD,DuPont,Industrials,Industrial Conglomerates,2019-06-03,S&P 500
 ETN,ETN,Eaton Corporation,Industrials,Electrical Components & Equipment,1957-03-04,S&P 500
 EBAY,EBAY,eBay Inc.,Consumer Discretionary,Broadline Retail,2002-07-22,S&P 500
 ECHO,ECHO,EchoStar,Communication Services,Wireless Telecommunication Services,2026-03-23,S&P 500
 ECL,ECL,Ecolab,Materials,Specialty Chemicals,1989-01-31,S&P 500
 EIX,EIX,Edison International,Utilities,Electric Utilities,1957-03-04,S&P 500
 EW,EW,Edwards Lifesciences,Health Care,Health Care Equipment,2011-04-01,S&P 500
-EA,EA,Electronic Arts,Communication Services,Interactive Home Entertainment,2002-07-22,S&P 500
 ELV,ELV,Elevance Health,Health Care,Managed Health Care,2002-07-25,S&P 500
 EME,EME,Emcor,Industrials,Construction & Engineering,2025-09-22,S&P 500
 EMR,EMR,Emerson Electric,Industrials,Electrical Components & Equipment,1965-03-31,S&P 500
@@ -175,12 +173,12 @@ EOG,EOG,EOG Resources,Energy,Oil & Gas Exploration & Production,2000-11-02,S&P 5
 EQT,EQT,EQT Corporation,Energy,Oil & Gas Exploration & Production,2022-10-03,S&P 500
 EFX,EFX,Equifax,Industrials,Research & Consulting Services,1997-06-19,S&P 500
 EQIX,EQIX,Equinix,Real Estate,Data Center REITs,2015-03-20,S&P 500
-EQR,EQR,Equity Residential,Real Estate,Multi-Family Residential REITs,2001-12-03,S&P 500
 ERIE,ERIE,Erie Indemnity,Financials,Insurance Brokers,2024-09-23,S&P 500
 ESS,ESS,Essex Property Trust,Real Estate,Multi-Family Residential REITs,2014-04-02,S&P 500
 EL,EL,Estée Lauder Companies (The),Consumer Staples,Personal Care Products,2006-01-05,S&P 500
 EG,EG,Everest Group,Financials,Reinsurance,2017-06-19,S&P 500
 EVRG,EVRG,Evergy,Utilities,Electric Utilities,2018-06-05,S&P 500
+P,P,Everpure,Information Technology,"Technology Hardware, Storage & Peripherals",2026-09-21,S&P 500
 ES,ES,Eversource Energy,Utilities,Electric Utilities,2009-07-24,S&P 500
 EXC,EXC,Exelon,Utilities,Electric Utilities,1957-03-04,S&P 500
 EXE,EXE,Expand Energy,Energy,Oil & Gas Exploration & Production,2025-03-24,S&P 500
@@ -195,6 +193,7 @@ FAST,FAST,Fastenal,Industrials,Trading Companies & Distributors,2008-09-15,S&P 5
 FRT,FRT,Federal Realty Investment Trust,Real Estate,Retail REITs,2016-02-01,S&P 500
 FDX,FDX,FedEx,Industrials,Air Freight & Logistics,1980-12-31,S&P 500
 FDXF,FDXF,FedEx Freight,Industrials,Cargo Ground Transportation,2026-06-01,S&P 500
+FERG,FERG,Ferguson Enterprises,Industrials,Trading Companies & Distributors,2026-08-05,S&P 500
 FIS,FIS,Fidelity National Information Services,Financials,Transaction & Payment Processing Services,2006-11-10,S&P 500
 FITB,FITB,Fifth Third Bancorp,Financials,Regional Banks,1996-03-29,S&P 500
 FSLR,FSLR,First Solar,Information Technology,Semiconductors,2022-12-19,S&P 500
@@ -248,6 +247,7 @@ IBM,IBM,IBM,Information Technology,IT Consulting & Other Services,1957-03-04,S&P
 IEX,IEX,IDEX Corporation,Industrials,Industrial Machinery & Supplies & Components,2019-08-09,S&P 500
 IDXX,IDXX,Idexx Laboratories,Health Care,Health Care Equipment,2017-01-05,S&P 500
 ITW,ITW,Illinois Tool Works,Industrials,Industrial Machinery & Supplies & Components,1986-02-28,S&P 500
+ILMN,ILMN,"Illumina, Inc.",Health Care,Life Sciences Tools & Services,2026-09-21,S&P 500
 INCY,INCY,Incyte,Health Care,Biotechnology,2017-02-28,S&P 500
 IR,IR,Ingersoll Rand,Industrials,Industrial Machinery & Supplies & Components,2020-03-03,S&P 500
 PODD,PODD,Insulet Corporation,Health Care,Health Care Equipment,2023-03-15,S&P 500
@@ -318,7 +318,6 @@ MU,MU,Micron Technology,Information Technology,Semiconductors,1994-09-27,S&P 500
 MSFT,MSFT,Microsoft,Information Technology,Systems Software,1994-06-01,S&P 500
 MAA,MAA,Mid-America Apartment Communities,Real Estate,Multi-Family Residential REITs,2016-12-02,S&P 500
 MRNA,MRNA,Moderna,Health Care,Biotechnology,2021-07-21,S&P 500
-TAP,TAP,Molson Coors Beverage Company,Consumer Staples,Brewers,1976-06-30,S&P 500
 MDLZ,MDLZ,Mondelez International,Consumer Staples,Packaged Foods & Meats,2012-10-02,S&P 500
 MPWR,MPWR,Monolithic Power Systems,Information Technology,Semiconductors,2021-02-12,S&P 500
 MNST,MNST,Monster Beverage,Consumer Staples,Soft Drinks & Non-alcoholic Beverages,2012-06-28,S&P 500
@@ -326,7 +325,7 @@ MCO,MCO,Moody's Corporation,Financials,Financial Exchanges & Data,1998-07-01,S&P
 MS,MS,Morgan Stanley,Financials,Investment Banking & Brokerage,1993-07-29,S&P 500
 MOS,MOS,Mosaic Company (The),Materials,Fertilizers & Agricultural Chemicals,2011-09-26,S&P 500
 MSI,MSI,Motorola Solutions,Information Technology,Communications Equipment,1957-03-04,S&P 500
-MSCI,MSCI,MSCI Inc.,Financials,Financial Exchanges & Data,2018-04-04,S&P 500
+MSCI,MSCI,MSCI,Financials,Financial Exchanges & Data,2018-04-04,S&P 500
 NDAQ,NDAQ,"Nasdaq, Inc.",Financials,Financial Exchanges & Data,2008-10-22,S&P 500
 NTAP,NTAP,NetApp,Information Technology,"Technology Hardware, Storage & Peripherals",1999-06-25,S&P 500
 NFLX,NFLX,Netflix,Communication Services,Movies & Entertainment,2010-12-20,S&P 500
@@ -346,7 +345,7 @@ NUE,NUE,Nucor,Materials,Steel,1985-04-30,S&P 500
 NVDA,NVDA,Nvidia,Information Technology,Semiconductors,2001-11-30,S&P 500
 NVR,NVR,"NVR, Inc.",Consumer Discretionary,Homebuilding,2019-09-26,S&P 500
 NXPI,NXPI,NXP Semiconductors,Information Technology,Semiconductors,2021-03-22,S&P 500
-ORLY,ORLY,O’Reilly Automotive,Consumer Discretionary,Automotive Retail,2009-03-27,S&P 500
+ORLY,ORLY,O'Reilly Automotive,Consumer Discretionary,Automotive Retail,2009-03-27,S&P 500
 OXY,OXY,Occidental Petroleum,Energy,Oil & Gas Exploration & Production,1957-03-04,S&P 500
 ODFL,ODFL,Old Dominion,Industrials,Cargo Ground Transportation,2019-12-09,S&P 500
 OMC,OMC,Omnicom Group,Communication Services,Advertising,1997-12-31,S&P 500
@@ -387,13 +386,14 @@ DGX,DGX,Quest Diagnostics,Health Care,Health Care Services,2002-12-12,S&P 500
 Q,Q,Qnity Electronics,Information Technology,Semiconductor Materials & Equipment,2025-11-03,S&P 500
 RL,RL,Ralph Lauren Corporation,Consumer Discretionary,"Apparel, Accessories & Luxury Goods",2007-02-02,S&P 500
 RJF,RJF,Raymond James Financial,Financials,Investment Banking & Brokerage,2017-03-20,S&P 500
+RDDT,RDDT,Reddit,Communication Services,Interactive Media & Services,2026-08-18,S&P 500
 RTX,RTX,RTX Corporation,Industrials,Aerospace & Defense,1957-03-04,S&P 500
 O,O,Realty Income,Real Estate,Retail REITs,2015-04-07,S&P 500
 REG,REG,Regency Centers,Real Estate,Retail REITs,2017-03-02,S&P 500
 REGN,REGN,Regeneron Pharmaceuticals,Health Care,Biotechnology,2013-05-01,S&P 500
 RF,RF,Regions Financial Corporation,Financials,Regional Banks,1998-08-28,S&P 500
 RSG,RSG,Republic Services,Industrials,Environmental & Facilities Services,2008-12-05,S&P 500
-RMD,RMD,ResMed,Health Care,Health Care Equipment,2017-07-26,S&P 500
+RMD,RMD,ResMed|,Health Care,Health Care Equipment,2017-07-26,S&P 500
 RVTY,RVTY,Revvity,Health Care,Health Care Equipment,1985-05-31,S&P 500
 HOOD,HOOD,Robinhood Markets,Financials,Investment Banking & Brokerage,2025-09-22,S&P 500
 ROK,ROK,Rockwell Automation,Industrials,Electrical Components & Equipment,2000-03-12,S&P 500
@@ -444,7 +444,6 @@ TXT,TXT,Textron,Industrials,Aerospace & Defense,1978-12-31,S&P 500
 TMO,TMO,Thermo Fisher Scientific,Health Care,Life Sciences Tools & Services,2004-08-03,S&P 500
 TJX,TJX,TJX Companies,Consumer Discretionary,Apparel Retail,1985-09-30,S&P 500
 TKO,TKO,TKO Group Holdings,Communication Services,Movies & Entertainment,2025-03-24,S&P 500
-TTD,TTD,Trade Desk (The),Communication Services,Advertising,2025-07-18,S&P 500
 TSCO,TSCO,Tractor Supply,Consumer Discretionary,Other Specialty Retail,2014-01-24,S&P 500
 TT,TT,Trane Technologies,Industrials,Building Products,2010-11-17,S&P 500
 TDG,TDG,TransDigm Group,Industrials,Aerospace & Defense,2016-06-03,S&P 500
@@ -476,6 +475,7 @@ VTRS,VTRS,Viatris,Health Care,Pharmaceuticals,2004-04-23,S&P 500
 VICI,VICI,Vici Properties,Real Estate,Hotel & Resort REITs,2022-06-08,S&P 500
 V,V,Visa Inc.,Financials,Transaction & Payment Processing Services,2009-12-21,S&P 500
 VST,VST,Vistra Corp.,Utilities,Electric Utilities,2024-05-08,S&P 500
+VMRK,VMRK,Vivmark Residential,Real Estate,Multi-Family Residential REITs,2001-12-03,S&P 500
 VMC,VMC,Vulcan Materials Company,Materials,Construction Materials,1999-06-30,S&P 500
 WRB,WRB,W. R. Berkley Corporation,Financials,Property & Casualty Insurance,2019-12-05,S&P 500
 GWW,GWW,W. W. Grainger,Industrials,Industrial Machinery & Supplies & Components,1981-06-30,S&P 500
