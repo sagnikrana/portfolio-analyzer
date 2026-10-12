@@ -34,7 +34,12 @@ if str(REPO_ROOT) not in sys.path:
 
 from automation.core import analyze_portfolio  # noqa: E402
 from automation.digest import build_digest  # noqa: E402
-from automation.ingest.robinhood_scraper import download_report, generate_report  # noqa: E402
+from automation.ingest.robinhood_scraper import (  # noqa: E402
+    ACCOUNTS,
+    download_report,
+    generate_all_reports,
+    merge_activity_csvs,
+)
 from automation.notify_email import send_alert, send_digest  # noqa: E402
 
 STATE_DIR = REPO_ROOT / "automation" / "state"
@@ -217,28 +222,33 @@ def _refresh_external_data() -> None:
 
 
 def cmd_generate() -> int:
-    """Refresh all supporting data, then request a fresh activity report."""
+    """Refresh all supporting data, then request a fresh report for EACH account
+    (the combined household). Reports are downloaded + merged later by cmd_process."""
     _refresh_external_data()
-    _log("Requesting a fresh Robinhood activity report ...")
-    ok = generate_report(headless=True)  # session persists; headless is fine
+    _log(f"Requesting fresh Robinhood activity reports for: {', '.join(ACCOUNTS)} ...")
+    results = generate_all_reports(headless=True)  # session persists; headless is fine
     state = _load_state()
-    if ok:
+    if any(results.values()):
         state["pending_generation"] = True
+        state["pending_accounts"] = [a for a, ok in results.items() if ok]
+        state["downloaded_accounts"] = {}  # reset the per-account download tracker
         state["last_generated_at"] = datetime.now().isoformat()
         _save_state(state)
-        _log("Generation requested; pipeline is now pending download.")
+        failed = [a for a, ok in results.items() if not ok]
+        _log(f"Generation requested for {len(state['pending_accounts'])} account(s); pending download."
+             + (f" Could not request: {', '.join(failed)}." if failed else ""))
         return 0
-    _log("Generation request FAILED (session may need re-auth — run an interactive "
-         "generate once: python -m automation.ingest.robinhood_scraper --mode generate).")
+    _log("Generation request FAILED for all accounts (session may need re-auth).")
     _alert(
         "Robinhood session needs re-auth — no report requested this week",
-        "The weekly job could NOT request a fresh Robinhood activity report because "
+        "The weekly job could NOT request fresh Robinhood activity reports because "
         "the saved login session has expired.\n\n"
         "Impact: no new report was requested, so you will NOT get a digest this week "
         "until you re-authenticate.\n\n"
-        "Fix (run once on the Mac — a browser window opens for login + 2FA):\n"
+        "Fix (run once on the Mac — a browser window opens for login + 2FA; this also "
+        "requests both accounts):\n"
         "  cd /Users/sagnikrana/Documents/GitHub/portfolio-analyzer\n"
-        "  .venv/bin/python -m automation.ingest.robinhood_scraper --mode generate\n",
+        "  .venv/bin/python -m automation.ingest.robinhood_scraper --mode generate --all-accounts\n",
         key="rh-session",
         throttle_hours=20,
     )
@@ -256,37 +266,59 @@ def _process_csv(csv_path: Path, *, send: bool) -> None:
 
 
 def cmd_process(*, send: bool) -> int:
-    """If a report is pending and ready, download → digest → email (once)."""
+    """If reports are pending, download whichever accounts are ready (accumulating
+    across hourly runs); once ALL accounts are in, merge them into one combined
+    household ledger, then analyze → digest → email (once)."""
     state = _load_state()
     if not state.get("pending_generation"):
         _log("Nothing pending — no report to process.")
         return 0
+    accounts = list(state.get("pending_accounts") or ACCOUNTS)
     try:
-        _log("Pending report — checking if it's ready to download ...")
-        csv_path = download_report(headless=True)
-        if csv_path is None:
-            _log("Report not ready yet (will retry next hour).")
+        downloaded: dict[str, str] = dict(state.get("downloaded_accounts") or {})
+        for acct in accounts:
+            if acct in downloaded and Path(downloaded[acct]).exists():
+                continue  # already have this account's report
+            _log(f"[{acct}] checking if its report is ready ...")
+            path = download_report(account_name=acct, headless=True)
+            if path is not None:
+                downloaded[acct] = str(path)
+                _log(f"[{acct}] downloaded.")
+        state["downloaded_accounts"] = downloaded
+        _save_state(state)
+
+        missing = [a for a in accounts if a not in downloaded]
+        if missing:
+            _log(f"Have {len(downloaded)}/{len(accounts)} account report(s); still waiting on "
+                 f"{', '.join(missing)} (will retry next hour).")
             return 0
-        h = _csv_hash(csv_path)
+
+        _log(f"All {len(accounts)} account report(s) in — merging into a combined ledger ...")
+        merged = merge_activity_csvs([downloaded[a] for a in accounts])
+        if merged is None:
+            raise RuntimeError("all accounts downloaded but the merge produced no rows")
+        h = _csv_hash(merged)
         if h == state.get("last_emailed_hash"):
-            _log("Downloaded report is identical to the last one emailed — skipping.")
+            _log("Combined report is identical to the last one emailed — skipping.")
             state["pending_generation"] = False
+            state["downloaded_accounts"] = {}
             _save_state(state)
             return 0
-        _process_csv(csv_path, send=send)
+        _process_csv(merged, send=send)
         state["pending_generation"] = False
+        state["downloaded_accounts"] = {}
         state["last_emailed_hash"] = h
         state["last_emailed_at"] = datetime.now().isoformat()
-        state["last_csv"] = str(csv_path)
+        state["last_csv"] = str(merged)
         _save_state(state)
         return 0
     except Exception as exc:  # noqa: BLE001
         _log(f"Process step FAILED ({exc!r}).")
         _alert(
             "Weekly report processing failed",
-            "The hourly process step failed while downloading, analyzing, or emailing "
-            f"the pending report:\n\n  {exc!r}\n\n"
-            "The report is still marked pending and the job will retry next hour. "
+            "The hourly process step failed while downloading, merging, analyzing, or "
+            f"emailing the pending report(s):\n\n  {exc!r}\n\n"
+            "The pipeline is still marked pending and the job will retry next hour. "
             "See /tmp/pa_process.log for the full traceback.",
             key="process-error",
             throttle_hours=12,

@@ -41,6 +41,8 @@ IMPORTANT
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import time
 from contextlib import contextmanager
 from datetime import date
@@ -58,6 +60,12 @@ from playwright.sync_api import (
 # ── Configuration (matches the screenshot; override via CLI) ──────────────────
 REPORTS_URL = "https://robinhood.com/account/reports-statements/activity-reports"
 ACCOUNT_NAME = "Sagnik Invest"
+# Robinhood accounts to pull and COMBINE into one household portfolio. The weekly
+# job generates + downloads each account's report, then merges the ledgers before
+# analysis. Override via env: RH_ACCOUNTS="Sagnik Invest, Joint investing".
+ACCOUNTS = [a.strip() for a in os.environ.get(
+    "RH_ACCOUNTS", "Sagnik Invest, Joint investing"
+).split(",") if a.strip()]
 START_DATE = date(2020, 8, 8)
 END_DATE = date.today()  # Robinhood's form already defaults End date to today.
 
@@ -336,7 +344,12 @@ def _report_row(page: Page, start: date, end: date) -> Locator | None:
     return _first_visible(page, candidates, 4000)
 
 
-def _do_download(page: Page, row: Locator) -> Path | None:
+def _account_slug(account_name: str | None) -> str:
+    """Filesystem-safe slug for an account name (e.g. 'Joint investing' -> 'joint_investing')."""
+    return re.sub(r"[^a-z0-9]+", "_", str(account_name or "").lower()).strip("_")
+
+
+def _do_download(page: Page, row: Locator, *, account_name: str | None = None) -> Path | None:
     """Download the CSV from a ready report row into DOWNLOAD_DIR.
 
     Robinhood triggers the download from a short-lived popup tab: the "Download
@@ -347,7 +360,9 @@ def _do_download(page: Page, row: Locator) -> Path | None:
     listener to the current page AND every popup, then poll for whichever one
     produces the download."""
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = DOWNLOAD_DIR / f"robinhood_activity_{date.today():%Y%m%d}.csv"
+    slug = _account_slug(account_name)
+    stem = f"robinhood_activity_{slug + '_' if slug else ''}{date.today():%Y%m%d}.csv"
+    out_path = DOWNLOAD_DIR / stem
     dl_link = row.locator("text=Download CSV").first
 
     # Snapshot the session cookies + UA up front, while the context is alive. RH
@@ -487,6 +502,7 @@ def generate_report(
 
 def download_report(
     *,
+    account_name: str = ACCOUNT_NAME,
     start: date = START_DATE,
     end: date = END_DATE,
     headless: bool = True,
@@ -494,14 +510,18 @@ def download_report(
     """Download the report for the date range if it's READY. Returns the saved
     path, or None if it isn't ready yet / not found / re-auth is needed.
 
-    Headless by default — intended to be run periodically (e.g. hourly) by the
-    weekly job until the report is ready."""
+    Selects `account_name` first — the activity-reports page is per-account, so
+    with multiple accounts (e.g. a combined household) the right account must be
+    active before we match the report row. Headless by default — intended to be
+    run periodically (e.g. hourly) by the weekly job until the report is ready."""
     with _browser_page(headless) as page:
         try:
             if not _ensure_logged_in(page, wait_for_login=False):
                 return None
             page.goto(REPORTS_URL, wait_until="domcontentloaded")
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(2000)
+            _select_account(page, account_name)
+            page.wait_for_timeout(1500)
             row = _report_row(page, start, end)
             if row is None:
                 log(f"No report row for {_rh_date_label(start)} – {_rh_date_label(end)} yet.")
@@ -524,7 +544,7 @@ def download_report(
         # raise instead of returning None — otherwise it masquerades as "not ready"
         # and the weekly job never alerts (this is what silently broke for weeks).
         log("Report is ready — downloading CSV ...")
-        path = _do_download(page, row)
+        path = _do_download(page, row, account_name=account_name)
         if path is None:
             _dump_debug(page, "download-failed")
             raise RuntimeError(
@@ -532,6 +552,62 @@ def download_report(
                 "(see the rh-scraper log and /tmp debug dump)."
             )
         return path
+
+
+def generate_all_reports(
+    accounts: list[str] | None = None, *, start: date = START_DATE, end: date = END_DATE, headless: bool = False
+) -> dict[str, bool]:
+    """Request a fresh activity report for EACH account (combined household view).
+
+    Returns {account: ok}. Reports build asynchronously on Robinhood's side; pull
+    them later with download_all_reports(). Headed by default so a one-time login
+    can be completed (the saved session is reused for the remaining accounts)."""
+    accounts = accounts or ACCOUNTS
+    results: dict[str, bool] = {}
+    for acct in accounts:
+        log(f"[{acct}] requesting activity report ...")
+        results[acct] = generate_report(account_name=acct, start=start, end=end, headless=headless)
+    return results
+
+
+def download_all_reports(
+    accounts: list[str] | None = None, *, start: date = START_DATE, end: date = END_DATE, headless: bool = True
+) -> dict[str, "Path | None"]:
+    """Download whichever accounts' reports are READY. Returns {account: path|None}
+    (None = still pending). Raises only if a ready report fails to download."""
+    accounts = accounts or ACCOUNTS
+    out: dict[str, Path | None] = {}
+    for acct in accounts:
+        out[acct] = download_report(account_name=acct, start=start, end=end, headless=headless)
+    return out
+
+
+def merge_activity_csvs(paths, *, out_path: "Path | None" = None) -> "Path | None":
+    """Concatenate multiple cleaned Robinhood activity CSVs into one combined
+    household ledger. When analyzed, positions, cash and flows aggregate across
+    accounts (same ticker in both accounts sums into one position). Returns the
+    combined path, or None if there was nothing to merge."""
+    import pandas as pd
+
+    frames = []
+    for p in paths:
+        if p and Path(p).exists():
+            try:
+                frame = pd.read_csv(p)
+                if not frame.empty:
+                    frames.append(frame)
+            except Exception as exc:  # a bad single file shouldn't sink the merge
+                log(f"merge: skipping unreadable CSV {p} ({exc!r}).")
+    if not frames:
+        return None
+    combined = pd.concat(frames, ignore_index=True)
+    if "Activity Date" in combined.columns:  # newest-first, like a single export
+        combined["__d"] = pd.to_datetime(combined["Activity Date"], errors="coerce")
+        combined = combined.sort_values("__d", ascending=False, na_position="last").drop(columns="__d")
+    out_path = out_path or (DOWNLOAD_DIR / f"robinhood_activity_combined_{date.today():%Y%m%d}.csv")
+    combined.to_csv(out_path, index=False)
+    log(f"Merged {len(frames)} account ledger(s) -> {out_path.name} ({len(combined)} rows).")
+    return out_path
 
 
 def fetch_transactions(
@@ -568,6 +644,9 @@ def main() -> int:
     ap.add_argument("--mode", choices=["generate", "download", "full"], default="full",
                     help="generate: request only; download: fetch if ready; full: generate then poll")
     ap.add_argument("--account", default=ACCOUNT_NAME)
+    ap.add_argument("--all-accounts", action="store_true",
+                    help="generate/download every account in ACCOUNTS (and, for download, merge them "
+                         "into one combined household ledger)")
     ap.add_argument("--start", type=_parse_date, default=START_DATE, help="YYYY-MM-DD")
     ap.add_argument("--end", type=_parse_date, default=END_DATE, help="YYYY-MM-DD")
     ap.add_argument("--timeout-min", type=int, default=30, help="full-mode poll budget (minutes)")
@@ -576,12 +655,25 @@ def main() -> int:
     DEBUG = args.debug
 
     if args.mode == "generate":
+        if args.all_accounts:
+            results = generate_all_reports(start=args.start, end=args.end, headless=False)
+            log("DONE — requested: " + ", ".join(f"{a}={'ok' if v else 'FAIL'}" for a, v in results.items()))
+            return 0 if any(results.values()) else 1
         ok = generate_report(account_name=args.account, start=args.start, end=args.end)
         log("DONE — generation requested." if ok else "FAILED — could not request generation.")
         return 0 if ok else 1
 
     if args.mode == "download":
-        out = download_report(start=args.start, end=args.end)
+        if args.all_accounts:
+            per_account = download_all_reports(start=args.start, end=args.end)
+            if any(p is None for p in per_account.values()):
+                not_ready = [a for a, p in per_account.items() if p is None]
+                log(f"NOT READY — still pending: {', '.join(not_ready)} (retry later).")
+                return 4
+            merged = merge_activity_csvs(list(per_account.values()))
+            log(f"DONE — combined {merged}" if merged else "FAILED — nothing to merge.")
+            return 0 if merged else 1
+        out = download_report(account_name=args.account, start=args.start, end=args.end)
         if out is None:
             log("NOT READY — no CSV downloaded yet (retry later).")
             return 4  # distinct code so a poller knows to retry
