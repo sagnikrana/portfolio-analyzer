@@ -5890,7 +5890,9 @@ def selling_horizon_badge_html(item: Any) -> str:
     )
 
 
-def plot_risk_action_candidate_chart(item: Any | None, market_data: dict[str, Any] | None = None) -> go.Figure:
+def plot_risk_action_candidate_chart(
+    item: Any | None, market_data: dict[str, Any] | None = None, *, empty_message: str | None = None
+) -> go.Figure:
     """Plot a Risk Action candidate against the S&P 500 around the user's buy date.
 
     The chart is intentionally aligned to the user's weighted-average purchase
@@ -5914,7 +5916,7 @@ def plot_risk_action_candidate_chart(item: Any | None, market_data: dict[str, An
             row=1, col=1,
         )
         fig.add_annotation(
-            text="Run analysis to see each risk-action candidate versus the S&P 500.",
+            text=empty_message or "Run analysis to see each risk-action candidate versus the S&P 500.",
             x=0.5,
             y=0.5,
             xref="paper",
@@ -6133,6 +6135,26 @@ def build_risk_action_feature_slots(
 ) -> list[Any]:
     """Return fixed Risk Action card/plot values in Gradio output order."""
     actionable = [item for item in diagnosis.holding_action_recommendations if item.is_actionable]
+
+    # This builder only runs AFTER analysis, so an empty list means the engine found
+    # nothing to trim (e.g. every holding is keeping pace with the S&P 500) — show a
+    # clear "all clear" message instead of the pre-run "Run analysis…" placeholder,
+    # which otherwise makes the tab look like it never ran.
+    if not actionable:
+        all_clear_card = (
+            "<div style='padding:18px 20px;border:1px solid #bbf7d0;border-radius:14px;"
+            "background:#f0fdf4;color:#166534;font-size:14px;line-height:1.6'>"
+            "<b>✅ No risk actions this run.</b><br>Every current holding is keeping pace "
+            "with — or beating — the trade-matched S&P 500 over its holding window, and "
+            "none breaches the trim rules, so there's nothing to sell or reduce right now."
+            "</div>"
+        )
+        empty_msg = "No risk actions — all holdings are keeping pace with the S&P 500."
+        cards = [all_clear_card] + [""] * (MAX_FEATURED_RISK_ACTION_COUNT - 1)
+        plots = [plot_risk_action_candidate_chart(None, None, empty_message=empty_msg)]
+        plots += [plot_risk_action_candidate_chart(None, None, empty_message=" ") for _ in range(MAX_FEATURED_RISK_ACTION_COUNT - 1)]
+        return [*cards, *plots]
+
     selected = actionable[: max(0, min(int(limit), MAX_FEATURED_RISK_ACTION_COUNT))]
     card_outputs: list[Any] = []
     plot_outputs: list[Any] = []
