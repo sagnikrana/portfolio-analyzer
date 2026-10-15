@@ -22,21 +22,26 @@ class Security:
     cusip: str
     start_price: float
     dividend_yield: float = 0.0
-    split_date: date | None = None
-    split_ratio: float | None = None
+    # Real stock-split history as (effective date, ratio) pairs. Split stocks keep
+    # a pre-split share count unless we add the split, which (combined with the
+    # split-adjusted yfinance price used in analysis) otherwise makes a big winner
+    # look like a loss. A security can have several splits (e.g. TSLA, NVDA).
+    splits: tuple[tuple[date, float], ...] = ()
 
 
 SECURITIES: list[Security] = [
-    Security("AAPL", "Apple", "037833100", 118.0, dividend_yield=0.0045, split_date=date(2020, 8, 31), split_ratio=4.0),
+    Security("AAPL", "Apple", "037833100", 118.0, dividend_yield=0.0045, splits=((date(2020, 8, 31), 4.0),)),
     Security("MSFT", "Microsoft", "594918104", 205.0, dividend_yield=0.0065),
-    Security("NVDA", "NVIDIA", "67066G104", 135.0, dividend_yield=0.001),
-    Security("GOOGL", "Alphabet Class A", "02079K305", 72.0, split_date=date(2022, 7, 18), split_ratio=20.0),
-    Security("AMZN", "Amazon", "023135106", 95.0),
+    Security("NVDA", "NVIDIA", "67066G104", 135.0, dividend_yield=0.001,
+             splits=((date(2021, 7, 20), 4.0), (date(2024, 6, 10), 10.0))),
+    Security("GOOGL", "Alphabet Class A", "02079K305", 72.0, splits=((date(2022, 7, 18), 20.0),)),
+    Security("AMZN", "Amazon", "023135106", 95.0, splits=((date(2022, 6, 6), 20.0),)),
     Security("META", "Meta Platforms", "30303M102", 155.0),
-    Security("TSLA", "Tesla", "88160R101", 185.0),
+    Security("TSLA", "Tesla", "88160R101", 185.0,
+             splits=((date(2020, 8, 31), 5.0), (date(2022, 8, 25), 3.0))),
     Security("V", "Visa", "92826C839", 190.0, dividend_yield=0.006),
     Security("BRK.B", "Berkshire Hathaway Class B", "084670702", 250.0),
-    Security("AVGO", "Broadcom", "11135F101", 480.0, dividend_yield=0.012),
+    Security("AVGO", "Broadcom", "11135F101", 480.0, dividend_yield=0.012, splits=((date(2024, 7, 15), 10.0),)),
     Security("QQQ", "Invesco QQQ Trust", "46090E103", 290.0),
     Security("VOO", "Vanguard S&P 500 ETF", "922908363", 330.0, dividend_yield=0.012),
     # Income / defensive names used by the dividend profile.
@@ -191,7 +196,15 @@ def price_on_day(security: Security, current_day: date, anchor: date) -> float:
     trend = 0.00045 + (hash(security.ticker) % 7) * 0.00006
     seasonal = 0.035 * __import__("math").sin(day_index / 47.0)
     drifted = security.start_price * (1 + trend) ** max(day_index, 0)
-    return max(3.0, drifted * (1 + seasonal))
+    # Drop the quoted price by the cumulative split factor once each split takes
+    # effect, so post-split buys get the right (smaller) per-share price and
+    # therefore the right share count — consistent with the SPL share additions
+    # below and with yfinance's split-adjusted prices used in analysis.
+    split_factor = 1.0
+    for sdate, sratio in security.splits:
+        if current_day >= sdate and sratio:
+            split_factor *= sratio
+    return max(3.0, drifted * (1 + seasonal) / split_factor)
 
 
 def build_description(security: Security) -> str:
@@ -344,21 +357,22 @@ def generate_dataset(profile: Profile, end_date: date) -> list[dict[str, str]]:
                         )
 
         for security in profile_securities:
-            if security.split_date == current_day and security.split_ratio and holdings[security.ticker] > 0:
-                add_qty = round(holdings[security.ticker] * (security.split_ratio - 1), 6)
-                holdings[security.ticker] += add_qty
-                rows.append(
-                    make_row(
-                        activity_date=current_day,
-                        settle_offset=0,
-                        instrument=security.ticker,
-                        description=build_description(security),
-                        trans_code="SPL",
-                        quantity=add_qty,
-                        price=None,
-                        amount=None,
+            for sdate, sratio in security.splits:
+                if sdate == current_day and sratio and holdings[security.ticker] > 0:
+                    add_qty = round(holdings[security.ticker] * (sratio - 1), 6)
+                    holdings[security.ticker] += add_qty
+                    rows.append(
+                        make_row(
+                            activity_date=current_day,
+                            settle_offset=0,
+                            instrument=security.ticker,
+                            description=build_description(security),
+                            trans_code="SPL",
+                            quantity=add_qty,
+                            price=None,
+                            amount=None,
+                        )
                     )
-                )
 
         current_day += timedelta(days=1)
 
