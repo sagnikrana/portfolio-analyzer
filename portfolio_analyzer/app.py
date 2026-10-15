@@ -6149,10 +6149,16 @@ def build_risk_action_feature_slots(
             "none breaches the trim rules, so there's nothing to sell or reduce right now."
             "</div>"
         )
-        empty_msg = "No risk actions — all holdings are keeping pace with the S&P 500."
+        empty_msg = (
+            "✅ No risk actions — your holdings are keeping pace with or beating "
+            "the S&P 500. Nothing to trim."
+        )
         cards = [all_clear_card] + [""] * (MAX_FEATURED_RISK_ACTION_COUNT - 1)
-        plots = [plot_risk_action_candidate_chart(None, None, empty_message=empty_msg)]
-        plots += [plot_risk_action_candidate_chart(None, None, empty_message=" ") for _ in range(MAX_FEATURED_RISK_ACTION_COUNT - 1)]
+        # Put the message inside EVERY chart slot so none reads as an empty/broken plot.
+        plots = [
+            plot_risk_action_candidate_chart(None, None, empty_message=empty_msg)
+            for _ in range(MAX_FEATURED_RISK_ACTION_COUNT)
+        ]
         return [*cards, *plots]
 
     selected = actionable[: max(0, min(int(limit), MAX_FEATURED_RISK_ACTION_COUNT))]
