@@ -540,33 +540,33 @@ def fetch_candidate_market_metadata(market_data_symbol: str) -> dict[str, Any]:
 
 @lru_cache(maxsize=1024)
 def fetch_candidate_news_signals(market_data_symbol: str, limit: int = 2) -> list[str]:
-    """Fetch a few recent human-readable market/news signals for one candidate."""
+    """Fetch a few recent human-readable market/news headlines for one ticker.
+
+    Uses yfinance's Search endpoint (yf.Search(...).news). NOTE: the older
+    Ticker.news / Ticker.get_news() endpoints return an empty list in recent
+    yfinance/Yahoo versions, which silently broke the news layer — Search is the
+    working path and returns {title, publisher, link, ...} per item."""
+    want = max(1, int(limit))
     cache_path = NEWS_CACHE_DIR / f"{_cache_key('news', market_data_symbol)}.json"
     cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 6)
-    if isinstance(cached, list):
-        return [str(item) for item in cached[: max(1, int(limit))]]
-    ticker = yf.Ticker(str(market_data_symbol))
+    if isinstance(cached, list) and cached:
+        return [str(item) for item in cached[:want]]
     try:
-        items = ticker.news or []
+        items = yf.Search(str(market_data_symbol), news_count=max(8, want + 4)).news or []
     except Exception:
         return []
 
     signals: list[str] = []
-    for item in items[: max(1, int(limit))]:
-        content = item.get("content") or {}
-        title = str(content.get("title") or "").strip()
-        summary = str(content.get("summary") or content.get("description") or "").strip()
-        provider = ((content.get("provider") or {}) or {}).get("displayName")
+    for item in items:
+        title = str(item.get("title") or "").strip()
         if not title:
             continue
-        signal = title
-        if provider:
-            signal += f" ({provider})"
-        if summary:
-            signal += f" — {summary[:160].strip()}"
-        signals.append(signal)
-    _write_json_cache(cache_path, signals)
-    return signals
+        publisher = str(item.get("publisher") or "").strip()
+        signals.append(f"{title} ({publisher})" if publisher else title)
+    signals = signals[: max(want, 6)]  # cache a few extra for callers asking for more
+    if signals:
+        _write_json_cache(cache_path, signals)
+    return signals[:want]
 
 
 def warm_candidate_news(symbols: list[str], *, limit: int = 2) -> int:
