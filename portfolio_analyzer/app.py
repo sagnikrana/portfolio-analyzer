@@ -6117,6 +6117,8 @@ def build_risk_action_chart_card_html(item: Any | None, rank: int) -> str:
         f"<div style='padding:7px 10px;border-radius:999px;background:rgba(254,243,199,.96);border:1px solid rgba(217,119,6,.24);color:#92400e;font-size:12px;font-weight:900'>{item.recommendation_label}</div>"
         "</div>"
         f"<div style='font-size:13px;color:#475569;margin-top:10px'>{short_concern_badge(getattr(item, 'linked_primary_concern', None))}</div>"
+        # News research flagged FIRST on sell/trim calls too, before the metrics.
+        f"{_news_research_banner(fetch_candidate_news_signals(getattr(item, 'ticker', ''), limit=2))}"
         "<div style='display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px'>"
         f"<div style='padding:11px 12px;border-radius:14px;background:rgba(239,246,255,.96);border:1px solid rgba(37,99,235,.18)'><div style='font-size:11px;color:#2563eb;font-weight:900;text-transform:uppercase;letter-spacing:.05em'>Avg buy date</div><div style='font-size:16px;color:#0f172a;font-weight:850;margin-top:5px'>{purchase_text}</div></div>"
         f"<div style='padding:11px 12px;border-radius:14px;background:rgba(254,226,226,.80);border:1px solid rgba(239,68,68,.18)'><div style='font-size:11px;color:#dc2626;font-weight:900;text-transform:uppercase;letter-spacing:.05em'>Lag vs S&P 500</div><div style='font-size:16px;color:#991b1b;font-weight:850;margin-top:5px'>{lag_text}</div></div>"
@@ -6784,6 +6786,39 @@ def _candidate_external_signals(
     if existing:
         return existing[:limit]
     return fetch_candidate_news_signals(candidate.ticker, limit=limit)
+
+
+def _news_research_banner(headlines: list[str] | None, sentiment_summary: str | None = None) -> str:
+    """Prominent 'we checked the market news' banner shown at the TOP of every buy
+    and sell recommendation, so it's clear each call is grounded in live research."""
+    lines = ""
+    for headline in (headlines or [])[:2]:
+        text = str(headline or "").strip()
+        if text:
+            lines += (
+                "<div style='font-size:13px;line-height:1.5;color:#334155;margin-top:6px'>"
+                f"• {render_bold_markers(text)}</div>"
+            )
+    if not lines:
+        lines = (
+            "<div style='font-size:13px;color:#64748b;margin-top:6px'>"
+            "No market-moving headlines in the recent window — checked.</div>"
+        )
+    read = ""
+    summary = str(sentiment_summary or "").strip()
+    if summary:
+        read = (
+            "<div style='font-size:12px;color:#1d4ed8;margin-top:8px;font-style:italic'>"
+            f"Our read: {render_bold_markers(summary)}</div>"
+        )
+    return (
+        "<div style='margin-top:12px;padding:12px 14px;border-radius:14px;background:#eff6ff;"
+        "border:1px solid rgba(37,99,235,.22)'>"
+        "<div style='font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#1d4ed8;"
+        "font-weight:800'>📰 Recent market news</div>"
+        f"{lines}{read}"
+        "</div>"
+    )
 
 
 def _candidate_reference_readout(candidate: ReplacementCandidate) -> dict[str, Any]:
@@ -7491,8 +7526,7 @@ def build_buy_idea_card_html(
             "</div>"
             "</div>"
         )
-        if show_full:
-            detail_section += signal_row
+        # (Recent news is now flagged prominently at the top of every card instead.)
     return (
         "<div style='padding:16px 18px;border:1px solid rgba(148,163,184,.14);border-radius:18px;"
         "background:#eef2f8'>"
@@ -7514,6 +7548,8 @@ def build_buy_idea_card_html(
         f"{performance_badges}"
         "</div>"
         "</div>"
+        # News research flagged FIRST, so every buy idea visibly reflects a live news check.
+        f"{_news_research_banner(external_signals, candidate.news_sentiment_summary)}"
         f"<div style='font-size:14px;line-height:1.55;color:#0f172a;margin-top:12px'>{render_bold_markers(candidate.why_it_fits)}</div>"
         f"{l5y_hero}"
         f"<div style='font-size:13px;line-height:1.55;color:#475569;margin-top:8px'>{render_bold_markers(candidate.preference_fit_summary)}</div>"
