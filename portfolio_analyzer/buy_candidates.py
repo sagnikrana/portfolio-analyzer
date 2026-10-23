@@ -538,32 +538,68 @@ def fetch_candidate_market_metadata(market_data_symbol: str) -> dict[str, Any]:
     return payload
 
 
+_CORP_SUFFIXES = (
+    ", Inc.", " Inc.", " Inc", " Incorporated", " Corporation", " Corp.", " Corp",
+    " Company", " Co.", " Holdings", " Ltd.", " Ltd", " plc", " PLC", " N.V.", " S.A.",
+    " Class A", " Class B", " Class C",
+)
+
+
+def _searchable_company_name(market_data_symbol: str) -> str:
+    """Resolve a ticker to a short, searchable company name for news queries.
+
+    Searching the company NAME returns far more company-specific headlines than the
+    raw ticker (e.g. 'Microsoft' surfaces MSFT stories that a 'MSFT' search misses).
+    Falls back to the ticker when no name is available."""
+    try:
+        name = str(fetch_candidate_market_metadata(market_data_symbol).get("full_name") or "").strip()
+    except Exception:
+        name = ""
+    changed = True
+    while changed and name:  # strip trailing corp suffixes (possibly stacked)
+        changed = False
+        for suffix in _CORP_SUFFIXES:
+            if name.endswith(suffix):
+                name = name[: -len(suffix)].strip().rstrip(",")
+                changed = True
+    return name or str(market_data_symbol)
+
+
 @lru_cache(maxsize=1024)
 def fetch_candidate_news_signals(market_data_symbol: str, limit: int = 2) -> list[str]:
-    """Fetch a few recent human-readable market/news headlines for one ticker.
+    """Fetch recent human-readable market/news headlines for one ticker.
 
-    Uses yfinance's Search endpoint (yf.Search(...).news). NOTE: the older
-    Ticker.news / Ticker.get_news() endpoints return an empty list in recent
-    yfinance/Yahoo versions, which silently broke the news layer — Search is the
-    working path and returns {title, publisher, link, ...} per item."""
+    Queries yfinance's Search endpoint by COMPANY NAME (more company-specific than
+    the ticker) and lists company-specific headlines first, with broader market
+    headlines as fallback. NOTE: the older Ticker.news / Ticker.get_news() return
+    an empty list in recent yfinance/Yahoo versions — Search is the working path."""
     want = max(1, int(limit))
     cache_path = NEWS_CACHE_DIR / f"{_cache_key('news', market_data_symbol)}.json"
     cached = _load_json_cache(cache_path, ttl_seconds=60 * 60 * 6)
     if isinstance(cached, list) and cached:
         return [str(item) for item in cached[:want]]
+    query = _searchable_company_name(market_data_symbol)
     try:
-        items = yf.Search(str(market_data_symbol), news_count=max(8, want + 4)).news or []
+        items = yf.Search(query, news_count=max(10, want + 6)).news or []
     except Exception:
         return []
 
-    signals: list[str] = []
+    sym = str(market_data_symbol).upper()
+    name_tokens = [tok for tok in query.replace(",", " ").split() if len(tok) >= 4]
+    specific: list[str] = []
+    general: list[str] = []
     for item in items:
         title = str(item.get("title") or "").strip()
         if not title:
             continue
         publisher = str(item.get("publisher") or "").strip()
-        signals.append(f"{title} ({publisher})" if publisher else title)
-    signals = signals[: max(want, 6)]  # cache a few extra for callers asking for more
+        signal = f"{title} ({publisher})" if publisher else title
+        lowered = title.lower()
+        if sym.lower() in lowered or any(tok.lower() in lowered for tok in name_tokens):
+            specific.append(signal)
+        else:
+            general.append(signal)
+    signals = (specific + general)[: max(want, 6)]  # company-specific first, then market
     if signals:
         _write_json_cache(cache_path, signals)
     return signals[:want]
